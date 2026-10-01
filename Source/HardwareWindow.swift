@@ -48,6 +48,7 @@ final class HardwareWindowController: NSWindowController {
         keys.append(("仅修饰键",0))
         return keys
     }()
+    var shortcutKeys:[(String,UInt8)] {hidKeys.filter{$0.1<224}}
     init() {
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1040,height:700),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         super.init(window:window)
@@ -80,7 +81,7 @@ final class HardwareWindowController: NSWindowController {
         actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用"])
         actionPicker.target=self;actionPicker.action=#selector(actionChanged);controls.append(actionPicker)
         place(actionPicker,344,13,235,28,in:keys)
-        keyPicker.addItems(withTitles:hidKeys.map{$0.0});controls.append(keyPicker);place(keyPicker,599,13,105,28,in:keys)
+        keyPicker.addItems(withTitles:shortcutKeys.map{$0.0});controls.append(keyPicker);place(keyPicker,599,13,105,28,in:keys)
         for (i,m) in modifiers.enumerated(){controls.append(m);place(m,277+CGFloat(i%2)*176,54+CGFloat(i/2)*30,170,25,in:keys)}
         place(button("加入待写入配置",#selector(stageKey)),735,13,190,28,in:keys)
         place(label("计算器需先安装 macOS 快捷操作；由系统服务启动，实体键调用仍待验证。",12),277,124,640,30,in:keys)
@@ -129,7 +130,7 @@ final class HardwareWindowController: NSWindowController {
             actionPicker.selectItem(at:0)
             if bytes[0]==0x20 {
                 actionPicker.selectItem(at:1)
-                if let item=hidKeys.firstIndex(where:{$0.1==bytes[2]}){keyPicker.selectItem(at:item)}
+                if let item=shortcutKeys.firstIndex(where:{$0.1==bytes[2]}){keyPicker.selectItem(at:item)}
                 for (index,button) in modifiers.enumerated(){button.state=bytes[1] & [UInt8(0x88),0x11,0x44,0x22][index] == 0 ? .off:.on}
             }else{keyPicker.selectItem(at:0);modifiers.forEach{$0.state = .off}}
         }
@@ -238,7 +239,7 @@ final class HardwareWindowController: NSWindowController {
         case 6:record=[0x30,205,0]
         case 7:record=[0x30,181,0]
         case 8:record=[0x20,0,0]
-        default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,hidKeys[max(0,keyPicker.indexOfSelectedItem)].1]
+        default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,shortcutKeys[max(0,keyPicker.indexOfSelectedItem)].1]
         }
         p.macroBindings?.removeValue(forKey:slot)
         p.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);profile=p;message.stringValue="已编辑 \(key.label)：\(CherryMatrix.describe(record))。尚未写入键盘。";update()

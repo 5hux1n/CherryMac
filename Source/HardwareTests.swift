@@ -269,6 +269,8 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
 
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let editor=HardwareWindowController()
+    precondition(editor.keyPicker.itemTitles.contains("仅修饰键") && !editor.keyPicker.itemTitles.contains("左 Control"),"key records use modifier masks, whereas macro events use separate modifier usages")
+    precondition(editor.macroKey.itemTitles.contains("左 Control"))
     precondition(editor.macroText.frame.width>500 && editor.macroText.frame.height>90,"macro text must have visible editing bounds")
     var original=fixture;original.parameters[1]=12
     editor.baseline=original;editor.profile=HardwareProfile(snapshot:original)
