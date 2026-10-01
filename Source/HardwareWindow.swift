@@ -119,7 +119,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         place(button("导入配置…",#selector(importProfile)),216,18,180,30,in:files)
         place(button("打开自动备份",#selector(openBackups)),414,18,180,30,in:files)
         place(button("撤销待写入改动",#selector(discardDraft)),612,18,265,30,in:files)
-        place(label("USB 读取包含键位、灯效、逐键颜色与原始宏区。导入只载入编辑区，写入前会保留完整备份。",12),18,77,895,40,in:files)
+        place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导入前先读取键盘；导入只载入编辑区，写入前会保留完整备份。",12),18,77,895,40,in:files)
         place(message,24,632,557,58)
         place(button("写入键位",#selector(writeKeys)),591,642,123,30)
         place(button("写入宏与键位",#selector(writeMacros)),725,642,153,30)
@@ -294,7 +294,23 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     }
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func exportProfile(){guard let p=profile else{message.stringValue="请先读取或导入配置。";return};let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json";panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{try p.encoded().write(to:url,options:.atomic);self?.message.stringValue="配置已导出。"}catch{self?.message.stringValue=error.localizedDescription}}}
-    @objc func importProfile(){let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false;panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{let p=try HardwareProfile.decode(Data(contentsOf:url));self?.profile=p;self?.message.stringValue="配置已载入编辑区，尚未写入键盘。";self?.loadLighting();self?.refreshMacroPicker();self?.loadSelectedAssignment();self?.update()}catch{self?.message.stringValue=error.localizedDescription}}}
+    func loadImport(_ data:Data)throws {
+        guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}
+        guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
+        let next:HardwareProfile;let summary:String
+        if WindowsProfile.isOfficial(data){
+            guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
+            let imported=try WindowsProfile.decode(data,baseline:baseline);next=imported.profile;summary=imported.summary
+        }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}
+        profile=next;message.stringValue=summary;loadLighting();refreshMacroPicker();loadSelectedAssignment();update()
+    }
+    @objc func importProfile(){
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:window!){[weak self] result in
+            guard result == .OK,let url=panel.url,let self else{return}
+            do{try self.loadImport(Data(contentsOf:url))}catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
     @objc func discardDraft(){guard let baseline else{return};profile=(try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作：⌃⌥⌘C 打开计算器。键盘写入仍在验证。"}catch{message.stringValue=error.localizedDescription}}

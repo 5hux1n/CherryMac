@@ -1154,6 +1154,13 @@ if CommandLine.arguments.contains("--self-test") {
     let diagnostics: [String: Any] = ["inputMonitoringGranted": input == kIOHIDAccessTypeGranted, "accessibilityGranted": access, "deviceOpenResult": result, "devices": names, "calculatorAvailable": NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.calculator") != nil]
     if let data = try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys]), let string = String(data: data, encoding: .utf8) { print(string) }
     IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+} else if let output=CommandLine.arguments.firstIndex(of:"--convert-windows-profile"),CommandLine.arguments.count>output+1{
+    do{
+        guard let input=CommandLine.arguments.firstIndex(of:"--profile"),let baseline=CommandLine.arguments.firstIndex(of:"--baseline"),CommandLine.arguments.count>input+1,CommandLine.arguments.count>baseline+1 else{throw HardwareError(message:"需要 --profile Windows.json 和 --baseline CherryMac.json。")}
+        let before=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[baseline+1]))).snapshot
+        let imported=try WindowsProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[input+1])),baseline:before)
+        try imported.profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[output+1]),options:.atomic);print(imported.summary)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-read"), CommandLine.arguments.count > index+1 {
     do { let snapshot=try CherryUSB().completeSnapshot();let profile=(try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);try profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]),options:.atomic);print("PASS: USB keymap, lighting parameters, 126 RGB values and 3071-byte macro bank read") }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-preview"), CommandLine.arguments.count > index+1 {

@@ -1,0 +1,146 @@
+import Foundation
+import CoreFoundation
+
+enum WindowsProfile {
+    // Logical default-assignment fingerprint of Pokémon model 47.
+    // The official 126-entry order differs from the USB matrix order.
+    static let defaults:[Int] = [
+        0x200029, 0x20003A, 0x20003B, 0x20003C, 0x20003D, 0x20003E, 0x20003F, 0x200040, 0x200041, 0x200042,
+        0x200043, 0x200044, 0x200045, 0x200046, 0x200047, 0x200048, 0xA00300, 0x309201, 0x30B600, 0x30CD00,
+        0x30B500, 0x200035, 0x20001E, 0x20001F, 0x200020, 0x200021, 0x200022, 0x200023, 0x200024, 0x200025,
+        0x200026, 0x200027, 0x20002D, 0x20002E, 0x20002A, 0x200049, 0x20004A, 0x20004B, 0x200053, 0x200054,
+        0x200055, 0x200056, 0x20002B, 0x200014, 0x20001A, 0x200008, 0x200015, 0x200017, 0x20001C, 0x200018,
+        0x20000C, 0x200012, 0x200013, 0x20002F, 0x200030, 0x200031, 0x20004C, 0x20004D, 0x20004E, 0x20005F,
+        0x200060, 0x200061, 0x200000, 0x200039, 0x200004, 0x200016, 0x200007, 0x200009, 0x20000A, 0x20000B,
+        0x20000D, 0x20000E, 0x20000F, 0x200033, 0x200034, 0x200028, 0x20005C, 0x20005D, 0x20005E, 0x200000,
+        0x200000, 0x200000, 0x200000, 0x200000, 0x200200, 0x20001D, 0x20001B, 0x200006, 0x200019, 0x200005,
+        0x200011, 0x200010, 0x200036, 0x200037, 0x200038, 0x202000, 0x200052, 0x200059, 0x20005A, 0x20005B,
+        0x200000, 0x200000, 0x200064, 0x200000, 0x200032, 0x200100, 0x200800, 0x200400, 0x20002C, 0x204000,
+        0xA00100, 0x200065, 0x201000, 0x200050, 0x200051, 0x20004F, 0x200062, 0x200063, 0x200058, 0x200057,
+        0xD0A201, 0xD0A202, 0xD0A203, 0xD0A204, 0xD0A205, 0x208000
+    ]
+    static let mediaCodes:[UInt16] = [0x0183,0x00CD,0x00B7,0x00B6,0x00B5,0x00EA,0x00E9,0x00E2,0x0223,0x0227,0x0226,0x0224,0x0225,0x022A,0x0221,0x0194,0x0192,0x018A]
+    static let modeCodes:[UInt8] = [0,1,2,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,3,8,22,23,24]
+    struct Imported {
+        let profile:HardwareProfile
+        let keyCount:Int
+        let macroCount:Int
+        let colorCount:Int
+        let ignoredKeyCount:Int
+        var summary:String {"已导入 Windows 配置：\(keyCount) 个实体键、\(colorCount) 个颜色、\(macroCount) 个绑定宏。保留 \(ignoredKeyCount) 个内部／隐藏位置及系统参数；未绑定动作未迁移。尚未写入。"}
+    }
+    static func integer(_ object:Any?,_ name:String,range:ClosedRange<Int>)throws->Int {
+        let value:Int?
+        if let number=object as? NSNumber,CFGetTypeID(number) != CFBooleanGetTypeID(){
+            let raw=number.doubleValue
+            value=raw.isFinite && raw>=Double(range.lowerBound) && raw<=Double(range.upperBound) && raw.rounded()==raw ? Int(raw):nil
+        }else if let text=object as? String{value=Int(text)}else{value=nil}
+        guard let value,range.contains(value)else{throw HardwareError(message:"Windows 配置中的 \(name) 应为 \(range.lowerBound)–\(range.upperBound) 的整数。")};return value
+    }
+    static func record(_ value:Int)throws->[UInt8]{
+        let bytes=[UInt8((value>>16)&255),UInt8((value>>8)&255),UInt8(value&255)]
+        guard bytes[0]==0x20 || bytes[0]==0x30 else{throw HardwareError(message:"Windows 配置包含尚未支持的按键动作。")}
+        return bytes
+    }
+    static func physicalSlot(_ value:Int)->Int? {
+        if value>>16==0x20,(value>>8)&255==0{return CherryMatrix.usageSlots[value&255].flatMap{[10,75].contains($0) ? nil:$0}}
+        let special:[Int:Int]=[0xA00300:6,0xA00100:71,0x200100:5,0x200200:4,0x200400:17,0x200800:11,0x201000:83,0x202000:82,0x204000:65,0x309201:102,0x30B600:108,0x30CD00:114,0x30B500:120]
+        return special[value]
+    }
+    static func isOfficial(_ data:Data)->Bool {
+        guard let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]else{return false}
+        return root["KeyList"] != nil || root["DeviceBasicInfo"] != nil
+    }
+    static func decode(_ data:Data,baseline:HardwareSnapshot)throws->Imported {
+        guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
+        try baseline.validate()
+        guard let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],root["//"] as? String=="47",
+              let keys=root["KeyList"] as? [[String:Any]],keys.count==defaults.count else{throw HardwareError(message:"仅支持 MX 3.0S Pokémon 型号 47 的 Windows JSON 配置。")}
+        for (index,key) in keys.enumerated(){
+            guard try integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF)==defaults[index]else{throw HardwareError(message:"Windows 键盘布局不匹配，无法确定按键位置。")}
+        }
+        for name in ["LightInfo","CustomLightMode"] {
+            if let object=root[name],!(object is NSNull),!(object is [String:Any]){throw HardwareError(message:"Windows \(name) 结构无效。")}
+        }
+        if let object=root["ActionInfo"],!(object is NSNull),!(object is [[String:Any]]){throw HardwareError(message:"Windows ActionInfo 结构无效。")}
+        let actions=root["ActionInfo"] as? [[String:Any]] ?? []
+        var result=try HardwareProfile.fromHardware(baseline)
+        let oldBindings=result.macroBindings ?? [:]
+        let physicalSlots=Set(defaults.compactMap{physicalSlot($0)})
+        // Replace the imported physical bindings while preserving any raw hidden data.
+        result.macroBindings=oldBindings.filter{!physicalSlots.contains($0.key)}
+        var importedMacros:[Int:String]=[:];var keyCount=0;var colorCount=0;var ignored=0
+        for (index,key) in keys.enumerated(){
+            guard let slot=physicalSlot(defaults[index])else{ignored+=1;continue}
+            if [6,71].contains(slot){ignored+=1;continue}
+            let link=try integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)
+            var bytes:[UInt8]
+            if link==0 {
+                bytes=try record(integer(key["Assignment"],"Assignment",range:0...0xFFFFFF))
+            }else {
+                let actionIndex=try integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+                guard actions.indices.contains(actionIndex),let content=actions[actionIndex]["ActionContent"] as? [String:Any]else{throw HardwareError(message:"Windows 动作引用无效。")}
+                let type=try integer(actions[actionIndex]["ActionType"],"ActionType",range:0...4)
+                switch type {
+                case 1:bytes=try record(integer(content["ActionKey"],"ActionKey",range:0...0xFFFFFF))
+                case 2:
+                    if importedMacros[actionIndex]==nil {
+                        let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
+                        let repeats=try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255)
+                        let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
+                        guard fixed==0 else{throw HardwareError(message:"Windows 固定间隔宏暂不支持导入，请改为逐步延迟。")}
+                        guard mode==0,repeats==1 else{throw HardwareError(message:"Windows 循环／切换宏暂不支持导入，请改为执行一次。")}
+                        guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
+                        let steps=try events.map{event->KeyboardMacro.Step in
+                            let type=try integer(event["Type"],"宏 Type",range:0...127)
+                            let button=try integer(event["Button"],"宏 Button",range:0...255)
+                            let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
+                            let usage:UInt8
+                            if type==10,button>=4,button<224{usage=UInt8(button)}
+                            else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
+                            else{throw HardwareError(message:"Windows 宏仅支持键盘按键；鼠标与滚动事件暂不支持。")}
+                            guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
+                            return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay)
+                        }
+                        let originalName=actions[actionIndex]["ActionName"] as? String ?? "导入宏"
+                        var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
+                        let stem=name;var suffix=1
+                        while result.macros.contains(where:{$0.name==name}){name="\(stem) (\(suffix))";suffix+=1}
+                        let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();result.macros.append(macro);importedMacros[actionIndex]=name
+                    }
+                    let name=importedMacros[actionIndex]!;result.macroBindings![slot]=name
+                    bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!)
+                case 4:
+                    let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
+                    let media=mediaCodes[index];bytes=[0x30,UInt8(media&255),UInt8(media>>8)]
+                default:throw HardwareError(message:"Windows 文本和其他动作暂不支持导入，请在 Mac 中重新设置。")
+                }
+            }
+            result.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:bytes);keyCount+=1
+        }
+        if let lighting=root["LightInfo"] as? [String:Any] {
+            let selected=try integer(lighting["SelectItem"],"SelectItem",range:0...modeCodes.count-1)
+            let mode=modeCodes[selected]
+            guard CherryLighting.modes.contains(where:{$0.1==mode})else{throw HardwareError(message:"此 Windows 灯效不在本型号已验证的 12 个模式中。")}
+            result.snapshot.parameters[1]=mode
+            result.snapshot.parameters[2]=UInt8(try integer(lighting["Light"],"Light",range:0...4))
+            result.snapshot.parameters[3]=UInt8(4-(try integer(lighting["Speed"],"Speed",range:0...4)))
+            result.snapshot.parameters[4]=UInt8(try integer(lighting["Fx"],"Fx",range:0...1))
+            result.snapshot.parameters[5]=UInt8(try integer(lighting["MultiColor"],"MultiColor",range:0...1))
+            for (offset,key) in ["Red","Green","Blue"].enumerated(){result.snapshot.parameters[6+offset]=UInt8(try integer(lighting[key],key,range:0...255))}
+        }
+        if let custom=root["CustomLightMode"] as? [String:Any] {
+            guard let groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,result.snapshot.colors != nil else{throw HardwareError(message:"Windows 逐键颜色组不匹配，无法导入。")}
+            for (index,entry) in groups[0].enumerated(){
+                guard let slot=physicalSlot(defaults[index])else{continue}
+                let bytes=try ["Red","Green","Blue"].map{UInt8(try integer(entry[$0],$0,range:0...255))}
+                result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes);colorCount+=1
+            }
+        }
+        // Rebuild only when bindings changed; an import without macros must
+        // preserve the original bank and its reserved bytes byte-for-byte.
+        if result.macroBindings != oldBindings || !importedMacros.isEmpty {result.snapshot=try result.resolvedMacros()}
+        try result.validate()
+        return Imported(profile:result,keyCount:keyCount,macroCount:importedMacros.count,colorCount:colorCount,ignoredKeyCount:ignored)
+    }
+}

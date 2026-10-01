@@ -46,6 +46,7 @@ func runHardwareTests() {
     print("PASS: hardware capture validation, firmware rejection, corruption and offset rejection; 109 unique matrix slots; balanced macros; profile round-trip and foreign/corrupt import rejection")
     runHardwareWriteTests(snapshot)
     runHardwareMacroTests(snapshot)
+    runWindowsProfileTests(snapshot)
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
     let service=try! CalculatorService.definition(system:["AMAccepts":["Types":["com.apple.cocoa.string"]],"AMProvides":["Types":["com.apple.cocoa.string"]],"CFBundleVersion":"9.0","NSPrincipalClass":"RunShellScriptAction"])
@@ -358,4 +359,39 @@ private func runLightingTests(_ fixture:HardwareSnapshot){
     precondition(result.parameters[1]==3 && result.parameters[3]==0 && result.parameters[5]==0 && Array(result.parameters[6..<9])==[1,2,3])
     precondition(result.parameters.dropFirst(9)==fixture.parameters.dropFirst(9) && result.keymap==fixture.keymap && result.macroData==fixture.macroData && result.colors==fixture.colors)
     print("PASS: precise RGB/HEX, intensity, static palettes and physical gradients; selected keys only and hidden-slot preservation; invalid-color isolation; custom mode 8, reversed speed and global-color staging (no hardware I/O)")
+}
+
+private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
+    func rejected(_ body:()throws->Void){do{try body();preconditionFailure("expected Windows import rejection")}catch{}}
+    var baseline=fixture;baseline.deviceInfo[6]=24;baseline.macroData=Array(repeating:0,count:3071)
+    var keys:[[String:Any]]=WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0,"ActionLinkIndex":-1]}
+    let colors:[[String:Any]]=(0..<126).map{["Red":$0,"Green":255-$0,"Blue":17,"Alpha":255]}
+    var root:[String:Any]=["//":"47","KeyList":keys,"ActionInfo":[],"LightInfo":["SelectItem":21,"Light":3,"Speed":4,"Fx":0,"MultiColor":1,"Red":1,"Green":2,"Blue":3],"CustomLightMode":["LightColorInfo":[colors]]]
+    func data(_ object:[String:Any])throws->Data{try JSONSerialization.data(withJSONObject:object)}
+    let simple=try! WindowsProfile.decode(data(root),baseline:baseline)
+    precondition(simple.keyCount==107 && simple.colorCount==109 && simple.ignoredKeyCount==19)
+    precondition(Array(simple.profile.snapshot.colors![306..<309])==[17,238,17],"logical color 17 belongs to physical calculator matrix 102")
+    precondition(Array(simple.profile.snapshot.keymap[306..<309])==[0x30,0x92,1])
+    precondition(simple.profile.snapshot.parameters[1]==8 && simple.profile.snapshot.parameters[3]==0)
+    precondition(simple.profile.snapshot.parameters.dropFirst(9)==baseline.parameters.dropFirst(9) && simple.profile.snapshot.macroData==baseline.macroData)
+    let visible=Set(WindowsProfile.defaults.compactMap{WindowsProfile.physicalSlot($0)})
+    for slot in 0..<126 where !visible.contains(slot){precondition(simple.profile.snapshot.colors![slot*3..<slot*3+3]==baseline.colors![slot*3..<slot*3+3] && simple.profile.snapshot.keymap[slot*3..<slot*3+3]==baseline.keymap[slot*3..<slot*3+3])}
+    keys[17]["ActionLink"]=1;keys[17]["ActionLinkIndex"]=0
+    root["KeyList"]=keys;root["ActionInfo"]=[["ActionType":1,"ActionContent":["ActionKey":0x200D06]]]
+    let remapped=try! WindowsProfile.decode(data(root),baseline:baseline)
+    precondition(Array(remapped.profile.snapshot.keymap[306..<309])==[0x20,13,6])
+    root["ActionInfo"]=[["ActionType":4,"ActionContent":["ActionMedia":16]]]
+    let media=try! WindowsProfile.decode(data(root),baseline:baseline);precondition(Array(media.profile.snapshot.keymap[306..<309])==[0x30,0x92,1],"ActionMedia is a table index, not a raw HID code")
+    root["ActionInfo"]=[["ActionName":"Control A","ActionType":2,"ActionContent":["ActionMacroType":0,"ActionMacroLoopValue":1,"ActionMacroEvents":[["Type":9,"Button":1,"Action":"down","Delay":"0"],["Type":10,"Button":4,"Action":"down","Delay":"20"],["Type":10,"Button":4,"Action":"up","Delay":"50"],["Type":9,"Button":1,"Action":"up","Delay":"0"]]]]]
+    let macro=try! WindowsProfile.decode(data(root),baseline:baseline)
+    precondition(macro.macroCount==1 && macro.profile.macroBindings?[102]=="Control A" && macro.profile.macros[0].steps.first!.usage==224)
+    precondition(try! CherryMacroCodec.decode(macro.profile.snapshot.macroData!)[0].steps==macro.profile.macros[0].steps)
+    let editor=HardwareWindowController();rejected{try editor.loadImport(data(root))};precondition(editor.profile==nil)
+    editor.baseline=baseline;try! editor.loadImport(data(root));precondition(editor.baseline==baseline && editor.profile==macro.profile)
+    let saved=editor.profile;root["//"]="46";rejected{try editor.loadImport(data(root))};precondition(editor.profile==saved)
+    root["//"]="47";keys[0]["DefaultAssignment"]=0;root["KeyList"]=keys;rejected{_ = try WindowsProfile.decode(data(root),baseline:baseline)}
+    rejected{_ = try WindowsProfile.integer(true,"test",range:0...255)}
+    rejected{_ = try WindowsProfile.integer(1.5,"test",range:0...255)}
+    rejected{_ = try WindowsProfile.integer("256","test",range:0...255)}
+    print("PASS: Windows model/layout validation; logical-to-physical keys and colors, ActionInfo references and balanced single-run macro conversion; hidden/unknown preservation, no-baseline rejection and atomic invalid import (synthetic fixtures, no hardware I/O)")
 }
