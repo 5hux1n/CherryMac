@@ -5,7 +5,7 @@ final class HardwareCanvas: NSView {
     override func draw(_ dirtyRect:NSRect){NSColor.windowBackgroundColor.setFill();bounds.fill()}
 }
 
-final class HardwareWindowController: NSWindowController {
+final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1040,height:700))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
     let connection = NSTextField(labelWithString:"尚未读取键盘")
@@ -18,6 +18,19 @@ final class HardwareWindowController: NSWindowController {
     let brightness = NSSlider(value:4,minValue:0,maxValue:4,target:nil,action:nil)
     let speed = NSSlider(value:2,minValue:0,maxValue:4,target:nil,action:nil)
     let color = NSColorWell()
+    let endColor = NSColorWell()
+    let lightHex = NSTextField(string:"#FFFFFF")
+    let lightRGB = [NSTextField(string:"255"),NSTextField(string:"255"),NSTextField(string:"255")]
+    let lightStrength = NSSlider(value:100,minValue:0,maxValue:100,target:nil,action:nil)
+    let lightStrengthLabel = NSTextField(labelWithString:"100%")
+    let lightCount = NSTextField(labelWithString:"已选 1 键")
+    let lightMultiple = NSButton(checkboxWithTitle:"多选",target:nil,action:nil)
+    let lightRegion = NSPopUpButton()
+    let lightPattern = NSPopUpButton()
+    let lightDirection = NSPopUpButton()
+    let lightRainbow = NSPopUpButton()
+    var lightSelection:Set<String> = ["calculator"]
+    var colorEditSource=0
     let modifiers = [NSButton(checkboxWithTitle:"⌘ Command",target:nil,action:nil),NSButton(checkboxWithTitle:"⌃ Control",target:nil,action:nil),NSButton(checkboxWithTitle:"⌥ Option",target:nil,action:nil),NSButton(checkboxWithTitle:"⇧ Shift",target:nil,action:nil)]
     let macroName = NSTextField(string:"新宏")
     let macroText = NSTextView()
@@ -33,7 +46,7 @@ final class HardwareWindowController: NSWindowController {
     var baseline:HardwareSnapshot?
     var busy=false
     var controls:[NSControl]=[]
-    var modes:[(String,UInt8)] = [("保留当前模式",23),("自定义逐键颜色",23)]
+    var modes:[(String,UInt8)] = [("保留当前模式",23)] + CherryLighting.modes
     let hidKeys:[(String,UInt8)] = {
         var keys:[(String,UInt8)]=[]
         for usage in 4...29 { keys.append((String(UnicodeScalar(usage-4+65)!),UInt8(usage))) }
@@ -86,14 +99,7 @@ final class HardwareWindowController: NSWindowController {
         place(button("加入待写入配置",#selector(stageKey)),735,13,190,28,in:keys)
         place(label("计算器需先安装 macOS 快捷操作；由系统服务启动，实体键调用仍待验证。",12),277,124,640,30,in:keys)
         place(button("安装计算器快捷操作",#selector(installCalculator)),18,123,230,28,in:keys)
-        let lights=tabs.tabViewItems[1].view!
-        place(label("灯效模式"),18,15,85,24,in:lights);modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,110,11,235,28,in:lights)
-        place(label("亮度"),380,15,50,24,in:lights);controls.append(brightness);place(brightness,430,12,185,25,in:lights)
-        place(label("速度"),652,15,50,24,in:lights);controls.append(speed);place(speed,702,12,190,25,in:lights)
-        place(label("选中按键的颜色"),18,62,145,24,in:lights);color.color = .white;controls.append(color);place(color,173,58,70,32,in:lights)
-        place(button("设置选中键颜色",#selector(stageColor)),277,58,195,30,in:lights)
-        place(button("加入灯效配置",#selector(stageLights)),497,58,190,30,in:lights)
-        place(label("读取到的原始灯效参数会保留；只修改模式、亮度、速度与颜色。亮度与逐键颜色已完成实际读写验证。",12),18,121,885,38,in:lights)
+        buildLighting(tabs.tabViewItems[1].view!)
         let macros=tabs.tabViewItems[2].view!
         place(label("宏名称"),18,15,65,24,in:macros);controls.append(macroName);place(macroName,85,11,220,28,in:macros)
         macroPicker.addItem(withTitle:"新建宏");macroPicker.target=self;macroPicker.action=#selector(chooseMacro);controls.append(macroPicker);place(macroPicker,323,11,210,28,in:macros)
@@ -120,8 +126,15 @@ final class HardwareWindowController: NSWindowController {
         place(button("写入灯效",#selector(writeLighting)),889,642,123,30)
         update()
     }
-    @objc func chooseTab(_ sender:NSButton){tabView?.selectTabViewItem(at:sender.tag);for tab in tabButtons{tab.bezelColor=tab.tag==sender.tag ? .controlAccentColor:nil}}
-    @objc func selectKey(_ sender:KeyButton){selected=sender.spec.id;loadSelectedAssignment();update()}
+    @objc func chooseTab(_ sender:NSButton){tabView?.selectTabViewItem(at:sender.tag);for tab in tabButtons{tab.bezelColor=tab.tag==sender.tag ? .controlAccentColor:nil};update()}
+    var lightingTab:Bool {tabView?.selectedTabViewItem?.identifier as? String == "灯效"}
+    @objc func selectKey(_ sender:KeyButton){
+        selected=sender.spec.id
+        if lightingTab && (lightMultiple.state == .on || NSApp.currentEvent?.modifierFlags.contains(.command)==true){
+            if lightSelection.contains(selected){lightSelection.remove(selected)}else{lightSelection.insert(selected)}
+        }else{lightSelection=[selected]}
+        loadSelectedAssignment();update();loadLightColor()
+    }
     func loadSelectedAssignment(){
         guard let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),let profile else{return}
         let bytes=Array(profile.snapshot.keymap[slot*3..<slot*3+3])
@@ -137,20 +150,24 @@ final class HardwareWindowController: NSWindowController {
         actionChanged()
     }
     func update(){
-        for b in keyButtons{b.chosen=b.spec.id==selected
-            if let slot=CherryMatrix.slot(b.spec),let p=profile,let original=baseline{b.mapped=Array(p.snapshot.keymap[slot*3..<slot*3+3]) != Array(original.keymap[slot*3..<slot*3+3])}else{b.mapped=false}}
+        for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
+            b.lightingColor=nil
+            if lightingTab,let slot=CherryMatrix.slot(b.spec),let colors=profile?.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
+            if let slot=CherryMatrix.slot(b.spec),let p=profile,let original=baseline{
+                if lightingTab,let colors=p.snapshot.colors,let previous=original.colors{b.mapped=colors[slot*3..<slot*3+3] != previous[slot*3..<slot*3+3]}else{b.mapped=p.snapshot.keymap[slot*3..<slot*3+3] != original.keymap[slot*3..<slot*3+3]}
+            }else{b.mapped=false}}
+        lightCount.stringValue="已选 \(lightSelection.count) 键"
         guard let key=keyboardLayout().first(where:{$0.id==selected})else{return}
         selectedLabel.stringValue=key.label
         if let slot=CherryMatrix.slot(key),let p=profile{
             recordLabel.stringValue="当前配置："+(p.macroBindings?[slot].map{"宏 · \($0)"} ?? CherryMatrix.describe(Array(p.snapshot.keymap[slot*3..<slot*3+3])))
-            if let colors=p.snapshot.colors{let start=slot*3;color.color=NSColor(srgbRed:CGFloat(colors[start])/255,green:CGFloat(colors[start+1])/255,blue:CGFloat(colors[start+2])/255,alpha:1)}
         }else{recordLabel.stringValue="读取键盘后可查看此键配置"}
     }
     func loadLighting(){
         guard let profile else{return}
         let parameters=profile.snapshot.parameters
         modes[0].1=parameters[1];modePicker.item(at:0)?.title="保留当前模式（\(parameters[1])）";modePicker.selectItem(at:0)
-        brightness.doubleValue=Double(parameters[2]);speed.doubleValue=Double(parameters[3])
+        brightness.doubleValue=Double(parameters[2]);speed.doubleValue=Double(4-Int(parameters[3]));lightDirection.selectItem(at:0);lightRainbow.selectItem(at:0);loadLightColor()
     }
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
     @objc func readKeyboard(){
@@ -244,12 +261,6 @@ final class HardwareWindowController: NSWindowController {
         p.macroBindings?.removeValue(forKey:slot)
         p.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);profile=p;message.stringValue="已编辑 \(key.label)：\(CherryMatrix.describe(record))。尚未写入键盘。";update()
     }
-    @objc func stageColor(){
-        guard var p=profile,var colors=p.snapshot.colors,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),let rgb=color.color.usingColorSpace(.sRGB)else{message.stringValue="请先读取键盘颜色。";return}
-        colors.replaceSubrange(slot*3..<slot*3+3,with:[rgb.redComponent,rgb.greenComponent,rgb.blueComponent].map{UInt8(max(0,min(255,($0*255).rounded())))})
-        p.snapshot.colors=colors;profile=p;message.stringValue="已编辑 \(key.label) 的灯光颜色，尚未写入键盘。"
-    }
-    @objc func stageLights(){guard var p=profile else{message.stringValue="请先读取键盘。";return};p.snapshot.parameters[1]=modes[modePicker.indexOfSelectedItem].1;p.snapshot.parameters[2]=UInt8(brightness.intValue);p.snapshot.parameters[3]=UInt8(speed.intValue);profile=p;message.stringValue="灯效已加入待写入配置。"}
     @objc func stageMacro(){
         do{guard var p=profile else{throw HardwareError(message:"请先读取或导入配置。")}
             let lines=macroText.string.split(separator:"\n",omittingEmptySubsequences:true)

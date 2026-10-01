@@ -174,6 +174,7 @@ final class FlippedView: NSView { override var isFlipped: Bool { true } }
 final class KeyButton: NSButton {
     let spec: KeySpec
     var hardwareConfigurable=false
+    var lightingColor:NSColor? {didSet{needsDisplay=true}}
     var chosen = false { didSet { needsDisplay = true } }
     var mapped = false { didSet { needsDisplay = true } }
     init(_ spec: KeySpec) {
@@ -188,12 +189,13 @@ final class KeyButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0.8, dy: 0.8)
         let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        let fill: NSColor = chosen ? .controlAccentColor : (isHighlighted ? .selectedControlColor : .controlBackgroundColor)
+        let fill: NSColor = lightingColor?.blended(withFraction:0.22,of:.controlBackgroundColor) ?? (chosen ? .controlAccentColor : (isHighlighted ? .selectedControlColor : .controlBackgroundColor))
         fill.setFill(); path.fill()
         (chosen ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.lineWidth = chosen ? 2 : 1
         path.stroke()
-        let color: NSColor = chosen ? .white : ((spec.configurable || hardwareConfigurable) ? .labelColor : .secondaryLabelColor)
+        var color: NSColor = chosen ? .white : ((spec.configurable || hardwareConfigurable) ? .labelColor : .secondaryLabelColor)
+        if lightingColor != nil,let rgb=fill.usingColorSpace(.sRGB){color=(rgb.redComponent*0.2126+rgb.greenComponent*0.7152+rgb.blueComponent*0.0722)>0.5 ? .black:.white}
         var font = NSFont.systemFont(ofSize: title.count > 6 ? 9 : 11, weight: chosen ? .semibold : .medium)
         if (title as NSString).size(withAttributes: [.font: font]).width > bounds.width - 4 {
             font = .systemFont(ofSize: 9, weight: chosen ? .semibold : .medium)
@@ -1161,6 +1163,9 @@ if CommandLine.arguments.contains("--self-test") {
         controller.profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[input+1])));controller.baseline=controller.profile?.snapshot;controller.connection.stringValue="配置预览 · 126 个固件键位 · 未连接硬件";controller.loadLighting();controller.refreshMacroPicker();controller.loadSelectedAssignment();controller.update()
     }
     if let input=CommandLine.arguments.firstIndex(of:"--hardware-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),(0..<4).contains(tab){controller.chooseTab(controller.tabButtons[tab])}
+    if CommandLine.arguments.contains("--lighting-demo"),controller.profile != nil{
+        controller.lightRegion.selectItem(at:1);controller.selectLightRegion();controller.lightPattern.selectItem(at:3);controller.stageColor()
+    }
     controller.window?.displayIfNeeded()
     if let bitmap=controller.root.bitmapImageRepForCachingDisplay(in:controller.root.bounds){controller.root.cacheDisplay(in:controller.root.bounds,to:bitmap);if let data=bitmap.representation(using:.png,properties:[:]){try data.write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]))}}
 } else if let index = CommandLine.arguments.firstIndex(of: "--preview"), CommandLine.arguments.count > index + 1 {

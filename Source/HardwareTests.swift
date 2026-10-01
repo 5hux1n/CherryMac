@@ -46,6 +46,7 @@ func runHardwareTests() {
     print("PASS: hardware capture validation, firmware rejection, corruption and offset rejection; 109 unique matrix slots; balanced macros; profile round-trip and foreign/corrupt import rejection")
     runHardwareWriteTests(snapshot)
     runHardwareMacroTests(snapshot)
+    runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
     let service=try! CalculatorService.definition(system:["AMAccepts":["Types":["com.apple.cocoa.string"]],"AMProvides":["Types":["com.apple.cocoa.string"]],"CFBundleVersion":"9.0","NSPrincipalClass":"RunShellScriptAction"])
     let registered=(service.info["NSServices"] as! [[String:Any]])[0]
@@ -308,4 +309,53 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(editor.profile!.macros.isEmpty && Array(editor.profile!.snapshot.keymap[306..<309])==[0x20,0,0])
     editor.discardDraft();precondition(editor.profile!.snapshot==original && editor.profile!.macros.isEmpty)
     print("PASS: hardware editor staging isolates baseline, selection reloads assignments, mode preservation, named-key macro editing and invalid-macro preservation (no hardware I/O)")
+}
+
+private func runLightingTests(_ fixture:HardwareSnapshot){
+    func fails(_ block:()throws->Void){do{try block();preconditionFailure("expected invalid color rejection")}catch{}}
+    precondition(try! LightRGB(hex:" #ffD600 ")==LightRGB(255,214,0))
+    for text in ["#FFF","#GG0000","1234567","０１２３４５"]{fails{_ = try LightRGB(hex:text)}}
+    precondition(LightRGB.hsv(0,1,1)==LightRGB(255,0,0) && LightRGB.hsv(1,1,1)==LightRGB(255,0,0))
+    precondition(LightRGB(255,128,0).withStrength(0)==LightRGB(0,0,0))
+    precondition(LightRGB(100,50,0).withStrength(100)==LightRGB(255,128,0))
+    let keys=keyboardLayout();let original=fixture.colors!;let all=Set(keys.map{$0.id})
+    let single=try! CherryLighting.paint(original,keys:keys,selected:["calculator"],pattern:0,start:LightRGB(7,123,249),end:LightRGB(0,0,0))
+    for slot in 0..<126 {precondition(Array(single[slot*3..<slot*3+3])==(slot==102 ? [7,123,249]:Array(original[slot*3..<slot*3+3])))}
+    let visible=Set(keys.compactMap{CherryMatrix.slot($0)})
+    for pattern in 0..<CherryLighting.patterns.count {
+        let painted=try! CherryLighting.paint(original,keys:keys,selected:all,pattern:pattern,start:LightRGB(255,0,0),end:LightRGB(0,0,255))
+        for slot in 0..<126 where !visible.contains(slot){precondition(painted[slot*3..<slot*3+3]==original[slot*3..<slot*3+3],"hidden firmware positions must remain untouched")}
+    }
+    precondition(CherryLighting.region(6,keys:keys).count==4)
+    let gradient=try! CherryLighting.paint(original,keys:keys,selected:all,pattern:1,start:LightRGB(255,0,0),end:LightRGB(0,0,255))
+    let first=keys.min{$0.rect.midX<$1.rect.midX}!,last=keys.max{$0.rect.midX<$1.rect.midX}!
+    let a=CherryMatrix.slot(first)!*3,b=CherryMatrix.slot(last)!*3
+    precondition(Array(gradient[a..<a+3])==[255,0,0] && Array(gradient[b..<b+3])==[0,0,255])
+    _=try! CherryLighting.paint(original,keys:keys,selected:["calculator"],pattern:2,start:LightRGB(1,2,3),end:LightRGB(4,5,6))
+    fails{_ = try CherryLighting.paint(original,keys:keys,selected:[],pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0))}
+    fails{_ = try CherryLighting.paint(original,keys:keys,selected:["missing"],pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0))}
+    let editor=HardwareWindowController();editor.baseline=fixture;editor.profile=HardwareProfile(snapshot:fixture);editor.loadLighting()
+    editor.lightHex.stringValue="#077BF9";editor.colorEditSource=2;editor.stageColor()
+    precondition(editor.profile!.snapshot.colors==single && editor.profile!.snapshot.parameters[1]==8 && editor.baseline==fixture)
+    let saved=editor.profile
+    editor.lightHex.stringValue="#BAD";editor.colorEditSource=2;editor.stageColor();precondition(editor.profile==saved)
+    editor.lightRegion.selectItem(at:6);editor.selectLightRegion();precondition(editor.lightSelection.count==4)
+    editor.chooseTab(editor.tabButtons[1]);editor.lightMultiple.state = .on
+    let calculator=editor.keyButtons.first{$0.spec.id=="calculator"}!
+    editor.selectKey(calculator);precondition(editor.lightSelection.count==5 && editor.lightSelection.contains("calculator"))
+    editor.selectKey(calculator);precondition(editor.lightSelection.count==4 && !editor.lightSelection.contains("calculator"))
+    editor.lightMultiple.state = .off;editor.selectKey(calculator);precondition(editor.lightSelection==["calculator"])
+    editor.lightRGB[0].stringValue="256";editor.colorEditSource=1
+    let beforeInvalid=editor.profile;editor.stageColor();precondition(editor.profile==beforeInvalid)
+    editor.lightRGB[0].stringValue="7";editor.lightRGB[1].stringValue="123";editor.lightRGB[2].stringValue="249"
+    editor.stageColor();precondition(Array(editor.profile!.snapshot.colors![306..<309])==[7,123,249])
+    editor.lightRegion.selectItem(at:6);editor.selectLightRegion()
+    editor.stageLightOff()
+    for key in keys where editor.lightSelection.contains(key.id){let slot=CherryMatrix.slot(key)!;precondition(Array(editor.profile!.snapshot.colors![slot*3..<slot*3+3])==[0,0,0])}
+    editor.profile=HardwareProfile(snapshot:fixture);editor.loadLighting();editor.setLightColor(LightRGB(1,2,3));editor.stageGlobalLightColor()
+    editor.modePicker.selectItem(at:CherryLighting.modes.firstIndex{$0.1==3}!+1);editor.speed.doubleValue=4;editor.stageLights()
+    let result=editor.profile!.snapshot
+    precondition(result.parameters[1]==3 && result.parameters[3]==0 && result.parameters[5]==0 && Array(result.parameters[6..<9])==[1,2,3])
+    precondition(result.parameters.dropFirst(9)==fixture.parameters.dropFirst(9) && result.keymap==fixture.keymap && result.macroData==fixture.macroData && result.colors==fixture.colors)
+    print("PASS: precise RGB/HEX, intensity, static palettes and physical gradients; selected keys only and hidden-slot preservation; invalid-color isolation; custom mode 8, reversed speed and global-color staging (no hardware I/O)")
 }
