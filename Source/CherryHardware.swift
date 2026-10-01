@@ -27,7 +27,7 @@ struct CherryPacket {
         guard request.count == size, reply.count == size, reply[0] == 4, reply[3] == request[3] else {
             throw HardwareError(message: "键盘回复的报告或命令不匹配。")
         }
-        let chunked = [UInt8(3),5,6,7,8,9,0x0A,0x0B,0x1B].contains(request[3])
+        let chunked = [UInt8(3),5,6,7,8,9,0x0A,0x0B,0x14,0x15,0x1B].contains(request[3])
         guard reply[7] != 0xFF, reply[7] != 0xFE else { throw HardwareError(message: "键盘拒绝命令 \(String(format: "%02x", request[3]))。") }
         guard reply[7] == request[7] else { throw HardwareError(message: "键盘回复包含未知状态或标志。") }
         if chunked {
@@ -35,7 +35,7 @@ struct CherryPacket {
             guard reply[7] != 0xFF, reply[7] != 0xFE else { throw HardwareError(message: "键盘拒绝请求（范围或数据不受支持）。") }
         }
         let stored = UInt16(reply[1]) | UInt16(reply[2]) << 8
-        let query = [UInt8(3),5,7,8,0x0A,0x1B].contains(request[3])
+        let query = [UInt8(3),5,7,8,0x0A,0x14,0x1B].contains(request[3])
         let calculated = (query ? Array(request[3..<8]) : Array(request[3...])).reduce(0) { $0 + UInt16($1) }
         guard stored == calculated else { throw HardwareError(message: "键盘回复校验失败。") }
     }
@@ -50,11 +50,13 @@ struct HardwareSnapshot: Codable, Equatable {
     var deviceInfo: [UInt8]
     var parameters: [UInt8]
     var colors: [UInt8]?
+    var macroData: [UInt8]? = nil
     var createdAt = Date()
     func validate() throws {
         guard format == "CherryMacHardware", version == 1, vendorID == 0x046A,
               productID == 0x01CE, keymap.count == 378, deviceInfo.count == 34, parameters.count == 56,
-              colors == nil || colors?.count == 378 else { throw HardwareError(message: "此备份不适用于当前宝可梦键盘。") }
+              colors == nil || colors?.count == 378,
+              macroData == nil || macroData?.count == 3071 else { throw HardwareError(message: "此备份不适用于当前宝可梦键盘。") }
     }
 }
 
@@ -64,14 +66,94 @@ protocol CherryHardwareAccess: AnyObject {
     func snapshot(includeColors: Bool) throws -> HardwareSnapshot
     func waitUntilKeysReleased(timeout: TimeInterval) throws
     func backup(_ snapshot: HardwareSnapshot) throws -> URL
+    func waitForMacroCompletion(seconds:TimeInterval) throws
 }
 
 extension CherryHardwareAccess {
+    func completeSnapshot() throws -> HardwareSnapshot {
+        var snapshot=try snapshot(includeColors:true)
+        guard snapshot.deviceInfo[6]==24 else {throw HardwareError(message:"宏容量与已验证固件不同，停止读取。")}
+        snapshot.macroData=try read(0x14,count:3071)
+        try snapshot.validate();return snapshot
+    }
+    func snapshotForBaseline(_ baseline:HardwareSnapshot?) throws -> HardwareSnapshot {
+        if baseline?.macroData != nil{return try completeSnapshot()}
+        return try snapshot(includeColors:true)
+    }
     func read(_ command: UInt8, count: Int) throws -> [UInt8] {
         try read(command, count: count, baseOffset: 0)
     }
     func waitUntilKeysReleased() throws { try waitUntilKeysReleased(timeout: 5) }
     func backup(_ snapshot: HardwareSnapshot) throws -> URL { try snapshot.saveBackup() }
+    func waitForMacroCompletion(seconds:TimeInterval) throws {
+        let deadline=ProcessInfo.processInfo.systemUptime+seconds
+        while ProcessInfo.processInfo.systemUptime<deadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+        try waitUntilKeysReleased()
+    }
+}
+
+extension CherryHardwareAccess {
+    func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot) throws -> HardwareSnapshot {
+        try expected.validate();try baseline.validate()
+        guard let wanted=expected.macroData,let original=baseline.macroData else{throw HardwareError(message:"请重新读取包含宏数据的完整配置。")}
+        let macros=try CherryMacroCodec.decode(wanted),oldMacros=try CherryMacroCodec.decode(original)
+        let oldSlots=(0..<126).filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
+        let newSlots=(0..<126).filter{[UInt8(0x70),0x71].contains(expected.keymap[$0*3])}
+        for slot in oldSlots {
+            let record=Array(baseline.keymap[slot*3..<slot*3+3])
+            guard record[0]==0x70,record[2]==0,Int(record[1])<oldMacros.count else{throw HardwareError(message:"原配置包含重复宏或未知宏绑定，暂不能覆盖；请保留原配置。")}
+        }
+        for slot in newSlots {
+            let record=Array(expected.keymap[slot*3..<slot*3+3])
+            guard record[0]==0x70,record[2]==0,Int(record[1])<macros.count else{throw HardwareError(message:"宏绑定无效，或不是执行一次模式。")}
+        }
+        let before=try completeSnapshot()
+        guard before.keymap==baseline.keymap,before.macroData==original,before.parameters==baseline.parameters,before.colors==baseline.colors else{throw HardwareError(message:"键盘配置已经变化，请重新读取后写入。")}
+        if before.keymap==expected.keymap && original==wanted{return before}
+        let backup=try backup(before)
+        try waitUntilKeysReleased()
+        let offsets=stride(from:0,to:3071,by:54).filter{offset in let end=min(offset+54,3071);return wanted[offset..<end] != original[offset..<end]}
+        func keys(_ data:[UInt8])throws{
+            for offset in stride(from:0,to:378,by:54){try waitUntilKeysReleased();_ = try exchange(CherryPacket.chunk(9,offset:offset,length:54,data:Array(data[offset..<offset+54])))}
+        }
+        func bank(_ data:[UInt8])throws{
+            // Write the pointer/header block last, after all event blocks.
+            for offset in offsets.reversed(){try waitUntilKeysReleased();let end=min(offset+54,3071);_ = try exchange(CherryPacket.chunk(0x15,offset:offset,length:end-offset,data:Array(data[offset..<end])))}
+        }
+        var disabled=before.keymap
+        for slot in oldSlots{disabled.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])}
+        let drain=oldSlots.map{slot in oldMacros[Int(before.keymap[slot*3+1])].steps.reduce(0){$0+$1.delayMilliseconds}}.max() ?? 0
+        do {
+            if !offsets.isEmpty && !oldSlots.isEmpty {
+                try keys(disabled)
+                // No new trigger is possible; let a previously started finite
+                // sequence finish before changing its stored events.
+                try waitForMacroCompletion(seconds:Double(drain)/1000)
+            }
+            try bank(wanted)
+            guard try read(0x14,count:3071)==wanted else{throw HardwareError(message:"宏数据写后读取不一致。")}
+            if expected.keymap != before.keymap || (!offsets.isEmpty && !oldSlots.isEmpty){try keys(expected.keymap)}
+            let after=try completeSnapshot()
+            guard after.keymap==expected.keymap,after.macroData==wanted,after.parameters==before.parameters,after.colors==before.colors else{throw HardwareError(message:"宏和键位写后校验失败。")}
+            return after
+        }catch{
+            let failure=error.localizedDescription
+            do {
+                try waitUntilKeysReleased()
+                // Disable both old and newly introduced triggers before
+                // restoring the original macro bank, then restore key bindings.
+                var safe=try read(8,count:378)
+                for slot in Set(oldSlots+newSlots){safe.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])}
+                try keys(safe)
+                let newDuration=macros.map{$0.steps.reduce(0){$0+$1.delayMilliseconds}}.max() ?? 0
+                try waitForMacroCompletion(seconds:Double(max(drain,newDuration))/1000)
+                try bank(original);try keys(before.keymap)
+                let restored=try completeSnapshot()
+                guard restored.keymap==before.keymap,restored.macroData==original,restored.parameters==before.parameters,restored.colors==before.colors else{throw HardwareError(message:"宏恢复后读取不一致。")}
+            }catch{throw HardwareError(message:"\(failure) 自动恢复失败：\(error.localizedDescription)。备份：\(backup.path)")}
+            throw HardwareError(message:"\(failure) 已恢复原宏和键位。备份：\(backup.path)")
+        }
+    }
 }
 
 // Use a monotonic clock. A quick down/up, or any held modifier, resets the
@@ -137,7 +219,7 @@ final class CherryUSB: CherryHardwareAccess {
         guard result == 0 else { throw HardwareError(message: "USB 发送失败（\(result)）。") }
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
-            if let index = received.firstIndex(where: { $0[3] == request[3] && (!([UInt8(3),5,6,7,8,9,0x0A,0x0B,0x1B].contains(request[3])) || $0[4..<7].elementsEqual(request[4..<7])) }) {
+            if let index = received.firstIndex(where: { $0[3] == request[3] && (!([UInt8(3),5,6,7,8,9,0x0A,0x0B,0x14,0x15,0x1B].contains(request[3])) || $0[4..<7].elementsEqual(request[4..<7])) }) {
                 let reply = received.remove(at: index)
                 trace?("IN  " + reply.map { String(format: "%02x", $0) }.joined())
                 try CherryPacket.validate(reply, request: request)
@@ -148,10 +230,11 @@ final class CherryUSB: CherryHardwareAccess {
         throw HardwareError(message: "键盘回复超时（命令 \(String(format: "%02x", request[3]))）。未自动重试写入。")
     }
     func read(_ command: UInt8, count: Int, baseOffset: Int = 0) throws -> [UInt8] {
-        guard [UInt8(3),5,7,8,0x0A,0x1B].contains(command), count > 0, count <= 512, baseOffset >= 0, baseOffset + count <= 65536 else { throw HardwareError(message: "读取参数无效。") }
+        guard [UInt8(3),5,7,8,0x0A,0x14,0x1B].contains(command), count > 0, count <= (command==0x14 ? 3071:512), baseOffset >= 0, baseOffset + count <= (command==0x14 ? 3071:65536) else { throw HardwareError(message: "读取参数无效。") }
         var data: [UInt8] = []
-        for offset in stride(from: 0, to: count, by: 56) {
-            let size = min(56, count - offset)
+        let chunkSize=command==0x14 ? 54:56
+        for offset in stride(from: 0, to: count, by: chunkSize) {
+            let size = min(chunkSize, count - offset)
             let reply = try exchange(CherryPacket.chunk(command, offset: baseOffset + offset, length: size))
             data += reply[8..<(8 + size)]
         }
@@ -198,11 +281,22 @@ extension CherryHardwareAccess {
     @discardableResult
     func writeKeymap(_ data: [UInt8], baseline: HardwareSnapshot? = nil) throws -> HardwareSnapshot {
         guard data.count == 378 else { throw HardwareError(message: "键位表长度必须为 378 字节。") }
-        let before=try snapshot(includeColors:true)
+        let before=try snapshotForBaseline(baseline)
         if let baseline {
             try baseline.validate()
-            guard before.keymap==baseline.keymap, before.parameters==baseline.parameters, before.colors==baseline.colors else {
+            guard before.keymap==baseline.keymap, before.parameters==baseline.parameters, before.colors==baseline.colors,
+                  baseline.macroData==nil || before.macroData==baseline.macroData else {
                 throw HardwareError(message:"键盘配置已经变化，请重新读取后再写入。")
+            }
+        }
+        let changedMacros=(0..<126).filter{slot in
+            [UInt8(0x70),0x71].contains(data[slot*3]) && data[slot*3..<slot*3+3] != before.keymap[slot*3..<slot*3+3]
+        }
+        if !changedMacros.isEmpty {
+            guard let bank=before.macroData else{throw HardwareError(message:"新增宏绑定需要完整读取宏区。")}
+            let macros=try CherryMacroCodec.decode(bank)
+            for slot in changedMacros {
+                guard data[slot*3]==0x70,data[slot*3+2]==0,Int(data[slot*3+1])<macros.count else{throw HardwareError(message:"宏绑定尚未写入，或模式不受支持。请使用宏与键位联合写入。")}
             }
         }
         if data==before.keymap { return before }
@@ -219,8 +313,8 @@ extension CherryHardwareAccess {
         }
         do {
             try send(data)
-            let after=try snapshot(includeColors:true)
-            guard after.keymap==data, after.parameters==before.parameters, after.colors==before.colors else {
+            let after=try snapshotForBaseline(baseline)
+            guard after.keymap==data, after.parameters==before.parameters, after.colors==before.colors,after.macroData==before.macroData else {
                 throw HardwareError(message:"键位表写后读取不一致，或灯效发生意外变化。")
             }
             return after
@@ -229,8 +323,8 @@ extension CherryHardwareAccess {
             do {
                 // Never change a mapping while a key or modifier is held.
                 try waitUntilKeysReleased();try send(before.keymap)
-                let restored=try snapshot(includeColors:true)
-                guard restored.keymap==before.keymap, restored.parameters==before.parameters, restored.colors==before.colors else{throw HardwareError(message:"恢复后配置仍不一致。")}
+                let restored=try snapshotForBaseline(baseline)
+                guard restored.keymap==before.keymap, restored.parameters==before.parameters, restored.colors==before.colors,restored.macroData==before.macroData else{throw HardwareError(message:"恢复后配置仍不一致。")}
             }catch{throw HardwareError(message:"\(failure) 自动恢复失败：\(error.localizedDescription)。备份：\(backup.path)")}
             throw HardwareError(message:"\(failure) 已恢复写入前的键位表。备份：\(backup.path)")
         }
@@ -261,8 +355,9 @@ extension CherryHardwareAccess {
               expected.parameters[1]<=23, expected.parameters[2]<=4, expected.parameters[3]<=4 else {
             throw HardwareError(message:"灯效配置包含不受支持的参数，请重新读取键盘。")
         }
-        let before=try snapshot(includeColors:true)
-        guard before.keymap==baseline.keymap, before.parameters==baseline.parameters,before.colors==original else {
+        let before=try snapshotForBaseline(baseline)
+        guard before.keymap==baseline.keymap, before.parameters==baseline.parameters,before.colors==original,
+              baseline.macroData==nil || before.macroData==baseline.macroData else {
             throw HardwareError(message:"键盘配置已经变化，请重新读取后再写入。")
         }
         let backup=try backup(before)
@@ -283,8 +378,8 @@ extension CherryHardwareAccess {
         do {
             try writeColors(wanted)
             if before.parameters.prefix(9) != expected.parameters.prefix(9){try writeParameters(expected.parameters)}
-            let after=try snapshot(includeColors:true)
-            guard after.parameters==expected.parameters, after.colors==wanted,after.keymap==before.keymap else {
+            let after=try snapshotForBaseline(baseline)
+            guard after.parameters==expected.parameters, after.colors==wanted,after.keymap==before.keymap,after.macroData==before.macroData else {
                 throw HardwareError(message:"灯效写入后读取不一致。")
             }
             return after
@@ -293,8 +388,8 @@ extension CherryHardwareAccess {
             do {
                 try waitUntilKeysReleased()
                 try writeColors(original);try writeParameters(before.parameters)
-                let restored=try snapshot(includeColors:true)
-                guard restored.keymap==before.keymap,restored.parameters==before.parameters,restored.colors==before.colors else {
+                let restored=try snapshotForBaseline(baseline)
+                guard restored.keymap==before.keymap,restored.parameters==before.parameters,restored.colors==before.colors,restored.macroData==before.macroData else {
                     throw HardwareError(message:"恢复后配置仍不一致。")
                 }
             }catch{

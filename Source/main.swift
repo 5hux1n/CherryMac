@@ -1153,7 +1153,7 @@ if CommandLine.arguments.contains("--self-test") {
     if let data = try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys]), let string = String(data: data, encoding: .utf8) { print(string) }
     IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-read"), CommandLine.arguments.count > index+1 {
-    do { let snapshot=try CherryUSB().snapshot(includeColors:true);try HardwareProfile(snapshot:snapshot).encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]),options:.atomic);print("PASS: USB keymap, lighting parameters and 126 RGB values read") }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+    do { let snapshot=try CherryUSB().completeSnapshot();let profile=(try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);try profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]),options:.atomic);print("PASS: USB keymap, lighting parameters, 126 RGB values and 3071-byte macro bank read") }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-preview"), CommandLine.arguments.count > index+1 {
     if CommandLine.arguments.contains("--dark"){app.appearance=NSAppearance(named:.darkAqua)}
     let controller=HardwareWindowController()

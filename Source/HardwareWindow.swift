@@ -39,6 +39,8 @@ final class HardwareWindowController: NSWindowController {
         for usage in 4...29 { keys.append((String(UnicodeScalar(usage-4+65)!),UInt8(usage))) }
         keys += [("1",30),("2",31),("3",32),("4",33),("5",34),("6",35),("7",36),("8",37),("9",38),("0",39),("Enter",40),("Esc",41),("Space",44)]
         for n in 1...12 {keys.append(("F\(n)",UInt8(57+n)))}
+        for n in 13...24 {keys.append(("F\(n)",UInt8(91+n)))}
+        keys += [("左 Control",224),("左 Shift",225),("左 Option",226),("左 Command",227),("右 Control",228),("右 Shift",229),("右 Option",230),("右 Command",231)]
         for spec in keyboardLayout(){
             guard let signal=spec.usage?.split(separator:":"),signal.count==2,signal[0]=="7",let usage=UInt8(signal[1]),!keys.contains(where:{$0.1==usage})else{continue}
             keys.append((spec.label.replacingOccurrences(of:"\n",with:" / "),usage))
@@ -103,16 +105,18 @@ final class HardwareWindowController: NSWindowController {
         place(label("间隔 ms"),744,15,64,24,in:macros);controls.append(macroDelay);place(macroDelay,815,11,88,28,in:macros)
         place(button("添加按键",#selector(appendMacroKey)),614,52,135,30,in:macros)
         place(button("保存宏",#selector(stageMacro)),766,52,139,30,in:macros)
-        place(label("每行：按键名、按下 / 松开、延迟毫秒。\n保存的宏会随配置导出；硬件写入仍待验证。",12),614,97,305,62,in:macros)
+        place(button("分配到选中的键",#selector(assignMacro)),614,94,291,30,in:macros)
+        place(label("实验性：执行一次。存储读写已验证，实体触发与断电保存待验证。",11),614,132,315,38,in:macros)
         let files=tabs.tabViewItems[3].view!
         place(button("导出配置…",#selector(exportProfile)),18,18,180,30,in:files)
         place(button("导入配置…",#selector(importProfile)),216,18,180,30,in:files)
         place(button("打开自动备份",#selector(openBackups)),414,18,180,30,in:files)
         place(button("撤销待写入改动",#selector(discardDraft)),612,18,265,30,in:files)
-        place(label("USB 读取包含键位、灯效参数和逐键颜色。导入只载入编辑区，写入前会保留完整备份。",12),18,77,895,40,in:files)
-        place(message,24,632,580,58)
-        place(button("写入键位",#selector(writeKeys)),626,642,180,30)
-        place(button("写入灯效",#selector(writeLighting)),821,642,190,30)
+        place(label("USB 读取包含键位、灯效、逐键颜色与原始宏区。导入只载入编辑区，写入前会保留完整备份。",12),18,77,895,40,in:files)
+        place(message,24,632,557,58)
+        place(button("写入键位",#selector(writeKeys)),591,642,123,30)
+        place(button("写入宏与键位",#selector(writeMacros)),725,642,153,30)
+        place(button("写入灯效",#selector(writeLighting)),889,642,123,30)
         update()
     }
     @objc func chooseTab(_ sender:NSButton){tabView?.selectTabViewItem(at:sender.tag);for tab in tabButtons{tab.bezelColor=tab.tag==sender.tag ? .controlAccentColor:nil}}
@@ -137,7 +141,7 @@ final class HardwareWindowController: NSWindowController {
         guard let key=keyboardLayout().first(where:{$0.id==selected})else{return}
         selectedLabel.stringValue=key.label
         if let slot=CherryMatrix.slot(key),let p=profile{
-            recordLabel.stringValue="当前配置："+CherryMatrix.describe(Array(p.snapshot.keymap[slot*3..<slot*3+3]))
+            recordLabel.stringValue="当前配置："+(p.macroBindings?[slot].map{"宏 · \($0)"} ?? CherryMatrix.describe(Array(p.snapshot.keymap[slot*3..<slot*3+3])))
             if let colors=p.snapshot.colors{let start=slot*3;color.color=NSColor(srgbRed:CGFloat(colors[start])/255,green:CGFloat(colors[start+1])/255,blue:CGFloat(colors[start+2])/255,alpha:1)}
         }else{recordLabel.stringValue="读取键盘后可查看此键配置"}
     }
@@ -152,16 +156,16 @@ final class HardwareWindowController: NSWindowController {
         guard !busy else{return};busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在读取 USB 配置…"
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{
-                let usb=try CherryUSB();return try usb.snapshot(includeColors:true)
+                let usb=try CherryUSB();return try usb.completeSnapshot()
             }
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true}
                 switch result{case .success(let snapshot):
-                    self.baseline=snapshot;self.profile=HardwareProfile(snapshot:snapshot)
-                    self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取灯效和颜色"
+                    self.baseline=snapshot;self.profile=(try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                    self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
                         let url=self.backupDirectory.appendingPathComponent("USB-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
-                        try self.profile!.encoded().write(to:url,options:.atomic);self.message.stringValue="读取完成，已自动备份。可以点选键位、编辑灯效并导出配置。"}
+                        try self.profile!.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
                     self.loadSelectedAssignment();self.update()
                 case .failure(let error):self.connection.stringValue="USB 读取失败";self.message.stringValue=error.localizedDescription}
@@ -171,6 +175,8 @@ final class HardwareWindowController: NSWindowController {
     @objc func writeKeys(){
         guard !busy,let draft=profile,let baseline else{message.stringValue="请先读取键盘，再编辑键位。";return}
         guard draft.snapshot.keymap != baseline.keymap else{message.stringValue="没有待写入的键位改动。";return}
+        let newMacros=(0..<126).contains{slot in [UInt8(0x70),0x71].contains(draft.snapshot.keymap[slot*3]) && draft.snapshot.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
+        if newMacros && draft.snapshot.macroData != baseline.macroData {message.stringValue="此键位依赖新的宏，请点击「写入宏与键位」。";return}
         busy=true;controls.forEach{$0.isEnabled=false}
         message.stringValue="正在备份并写入键位，请松开全部按键，完成前不要使用键盘…"
         queue.async{[weak self] in
@@ -179,7 +185,25 @@ final class HardwareWindowController: NSWindowController {
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;self.profile=remaining
-                    self.message.stringValue="键位已写入，当前键位表读回校验通过。宏与断电保存仍待验证。";self.update()
+                    self.message.stringValue="键位已写入，读回校验通过。断电保存仍待验证。";self.update()
+                case .failure(let error):self.message.stringValue=error.localizedDescription
+                }
+            }
+        }
+    }
+    @objc func writeMacros(){
+        guard !busy,let draft=profile,let baseline else{message.stringValue="请先读取键盘。";return}
+        let expected:HardwareSnapshot
+        do{expected=try draft.resolvedMacros()}catch{message.stringValue=error.localizedDescription;return}
+        guard expected.keymap != baseline.keymap || expected.macroData != baseline.macroData else{message.stringValue="没有待写入的宏或键位改动。";return}
+        busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在备份并写入宏与键位，请松开全部按键，完成前不要使用键盘…"
+        queue.async{[weak self] in
+            let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeMacroConfiguration(expected,baseline:baseline)}
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
+                switch result{
+                case .success(let snapshot):
+                    self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;remaining.snapshot.macroData=snapshot.macroData;self.profile=remaining
+                    self.message.stringValue="宏与键位已写入，读回校验通过。实体触发与断电保存仍待验证。";self.update()
                 case .failure(let error):self.message.stringValue=error.localizedDescription
                 }
             }
@@ -194,7 +218,7 @@ final class HardwareWindowController: NSWindowController {
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.parameters=snapshot.parameters;remaining.snapshot.colors=snapshot.colors;self.profile=remaining
-                    self.message.stringValue="灯效已写入，读回校验通过。宏与断电保存仍待验证。";self.update()
+                    self.message.stringValue="灯效已写入，读回校验通过。断电保存仍待验证。";self.update()
                 case .failure(let error):self.message.stringValue=error.localizedDescription
                 }
             }
@@ -216,6 +240,7 @@ final class HardwareWindowController: NSWindowController {
         case 8:record=[0x20,0,0]
         default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,hidKeys[max(0,keyPicker.indexOfSelectedItem)].1]
         }
+        p.macroBindings?.removeValue(forKey:slot)
         p.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);profile=p;message.stringValue="已编辑 \(key.label)：\(CherryMatrix.describe(record))。尚未写入键盘。";update()
     }
     @objc func stageColor(){
@@ -234,7 +259,10 @@ final class HardwareWindowController: NSWindowController {
                 if name.hasPrefix("HID:"){usage=UInt8(name.dropFirst(4))}else{usage=self.hidKeys.first(where:{$0.0.caseInsensitiveCompare(name) == .orderedSame})?.1}
                 guard let usage else{throw HardwareError(message:"无法识别宏按键：\(name)")}
                 return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay)}
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps);try macro.validate();p.macros.removeAll{$0.name==macro.name};p.macros.append(macro);try p.validate();profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到配置文件，共 \(steps.count) 步。硬件宏写入尚未验证。"
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps);try macro.validate()
+            if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
+            try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
+            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存，共 \(steps.count) 步。分配到按键后，可联合写入宏与键位。";update()
         }catch{message.stringValue=error.localizedDescription}
     }
     func refreshMacroPicker(selected:String?=nil){macroPicker.removeAllItems();macroPicker.addItem(withTitle:"新建宏");macroPicker.addItems(withTitles:profile?.macros.map{$0.name} ?? []);if let selected{macroPicker.selectItem(withTitle:selected)}}
@@ -247,10 +275,15 @@ final class HardwareWindowController: NSWindowController {
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
         macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 0\n\(key) 松开 \(delay)"
     }
-    @objc func deleteMacro(){guard var profile,macroPicker.indexOfSelectedItem>0 else{return};profile.macros.remove(at:macroPicker.indexOfSelectedItem-1);self.profile=profile;refreshMacroPicker();chooseMacro();message.stringValue="已从待导出的配置中删除宏。"}
+    @objc func assignMacro(){
+        do{guard var p=profile,macroPicker.indexOfSelectedItem>0,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key)else{throw HardwareError(message:"请先保存并选择一个宏，再点选键盘按键。")}
+            let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.assignMacro(named:name,to:slot);profile=p;loadSelectedAssignment();update();message.stringValue="已把「\(name)」分配到 \(key.label)，尚未写入键盘。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func exportProfile(){guard let p=profile else{message.stringValue="请先读取或导入配置。";return};let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json";panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{try p.encoded().write(to:url,options:.atomic);self?.message.stringValue="配置已导出。"}catch{self?.message.stringValue=error.localizedDescription}}}
     @objc func importProfile(){let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false;panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{let p=try HardwareProfile.decode(Data(contentsOf:url));self?.profile=p;self?.message.stringValue="配置已载入编辑区，尚未写入键盘。";self?.loadLighting();self?.refreshMacroPicker();self?.loadSelectedAssignment();self?.update()}catch{self?.message.stringValue=error.localizedDescription}}}
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
-    @objc func discardDraft(){guard let baseline else{return};profile=HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
+    @objc func discardDraft(){guard let baseline else{return};profile=(try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作：⌃⌥⌘C 打开计算器。键盘写入仍在验证。"}catch{message.stringValue=error.localizedDescription}}
 }

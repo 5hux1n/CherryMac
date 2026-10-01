@@ -30,8 +30,22 @@ func runHardwareTests() {
     var short=profile;short.snapshot.colors?.removeLast();fails{try short.validate()}
     fails{_ = try HardwareProfile.decode(Data(repeating:0,count:1_000_001))}
     var duplicate=profile;duplicate.macros.append(valid);fails{try duplicate.validate()}
+    var hardware=snapshot;hardware.deviceInfo[6]=24;hardware.macroData=Array(repeating:0,count:3071)
+    var bound=try! HardwareProfile.fromHardware(hardware);bound.macros=[valid]
+    try! bound.assignMacro(named:"A",to:102)
+    precondition(Array(bound.snapshot.keymap[306..<309])==[0x70,0,0])
+    precondition(try! HardwareProfile.decode(bound.encoded())==bound)
+    let loaded=try! HardwareProfile.fromHardware(bound.snapshot)
+    precondition(loaded.macros[0].steps==valid.steps && loaded.macroBindings?[102]=="硬件宏 1")
+    fails{try bound.assignMacro(named:"A",to:71)}
+    fails{try bound.assignMacro(named:"A",to:6)}
+    try! bound.removeMacro(named:"A")
+    precondition(bound.macros.isEmpty && bound.macroBindings!.isEmpty && Array(bound.snapshot.keymap[306..<309])==[0x20,0,0])
+    var legacy=HardwareProfile(snapshot:snapshot,macros:[valid]);try! legacy.assignMacro(named:"A",to:102)
+    precondition(legacy.macroBindings?[102]=="A")
     print("PASS: hardware capture validation, firmware rejection, corruption and offset rejection; 109 unique matrix slots; balanced macros; profile round-trip and foreign/corrupt import rejection")
     runHardwareWriteTests(snapshot)
+    runHardwareMacroTests(snapshot)
     runHardwareEditorTests(snapshot)
     let service=try! CalculatorService.definition(system:["AMAccepts":["Types":["com.apple.cocoa.string"]],"AMProvides":["Types":["com.apple.cocoa.string"]],"CFBundleVersion":"9.0","NSPrincipalClass":"RunShellScriptAction"])
     let registered=(service.info["NSServices"] as! [[String:Any]])[0]
@@ -57,6 +71,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
     var heldFromCheck: Int?
     var corruptReadAt: Int?
     var backupFails = false
+    var drains: [TimeInterval] = []
     init(_ state: HardwareSnapshot) { self.state = state }
     func snapshot(includeColors: Bool) throws -> HardwareSnapshot {
         reads += 1
@@ -72,6 +87,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
         switch command {
         case 8: bytes=state.keymap
         case 7: bytes=Array(repeating:0,count:378) // Deliberately distinct factory table.
+        case 0x14: bytes=state.macroData!
         default: throw HardwareError(message:"unexpected read")
         }
         return Array(bytes[baseOffset..<baseOffset+count])
@@ -85,6 +101,9 @@ private final class SimulatedCherry: CherryHardwareAccess {
         saved.append(snapshot)
         return URL(fileURLWithPath:"/tmp/cherrymac-simulated-backup.json")
     }
+    func waitForMacroCompletion(seconds:TimeInterval) throws {
+        drains.append(seconds);try waitUntilKeysReleased(timeout:5)
+    }
     func exchange(_ packet:[UInt8]) throws -> [UInt8] {
         // Every individual write, including rollback, needs a release check.
         precondition(heldFromCheck == nil || checks < heldFromCheck!)
@@ -96,6 +115,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
         case 9: state.keymap.replaceSubrange(offset..<end,with:bytes)
         case 6: precondition(packet[7]==0x55);state.parameters.replaceSubrange(offset..<end,with:bytes)
         case 0x0B: state.colors!.replaceSubrange(offset..<end,with:bytes)
+        case 0x15: state.macroData!.replaceSubrange(offset..<end,with:bytes)
         default: preconditionFailure("unexpected mutation")
         }
         // A lost acknowledgement may follow a successful device-side write.
@@ -103,6 +123,80 @@ private final class SimulatedCherry: CherryHardwareAccess {
         try CherryPacket.validate(packet,request:packet)
         return packet
     }
+}
+
+private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
+    func rejected(_ block:()throws->Void)->String {
+        do{try block();preconditionFailure("expected macro rejection")}catch{return error.localizedDescription}
+    }
+    let a=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])
+    // Known serializer bytes; modifier events contain bit masks, not E0 usages.
+    let chord=KeyboardMacro(name:"Ctrl C",steps:[.init(usage:224,pressed:true,delayMilliseconds:0),.init(usage:6,pressed:true,delayMilliseconds:20),.init(usage:6,pressed:false,delayMilliseconds:50),.init(usage:224,pressed:false,delayMilliseconds:0)])
+    precondition(try! CherryMacroCodec.encodeEvents(chord)==[0,0,0x89,1,20,0,0x8A,6,50,0,0x0A,6,0,0,9,1])
+    let aBank=try! CherryMacroCodec.encode([a])
+    precondition(Array(aBank.prefix(30))==[0xAA,0x55,30,0,1,0,0,0,0,0,0,0,0,0,0,0,18,0,2,0,0,0,0,0,0x8A,4,50,0,0x0A,4])
+    precondition(try! CherryMacroCodec.decode(aBank)[0].steps==a.steps)
+    for usage in UInt8(224)...231 {
+        let macro=KeyboardMacro(name:"modifier",steps:[.init(usage:usage,pressed:true,delayMilliseconds:0),.init(usage:usage,pressed:false,delayMilliseconds:5)])
+        precondition(try! CherryMacroCodec.decodeEvents(CherryMacroCodec.encodeEvents(macro),name:macro.name)==macro)
+    }
+    var invalid=aBank;invalid[16]=0
+    _=rejected{_ = try CherryMacroCodec.decode(invalid)}
+    invalid=aBank;invalid[24]=0x81
+    _=rejected{_ = try CherryMacroCodec.decode(invalid)}
+    invalid=aBank;invalid[2]=255;invalid[3]=255
+    _=rejected{_ = try CherryMacroCodec.decode(invalid)}
+    _=rejected{_ = try CherryMacroCodec.encode(Array(repeating:KeyboardMacro(name:"large",steps:Array(repeating:a.steps,count:128).flatMap{$0}),count:4))}
+    var original=fixture;original.deviceInfo[6]=24;original.macroData=Array(repeating:0,count:3071)
+    original.keymap[9..<12]=[0x20,8,21]
+    // A multi-block bank checks header-last ordering and untouched capacity byte.
+    let long=KeyboardMacro(name:"sequence",steps:Array(repeating:a.steps,count:8).flatMap{$0})
+    var desired=original;desired.macroData=try! CherryMacroCodec.encode([long,chord])
+    desired.keymap.replaceSubrange(306..<309,with:try! CherryMacroCodec.binding(0))
+    desired.keymap.replaceSubrange(324..<327,with:try! CherryMacroCodec.binding(1))
+    let success=SimulatedCherry(original)
+    precondition(try! success.writeMacroConfiguration(desired,baseline:original)==desired)
+    precondition(success.saved==[original] && success.readCommands.contains(0x14))
+    let bankPackets=success.packets.filter{$0[3]==0x15}
+    precondition(bankPackets.count>=2 && bankPackets.last![5]==0 && bankPackets.last![6]==0)
+    precondition(bankPackets.allSatisfy{(Int($0[5]) | Int($0[6])<<8) + Int($0[4])<=3071})
+    let firstKey=success.packets.firstIndex{$0[3]==9}!
+    precondition(success.packets[..<firstKey].allSatisfy{$0[3]==0x15})
+    for failureAt in [1,bankPackets.count,bankPackets.count+1,success.packets.count] {
+        let failing=SimulatedCherry(original);failing.failSendAt=failureAt
+        let error=rejected{_ = try failing.writeMacroConfiguration(desired,baseline:original)}
+        precondition(failing.state==original && error.contains("已恢复原宏"))
+    }
+    let corruptRead=SimulatedCherry(original);corruptRead.corruptReadAt=2
+    _=rejected{_ = try corruptRead.writeMacroConfiguration(desired,baseline:original)}
+    precondition(corruptRead.state==original)
+    let stale=SimulatedCherry(original);var outOfDate=original;outOfDate.macroData![100]=1
+    _=rejected{_ = try stale.writeMacroConfiguration(desired,baseline:outOfDate)}
+    precondition(stale.packets.isEmpty)
+    let backupFailure=SimulatedCherry(original);backupFailure.backupFails=true
+    _=rejected{_ = try backupFailure.writeMacroConfiguration(desired,baseline:original)}
+    precondition(backupFailure.packets.isEmpty)
+    let held=SimulatedCherry(original);held.heldFromCheck=3
+    let error=rejected{_ = try held.writeMacroConfiguration(desired,baseline:original)}
+    precondition(held.packets.count==1 && error.contains("自动恢复失败") && error.contains("备份"))
+    var replacement=desired;replacement.macroData=aBank;replacement.keymap[324..<327]=[0x20,0,0]
+    let replace=SimulatedCherry(desired)
+    _=try! replace.writeMacroConfiguration(replacement,baseline:desired)
+    precondition(replace.drains==[0.4] && replace.packets.prefix(7).allSatisfy{$0[3]==9})
+    let disabledState=replace.packets.prefix(7).flatMap{Array($0[8..<62])}
+    precondition(Array(disabledState[306..<309])==[0x20,0,0] && Array(disabledState[324..<327])==[0x20,0,0])
+    var unsupported=desired;unsupported.keymap[306]=0x71
+    let unknown=SimulatedCherry(unsupported)
+    _=rejected{_ = try unknown.writeMacroConfiguration(replacement,baseline:unsupported)}
+    precondition(unknown.packets.isEmpty && unknown.saved.isEmpty)
+    let fullBackup=SimulatedCherry(desired)
+    var modifiedKeys=desired.keymap;modifiedKeys[0..<3]=[0x20,0,5]
+    _=try! fullBackup.writeKeymap(modifiedKeys,baseline:desired)
+    precondition(fullBackup.saved[0].macroData==desired.macroData && fullBackup.state.macroData==desired.macroData)
+    let dangling=SimulatedCherry(original)
+    _=rejected{_ = try dangling.writeKeymap(desired.keymap,baseline:original)}
+    precondition(dangling.packets.isEmpty && dangling.saved.isEmpty)
+    print("PASS: macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
 }
 
 private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
@@ -198,6 +292,18 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     editor.macroName.stringValue="数字键";editor.macroText.string="4 按下 0\n4 松开 50";editor.stageMacro()
     precondition(editor.profile!.macros.last!.steps.map{$0.usage}==[33,33],"digit names are keyboard digits, not raw HID codes")
     editor.deleteMacro();precondition(editor.profile!.macros.count==1)
+    editor.macroPicker.selectItem(withTitle:"测试宏");editor.chooseMacro()
+    editor.selected="calculator";editor.assignMacro()
+    precondition(editor.profile!.macroBindings?[102]=="测试宏")
+    precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x70,0,0])
+    let assigned=editor.profile
+    editor.writeKeys()
+    precondition(!editor.busy && editor.profile==assigned && editor.message.stringValue.contains("写入宏与键位"),"key-only write must refuse an unwritten macro binding without opening USB")
+    editor.macroText.string="A 按下 0\nA 松开 75";editor.stageMacro()
+    precondition(editor.profile!.macros[0].steps.last!.delayMilliseconds==75)
+    precondition(editor.profile!.macroBindings?[102]=="测试宏")
+    editor.deleteMacro()
+    precondition(editor.profile!.macros.isEmpty && Array(editor.profile!.snapshot.keymap[306..<309])==[0x20,0,0])
     editor.discardDraft();precondition(editor.profile!.snapshot==original && editor.profile!.macros.isEmpty)
     print("PASS: hardware editor staging isolates baseline, selection reloads assignments, mode preservation, named-key macro editing and invalid-macro preservation (no hardware I/O)")
 }

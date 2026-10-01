@@ -29,11 +29,70 @@ struct HardwareProfile: Codable, Equatable {
     var version = 1
     var snapshot: HardwareSnapshot
     var macros: [KeyboardMacro] = []
+    // nil means that the raw device bank has not been decoded for editing.
+    // Optional keeps older exported profiles readable.
+    var macroBindings: [Int:String]? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         for macro in macros { try macro.validate() }
         guard Set(macros.map { $0.name }).count == macros.count else { throw HardwareError(message: "宏名称不能重复。") }
+        if let bindings=macroBindings {
+            for (slot,name) in bindings {
+                guard (0..<126).contains(slot), ![6,71].contains(slot),macros.contains(where:{$0.name==name}) else {
+                    throw HardwareError(message:"宏绑定的键位或名称无效。")
+                }
+            }
+        }
+    }
+    static func fromHardware(_ snapshot:HardwareSnapshot) throws -> HardwareProfile {
+        try snapshot.validate()
+        guard let bank=snapshot.macroData else{return HardwareProfile(snapshot:snapshot)}
+        let macros=try CherryMacroCodec.decode(bank)
+        var bindings:[Int:String]=[:]
+        for slot in 0..<126 where [UInt8(0x70),0x71].contains(snapshot.keymap[slot*3]) {
+            let record=Array(snapshot.keymap[slot*3..<slot*3+3])
+            guard record[0]==0x70,record[2]==0,Int(record[1])<macros.count else{
+                throw HardwareError(message:"原配置使用了尚未支持的循环宏或未知宏绑定。原始数据仍保留。")
+            }
+            bindings[slot]=macros[Int(record[1])].name
+        }
+        let profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings)
+        try profile.validate();return profile
+    }
+    func resolvedMacros() throws -> HardwareSnapshot {
+        try validate()
+        guard let bindings=macroBindings else{throw HardwareError(message:"请先读取完整宏配置；未知硬件宏暂不能覆盖。")}
+        var result=snapshot
+        for slot in 0..<126 where [UInt8(0x70),0x71].contains(result.keymap[slot*3]) {
+            guard bindings[slot] != nil else{throw HardwareError(message:"配置包含未关联的硬件宏，请重新读取配置。")}
+        }
+        result.macroData=try CherryMacroCodec.encode(macros)
+        for (slot,name) in bindings {
+            let index=macros.firstIndex{$0.name==name}!
+            result.keymap.replaceSubrange(slot*3..<slot*3+3,with:try CherryMacroCodec.binding(index))
+        }
+        return result
+    }
+    mutating func assignMacro(named name:String,to slot:Int) throws {
+        guard ![6,71].contains(slot),(0..<126).contains(slot),macros.contains(where:{$0.name==name}) else{throw HardwareError(message:"请选择可配置按键及已保存的宏。")}
+        if macroBindings==nil {
+            let oldMacros=try snapshot.macroData.map{try CherryMacroCodec.decode($0)} ?? []
+            guard oldMacros.isEmpty,
+                  !(0..<126).contains(where:{[UInt8(0x70),0x71].contains(snapshot.keymap[$0*3])}) else {
+                throw HardwareError(message:"原硬件宏尚未解码，请先重新读取键盘。")
+            }
+            macroBindings=[:]
+        }
+        macroBindings![slot]=name;snapshot=try resolvedMacros()
+    }
+    mutating func removeMacro(named name:String) throws {
+        for (slot,binding) in macroBindings ?? [:] where binding==name {
+            snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])
+            macroBindings?.removeValue(forKey:slot)
+        }
+        macros.removeAll{$0.name==name}
+        if macroBindings != nil {snapshot=try resolvedMacros()}
     }
     static func decode(_ data: Data) throws -> HardwareProfile {
         guard data.count <= 1_000_000 else { throw HardwareError(message: "配置文件过大。") }
