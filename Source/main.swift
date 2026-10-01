@@ -35,6 +35,8 @@ struct Shortcut: Codable, Equatable {
 let shortcutModifierMask = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
 let adapterEventTag: Int64 = 0x43484D4143
 let targetDeviceMatch: [String: Int] = [kIOHIDVendorIDKey: 0x0687, kIOHIDProductIDKey: 0x00E9]
+let targetDeviceMatches: [[String:Any]] = [targetDeviceMatch,
+    [kIOHIDVendorIDKey:0x046A,kIOHIDProductIDKey:0x01CE,kIOHIDTransportKey:"USB"]]
 let shortcutKeys: [(UInt16, String)] = [
     (0, "A"), (11, "B"), (8, "C"), (2, "D"), (14, "E"), (3, "F"), (5, "G"),
     (4, "H"), (34, "I"), (38, "J"), (40, "K"), (37, "L"), (46, "M"), (45, "N"),
@@ -117,7 +119,8 @@ func keyboardLayout() -> [KeySpec] {
         keys.append(KeySpec(id: id, label: label, usage: usage.map { "\(page):\($0)" }, rect: NSRect(x: 18 + x * unit, y: 20 + row * unit, width: w * unit - 4, height: h * unit - 4)))
     }
     add("esc", "Esc", 41, 0, 0)
-    for i in 1...12 { add("f\(i)", "F\(i)", 57 + i, 1.5 + CGFloat(i - 1) + CGFloat((i - 1) / 4) * 0.5, 0) }
+    add("cherry", "CHERRY", nil, 1, 0)
+    for i in 1...12 { add("f\(i)", "F\(i)", 57 + i, 2 + CGFloat(i - 1) + CGFloat((i - 1) / 4) * 0.5, 0) }
     for (i, item) in [("print", "截屏", 70), ("scroll", "Scroll", 71), ("pause", "Pause", 72)].enumerated() { add(item.0, item.1, item.2, 15.5 + CGFloat(i), 0) }
     // User-confirmed dedicated keys directly above Num, /, × and −.
     for (i, item) in [("calculator", "计算器", 402), ("mediaPrevious", "上一曲", 182), ("mediaPlay", "暂停", 205), ("mediaNext", "下一曲", 181)].enumerated() {
@@ -150,7 +153,7 @@ func keyboardLayout() -> [KeySpec] {
     add("shiftR", "Shift", nil, 12.25, 4.2, 2.75)
     for (i, label) in ["Ctrl", "Win", "Alt"].enumerated() { add("modL\(i)", label, nil, CGFloat(i) * 1.25, 5.2, 1.25) }
     add("space", "Space", 44, 3.75, 5.2, 6.25)
-    for (i, label) in ["Alt", "Win", "Fn", "Menu"].enumerated() { add("modR\(i)", label, label == "Menu" ? 101 : nil, 10 + CGFloat(i) * 1.25, 5.2, 1.25) }
+    for (i, label) in ["Alt", "Fn", "Menu", "Ctrl"].enumerated() { add(label == "Menu" ? "modR3" : (i == 3 ? "modR2" : "modR\(i)"), label, label == "Menu" ? 101 : nil, 10 + CGFloat(i) * 1.25, 5.2, 1.25) }
     for (i, item) in [("insert", "Ins", 73), ("home", "Home", 74), ("pageUp", "PgUp", 75)].enumerated() { add(item.0, item.1, item.2, 15.5 + CGFloat(i), 1.2) }
     for (i, item) in [("delete", "Del", 76), ("end", "End", 77), ("pageDown", "PgDn", 78)].enumerated() { add(item.0, item.1, item.2, 15.5 + CGFloat(i), 2.2) }
     add("up", "↑", 82, 16.5, 4.2)
@@ -170,6 +173,7 @@ final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
 final class KeyButton: NSButton {
     let spec: KeySpec
+    var hardwareConfigurable=false
     var chosen = false { didSet { needsDisplay = true } }
     var mapped = false { didSet { needsDisplay = true } }
     init(_ spec: KeySpec) {
@@ -189,7 +193,7 @@ final class KeyButton: NSButton {
         (chosen ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.lineWidth = chosen ? 2 : 1
         path.stroke()
-        let color: NSColor = chosen ? .white : (spec.configurable ? .labelColor : .secondaryLabelColor)
+        let color: NSColor = chosen ? .white : ((spec.configurable || hardwareConfigurable) ? .labelColor : .secondaryLabelColor)
         var font = NSFont.systemFont(ofSize: title.count > 6 ? 9 : 11, weight: chosen ? .semibold : .medium)
         if (title as NSString).size(withAttributes: [.font: font]).width > bounds.width - 4 {
             font = .systemFont(ofSize: 9, weight: chosen ? .semibold : .medium)
@@ -231,6 +235,7 @@ final class Adapter: NSObject, NSApplicationDelegate {
     var held = Set<String>()
     var modifiers = Set<String>()
     var paused = false
+    var hardwareWindow: HardwareWindowController?
     var permissionTimer: Timer?
     var pauseItem: NSMenuItem?
     var startupWarning: String?
@@ -303,10 +308,11 @@ final class Adapter: NSObject, NSApplicationDelegate {
         updateKeys()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        paused = true
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         status.button?.title = "⌨︎"
         let menu = NSMenu()
-        for (title, action) in [("键盘布局与设置", #selector(showSettings)), ("暂停适配", #selector(togglePaused)), ("重新连接键盘", #selector(connect)), ("导出配置…", #selector(exportConfiguration)), ("导入配置…", #selector(importConfiguration)), ("退出 CherryMac", #selector(quit))] {
+        for (title, action) in [("USB 键盘配置", #selector(showHardware)), ("Mac 端适配设置", #selector(showSettings)), ("暂停适配", #selector(togglePaused)), ("重新连接键盘", #selector(connect)), ("导出配置…", #selector(exportConfiguration)), ("导入配置…", #selector(importConfiguration)), ("退出 CherryMac", #selector(quit))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self; menu.addItem(item)
             if action == #selector(togglePaused) { pauseItem = item }
@@ -318,7 +324,11 @@ final class Adapter: NSObject, NSApplicationDelegate {
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshPermissionStatus() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         if let startupWarning { message.stringValue = startupWarning }
-        showSettings()
+        showHardware()
+    }
+    @objc func showHardware() {
+        if hardwareWindow == nil { hardwareWindow = HardwareWindowController() }
+        hardwareWindow?.showWindow(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func label(_ text: String, _ size: CGFloat = 13, _ weight: NSFont.Weight = .regular) -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: text)
@@ -525,10 +535,18 @@ final class Adapter: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showSettings()
+        showHardware()
         return true
     }
     @objc func quit() { NSApp.terminate(nil) }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let hardwareWindow,hardwareWindow.busy {
+            hardwareWindow.showWindow(nil)
+            hardwareWindow.message.stringValue="键盘配置操作正在进行，请等待完成后再退出。"
+            return .terminateCancel
+        }
+        return .terminateNow
+    }
     func applicationWillTerminate(_ notification: Notification) {
         cancelLearning(); permissionTimer?.invalidate()
         eventRouter.stop()
@@ -679,7 +697,7 @@ final class Adapter: NSObject, NSApplicationDelegate {
         manager = newManager
         let token = UUID()
         managerToken = token
-        IOHIDManagerSetDeviceMatching(newManager, targetDeviceMatch as CFDictionary)
+        IOHIDManagerSetDeviceMatchingMultiple(newManager, targetDeviceMatches as CFArray)
         IOHIDManagerRegisterInputValueCallback(newManager, { context, _, _, value in
             guard let context else { return }
             let adapter = Unmanaged<Adapter>.fromOpaque(context).takeUnretainedValue()
@@ -928,7 +946,7 @@ func runSelfTests() {
     defer { defaults.removePersistentDomain(forName: suite) }
     let adapter = Adapter(defaults: defaults, preview: true)
     adapter.setupWindow()
-    precondition(adapter.keys.count == 108)
+    precondition(adapter.keys.count == 109)
     for (topID, bottomID) in [("calculator", "numLock"), ("mediaPrevious", "numDivide"), ("mediaPlay", "numMultiply"), ("mediaNext", "numMinus")] {
         let top = adapter.keys.first { $0.id == topID }!
         let bottom = adapter.keys.first { $0.id == bottomID }!
@@ -1110,7 +1128,7 @@ func runSelfTests() {
     let converted = replacement.inputLedger.nanoseconds(absoluteNow)
     precondition(eventNow > converted ? eventNow - converted < 100_000_000 : converted - eventNow < 100_000_000, "HID and CGEvent clocks must share boot-time nanoseconds")
 
-    print("PASS: 108-key geometry including the four dedicated keys above Num, /, ×, −; selection, persistence, learning, conflict rejection, modifiers, restore, old-version migration")
+    print("PASS: 109-key geometry including the four dedicated keys above Num, /, ×, −; selection, persistence, learning, conflict rejection, modifiers, restore, old-version migration")
     print("PASS: runtime screenshot/calculator/F5 routing, browser scope, settings exclusion, pause/resume, held-key deduplication, rapid deliberate presses")
     print("PASS: custom shortcut dispatch, invalid shortcut rejection, configuration round-trip, invalid/duplicate imports, corrupt-config safe handling")
     print("PASS: exact device/time correlation, original key interception, balanced release, auto-repeat, unrelated keyboard isolation, scope/modifier/pause bypass, synthetic loop prevention, live clock conversion")
@@ -1120,19 +1138,31 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {
     runSelfTests()
+    runHardwareTests()
 } else if CommandLine.arguments.contains("--system-test") {
     exit(runSystemTests())
 } else if CommandLine.arguments.contains("--diagnostics") {
     let input = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
     let access = AXIsProcessTrusted()
     let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-    IOHIDManagerSetDeviceMatching(manager, targetDeviceMatch as CFDictionary)
+    IOHIDManagerSetDeviceMatchingMultiple(manager, targetDeviceMatches as CFArray)
     let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
     let devices = (IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>) ?? []
     let names = devices.map { IOHIDDeviceGetProperty($0, kIOHIDProductKey as CFString) as? String ?? "CHERRY" }.sorted()
     let diagnostics: [String: Any] = ["inputMonitoringGranted": input == kIOHIDAccessTypeGranted, "accessibilityGranted": access, "deviceOpenResult": result, "devices": names, "calculatorAvailable": NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.calculator") != nil]
     if let data = try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys]), let string = String(data: data, encoding: .utf8) { print(string) }
     IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+} else if let index = CommandLine.arguments.firstIndex(of: "--hardware-read"), CommandLine.arguments.count > index+1 {
+    do { let snapshot=try CherryUSB().snapshot(includeColors:true);try HardwareProfile(snapshot:snapshot).encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]),options:.atomic);print("PASS: USB keymap, lighting parameters and 126 RGB values read") }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+} else if let index = CommandLine.arguments.firstIndex(of: "--hardware-preview"), CommandLine.arguments.count > index+1 {
+    if CommandLine.arguments.contains("--dark"){app.appearance=NSAppearance(named:.darkAqua)}
+    let controller=HardwareWindowController()
+    if let input=CommandLine.arguments.firstIndex(of:"--profile"),CommandLine.arguments.count>input+1{
+        controller.profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[input+1])));controller.baseline=controller.profile?.snapshot;controller.connection.stringValue="配置预览 · 126 个固件键位 · 未连接硬件";controller.loadLighting();controller.refreshMacroPicker();controller.loadSelectedAssignment();controller.update()
+    }
+    if let input=CommandLine.arguments.firstIndex(of:"--hardware-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),(0..<4).contains(tab){controller.chooseTab(controller.tabButtons[tab])}
+    controller.window?.displayIfNeeded()
+    if let bitmap=controller.root.bitmapImageRepForCachingDisplay(in:controller.root.bounds){controller.root.cacheDisplay(in:controller.root.bounds,to:bitmap);if let data=bitmap.representation(using:.png,properties:[:]){try data.write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]))}}
 } else if let index = CommandLine.arguments.firstIndex(of: "--preview"), CommandLine.arguments.count > index + 1 {
     if CommandLine.arguments.contains("--dark") { app.appearance = NSAppearance(named: .darkAqua) }
     let suite = "local.cherrymac.preview.\(UUID().uuidString)"

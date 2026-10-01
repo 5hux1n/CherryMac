@@ -13,14 +13,14 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.0</string>
+	<string>0.4.0</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>识别 CHERRY 键盘的截屏和计算器按键，不记录输入内容。</string>
+	<string>读取 CHERRY 键盘配置及按键状态，防止按键未松开时改写键位；可选 Mac 快捷键适配不记录输入内容。</string>
 </dict>
 </plist>
