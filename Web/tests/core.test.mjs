@@ -4,7 +4,7 @@ import {keys,demoSnapshot} from '../assets/layout.js';
 import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
-import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.5.0';
+import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
 class FakeDevice extends EventTarget{
@@ -244,4 +244,22 @@ test('recorder timing, repeat suppression, balanced finish, cancel and capacity'
   r.cancel();assert.equal(r.steps.length,0);assert.throws(()=>r.finish('test'));
   const limit=new MacroRecorder({startedMilliseconds:0});for(let i=0;i<256;i++)limit.observe({usage:4,pressed:i%2===0,milliseconds:i});
   assert.throws(()=>limit.observe({usage:4,pressed:true,milliseconds:257}));assert.equal(limit.steps.length,256);assert.equal(limit.held.size,0);
+});
+
+test('macro transaction plan isolates blocks, freezes inputs and refuses unrelated recovery',()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,0x70,0,0);
+  const plan=new MacroWriteAuthorization(before,target),saved=clone(target);target.keymap[306]=0;before.parameters[0]^=1;
+  assert.deepEqual(plan.expected,saved);const leaked=plan.expected;leaked.macroData[0]=0;assert.deepEqual(plan.expected,saved);
+  for(const s of [plan.before,plan.expected,plan.disabled])for(let offset=0;offset<378;offset+=54)plan.validate(plan.packet(9,s.keymap,offset));
+  for(const s of [plan.before,plan.expected])for(const offset of plan.changedOffsets)plan.validate(plan.packet(0x15,s.macroData,offset));
+  const partial=plan.before;const o=plan.changedOffsets.at(-1);partial.macroData.splice(o,Math.min(54,3071-o),...saved.macroData.slice(o,o+54));plan.validateRecovery(partial);plan.validateRecovery(plan.disabled);
+  for(const field of ['deviceInfo','parameters','colors','keymap','macroData']){const foreign=plan.expected;foreign[field][field==='macroData'?3000:0]^=1;assert.throws(()=>plan.validateRecovery(foreign));}
+  const corrupt=plan.packet(9,saved.keymap,270);corrupt[1]^=1;assert.throws(()=>plan.validate(corrupt));
+  assert.throws(()=>plan.validate(packet(0x15,54,3024,new Uint8Array(54))));
+  assert.throws(()=>plan.validate(plan.packet(0x15,saved.macroData,3024))); // unchanged block not authorized
+  for(const field of ['parameters','colors','deviceInfo']){const foreign=plan.expected;foreign[field][0]^=1;assert.throws(()=>new MacroWriteAuthorization(plan.before,foreign));}
+  const unrelated=plan.expected;unrelated.keymap.splice(0,3,0x20,0,5);assert.throws(()=>new MacroWriteAuthorization(plan.before,unrelated));
+  for(const record of [[0x70,0,1],[0x70,0,2],[0x71,0,2],[0x70,31,0]]){const invalid=plan.expected;invalid.keymap.splice(306,3,...record);assert.throws(()=>new MacroWriteAuthorization(plan.before,invalid));}
+  const hidden=plan.expected;hidden.keymap.splice(6*3,3,0x70,0,0);assert.throws(()=>new MacroWriteAuthorization(plan.before,hidden));
+  const restore=plan.before;restore.keymap.splice(306,3,0x30,0x92,1);const restorePlan=new MacroWriteAuthorization(plan.expected,restore);restorePlan.validateRecovery(plan.expected);assert.deepEqual(restorePlan.expected,restore);
 });

@@ -127,7 +127,7 @@ extension CherryHardwareAccess {
 
 extension CherryHardwareAccess {
     func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot) throws -> HardwareSnapshot {
-        try expected.validate();try baseline.validate()
+        let authorization=try MacroWriteAuthorization(baseline:baseline,target:expected)
         guard let wanted=expected.macroData,let original=baseline.macroData else{throw HardwareError(message:"请重新读取包含宏数据的完整配置。")}
         let macros=try CherryMacroCodec.decode(wanted),oldMacros=try CherryMacroCodec.decode(original)
         let oldSlots=(0..<126).filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
@@ -141,20 +141,19 @@ extension CherryHardwareAccess {
             guard record[0]==0x70,record[2]==0,Int(record[1])<macros.count else{throw HardwareError(message:"宏绑定无效，或不是执行一次模式。")}
         }
         let before=try completeSnapshot()
-        guard before.keymap==baseline.keymap,before.macroData==original,before.parameters==baseline.parameters,before.colors==baseline.colors else{throw HardwareError(message:"键盘配置已经变化，请重新读取后写入。")}
+        guard before.deviceInfo==baseline.deviceInfo,before.keymap==baseline.keymap,before.macroData==original,before.parameters==baseline.parameters,before.colors==baseline.colors else{throw HardwareError(message:"键盘配置已经变化，请重新读取后写入。")}
         if before.keymap==expected.keymap && original==wanted{return before}
         let backup=try backup(before)
         try waitUntilKeysReleased()
         let offsets=stride(from:0,to:3071,by:54).filter{offset in let end=min(offset+54,3071);return wanted[offset..<end] != original[offset..<end]}
         func keys(_ data:[UInt8])throws{
-            for offset in stride(from:0,to:378,by:54){try waitUntilKeysReleased();_ = try exchange(CherryPacket.chunk(9,offset:offset,length:54,data:Array(data[offset..<offset+54])))}
+            for offset in stride(from:0,to:378,by:54){let packet=try CherryPacket.chunk(9,offset:offset,length:54,data:Array(data[offset..<offset+54]));try authorization.validate(packet);try waitUntilKeysReleased();_ = try exchange(packet)}
         }
         func bank(_ data:[UInt8])throws{
             // Write the pointer/header block last, after all event blocks.
-            for offset in offsets.reversed(){try waitUntilKeysReleased();let end=min(offset+54,3071);_ = try exchange(CherryPacket.chunk(0x15,offset:offset,length:end-offset,data:Array(data[offset..<end])))}
+            for offset in offsets.reversed(){let end=min(offset+54,3071);let packet=try CherryPacket.chunk(0x15,offset:offset,length:end-offset,data:Array(data[offset..<end]));try authorization.validate(packet);try waitUntilKeysReleased();_ = try exchange(packet)}
         }
-        var disabled=before.keymap
-        for slot in oldSlots{disabled.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])}
+        let disabled=authorization.disabled.keymap
         let drain=oldSlots.map{slot in oldMacros[Int(before.keymap[slot*3+1])].steps.reduce(0){$0+$1.delayMilliseconds}}.max() ?? 0
         do {
             if !offsets.isEmpty && !oldSlots.isEmpty {
@@ -167,7 +166,7 @@ extension CherryHardwareAccess {
             guard try read(0x14,count:3071)==wanted else{throw HardwareError(message:"宏数据写后读取不一致。")}
             if expected.keymap != before.keymap || (!offsets.isEmpty && !oldSlots.isEmpty){try keys(expected.keymap)}
             let after=try completeSnapshot()
-            guard after.keymap==expected.keymap,after.macroData==wanted,after.parameters==before.parameters,after.colors==before.colors else{throw HardwareError(message:"宏和键位写后校验失败。")}
+            guard after.deviceInfo==before.deviceInfo,after.keymap==expected.keymap,after.macroData==wanted,after.parameters==before.parameters,after.colors==before.colors else{throw HardwareError(message:"宏和键位写后校验失败。")}
             return after
         }catch{
             let failure=error.localizedDescription
@@ -175,14 +174,13 @@ extension CherryHardwareAccess {
                 try waitUntilKeysReleased()
                 // Disable both old and newly introduced triggers before
                 // restoring the original macro bank, then restore key bindings.
-                var safe=try read(8,count:378)
-                for slot in Set(oldSlots+newSlots){safe.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])}
-                try keys(safe)
+                try authorization.validateRecovery(completeSnapshot())
+                try keys(authorization.disabled.keymap)
                 let newDuration=macros.map{$0.steps.reduce(0){$0+$1.delayMilliseconds}}.max() ?? 0
                 try waitForMacroCompletion(seconds:Double(max(drain,newDuration))/1000)
                 try bank(original);try keys(before.keymap)
                 let restored=try completeSnapshot()
-                guard restored.keymap==before.keymap,restored.macroData==original,restored.parameters==before.parameters,restored.colors==before.colors else{throw HardwareError(message:"宏恢复后读取不一致。")}
+                guard restored.deviceInfo==before.deviceInfo,restored.keymap==before.keymap,restored.macroData==original,restored.parameters==before.parameters,restored.colors==before.colors else{throw HardwareError(message:"宏恢复后读取不一致。")}
             }catch{throw HardwareError(message:"\(failure) 自动恢复失败：\(error.localizedDescription)。备份：\(backup.path)")}
             throw HardwareError(message:"\(failure) 已恢复原宏和键位。备份：\(backup.path)")
         }

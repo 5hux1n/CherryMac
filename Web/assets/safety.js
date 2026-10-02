@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,bytes,validateSnapshot} from './model.js?v=0.5.0';
+import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding} from './model.js?v=0.5.0';
 import {keys} from './layout.js?v=0.5.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
@@ -41,5 +41,47 @@ export class KeymapWriteAuthorization{
     validateSnapshot(current,true);
     requireThat(['deviceInfo','parameters','colors','macroData'].every(k=>equal(current[k],this.#before[k])),'读取到操作范围之外的配置变化，停止自动覆盖；请保留备份。');
     for(let offset=0;offset<378;offset+=54)this.validate(this.packet(current.keymap,offset));
+  }
+}
+
+// A pure plan for the next macro writer. No transport capability is granted.
+export class MacroWriteAuthorization {
+  #before;#expected;#disabled;#packets=new Set();#offsets;
+  constructor(before,target){
+    validateSnapshot(before,true);validateSnapshot(target,true);
+    requireThat(before.deviceInfo[6]===24&&['deviceInfo','parameters','colors'].every(k=>equal(before[k],target[k])),'宏操作必须保留当前设备参数与灯效。');
+    this.#before=clone(before);this.#expected=clone(target);this.#disabled=clone(before);
+    const libraries=[decodeBank(before.macroData),decodeBank(target.macroData)];
+    for(let slot=0;slot<126;slot++){
+      const old=before.keymap.slice(slot*3,slot*3+3),next=target.keymap.slice(slot*3,slot*3+3);
+      const wasMacro=[0x70,0x71].includes(old[0]),isMacro=[0x70,0x71].includes(next[0]);
+      for(const [r,count] of [[old,libraries[0].length],[next,libraries[1].length]])if([0x70,0x71].includes(r[0])){
+        const playback=decodeMacroBinding(r,count);requireThat(playback.mode==='count'&&playback.count===1,'重复、持续与开关宏的停止流程尚未完成，暂不能写入。');
+      }
+      if(wasMacro||isMacro){requireThat(KEYMAP_SLOTS.has(slot),'内部与隐藏位置的宏绑定不能改写。');this.#disabled.keymap.splice(slot*3,3,0x20,0,0);}
+      if(!equal(old,next)){
+        requireThat(wasMacro||isMacro,'宏写入不能夹带普通键位修改，请先单独写入按键。');
+        requireThat(isMacro||(next[0]===0x20&&(next[2]===0||(next[2]>=4&&next[2]<224)))||next[0]===0x30,'移除宏后的键位记录尚未支持。');
+      }
+    }
+    this.#offsets=[];
+    for(let offset=0;offset<3071;offset+=54)if(!equal(before.macroData.slice(offset,offset+54),target.macroData.slice(offset,offset+54)))this.#offsets.push(offset);
+    for(const s of [this.#before,this.#expected,this.#disabled])for(let offset=0;offset<378;offset+=54)this.#packets.add(JSON.stringify(Array.from(this.packet(9,s.keymap,offset))));
+    for(const s of [this.#before,this.#expected])for(const offset of this.#offsets)this.#packets.add(JSON.stringify(Array.from(this.packet(0x15,s.macroData,offset))));
+  }
+  get before(){return clone(this.#before);}get expected(){return clone(this.#expected);}get disabled(){return clone(this.#disabled);}get changedOffsets(){return [...this.#offsets];}
+  packet(command,data,offset){
+    requireThat([9,0x15].includes(command)&&bytes(data,command===9?378:3071)&&Number.isInteger(offset)&&offset>=0&&offset<data.length&&offset%54===0,'宏写包参数无效。');
+    const b=new Uint8Array(64),length=Math.min(54,data.length-offset);b[0]=4;b[3]=command;b[4]=length;b[5]=offset&255;b[6]=offset>>8;b.set(data.slice(offset,offset+length),8);
+    const sum=b.slice(3).reduce((n,v)=>n+v,0);b[1]=sum&255;b[2]=sum>>8;return b;
+  }
+  validate(request){requireThat(this.#packets.has(JSON.stringify(Array.from(request))),'写包超出本次宏备份、目标或临时禁用范围。');}
+  validateRecovery(current){
+    validateSnapshot(current,true);
+    requireThat(['deviceInfo','parameters','colors'].every(k=>equal(current[k],this.#before[k])),'宏恢复范围外的配置发生变化，停止自动覆盖。');
+    for(let offset=0;offset<3071;offset+=54){const block=current.macroData.slice(offset,offset+54);
+      requireThat([this.#before,this.#expected].some(s=>equal(block,s.macroData.slice(offset,offset+54))),'宏区出现本次操作之外的数据，停止自动覆盖。');
+    }
+    for(let offset=0;offset<378;offset+=54)this.validate(this.packet(9,current.keymap,offset));
   }
 }

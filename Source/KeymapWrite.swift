@@ -79,3 +79,61 @@ final class HardwareOperationLog {
     }
     func string(_ key:String)->String?{lock.lock();defer{lock.unlock()};return state[key] as? String}
 }
+
+// Offline transaction plan. Creating this value does not authorize the USB
+// transport; macro writes remain blocked until the complete module is reviewed.
+struct MacroWriteAuthorization {
+    let before:HardwareSnapshot
+    let expected:HardwareSnapshot
+    let disabled:HardwareSnapshot
+    let changedOffsets:[Int]
+    private let allowedPackets:Set<[UInt8]>
+    init(baseline:HardwareSnapshot,target:HardwareSnapshot) throws {
+        try baseline.validate();try target.validate()
+        guard baseline.deviceInfo[6]==24,baseline.colors != nil,
+              let original=baseline.macroData,let wanted=target.macroData,
+              baseline.deviceInfo==target.deviceInfo,baseline.parameters==target.parameters,
+              baseline.colors==target.colors else{throw HardwareError(message:"宏操作必须使用当前完整配置，并保留设备参数与灯效。")}
+        let oldMacros=try CherryMacroCodec.decode(original),newMacros=try CherryMacroCodec.decode(wanted)
+        var safe=baseline
+        for slot in 0..<126 {
+            let range=slot*3..<slot*3+3,old=Array(baseline.keymap[range]),next=Array(target.keymap[range])
+            let wasMacro=[UInt8(0x70),0x71].contains(old[0]),isMacro=[UInt8(0x70),0x71].contains(next[0])
+            for (record,count) in [(old,oldMacros.count),(next,newMacros.count)] where [UInt8(0x70),0x71].contains(record[0]) {
+                let playback=try CherryMacroCodec.playback(record,macroCount:count)
+                guard playback == .once else{throw HardwareError(message:"重复、持续与开关宏的停止流程尚未完成，暂不能写入。")}
+            }
+            if wasMacro || isMacro {
+                guard KeymapWriteAuthorization.editableSlots.contains(slot) else{throw HardwareError(message:"内部与隐藏位置的宏绑定不能改写。")}
+                safe.keymap.replaceSubrange(range,with:[0x20,0,0])
+            }
+            if old != next {
+                guard wasMacro || isMacro else{throw HardwareError(message:"宏写入不能夹带普通键位修改，请先单独写入按键。")}
+                guard isMacro || (next[0]==0x20 && (next[2]==0 || (4..<224).contains(next[2]))) || next[0]==0x30 else{throw HardwareError(message:"移除宏后的键位记录尚未支持。")}
+            }
+        }
+        before=baseline;expected=target;disabled=safe
+        changedOffsets=stride(from:0,to:3071,by:54).filter{offset in let end=min(offset+54,3071);return original[offset..<end] != wanted[offset..<end]}
+        var packets=Set<[UInt8]>()
+        for snapshot in [baseline,target,safe] {
+            for offset in stride(from:0,to:378,by:54){packets.insert(try CherryPacket.chunk(9,offset:offset,length:54,data:Array(snapshot.keymap[offset..<offset+54])))}
+        }
+        for data in [original,wanted] {
+            for offset in changedOffsets{let end=min(offset+54,3071);packets.insert(try CherryPacket.chunk(0x15,offset:offset,length:end-offset,data:Array(data[offset..<end])))}
+        }
+        allowedPackets=packets
+    }
+    func validate(_ packet:[UInt8]) throws {
+        guard allowedPackets.contains(packet) else{throw HardwareError(message:"写包超出本次宏备份、目标或临时禁用范围。")}
+    }
+    func validateRecovery(_ current:HardwareSnapshot) throws {
+        try current.validate()
+        guard current.deviceInfo==before.deviceInfo,current.parameters==before.parameters,current.colors==before.colors,
+              let bank=current.macroData,let original=before.macroData,let wanted=expected.macroData else{throw HardwareError(message:"宏恢复范围外的配置发生变化，停止自动覆盖。")}
+        // Compare every bank block, including blocks this operation never writes.
+        for offset in stride(from:0,to:3071,by:54){let end=min(offset+54,3071);let block=bank[offset..<end]
+            guard block.elementsEqual(original[offset..<end]) || block.elementsEqual(wanted[offset..<end]) else{throw HardwareError(message:"宏区出现本次操作之外的数据，停止自动覆盖。")}
+        }
+        for offset in stride(from:0,to:378,by:54){try validate(CherryPacket.chunk(9,offset:offset,length:54,data:Array(current.keymap[offset..<offset+54])))}
+    }
+}
