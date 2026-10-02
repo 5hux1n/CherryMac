@@ -97,7 +97,7 @@ enum WindowsProfile {
                             if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
                             else if type==10,button>=4,button<224{usage=UInt8(button)}
                             else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
-                            else{throw HardwareError(message:"Windows 宏包含尚未支持的滚动或其他事件。")}
+                            else{throw HardwareError(message:"Windows 宏包含尚未支持的鼠标移动或其他事件。")}
                             guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
                             return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
                         }

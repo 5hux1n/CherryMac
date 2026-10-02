@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding} from './model.js?v=0.5.0';
+import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,finiteMacroDurationMilliseconds} from './model.js?v=0.5.0';
 import {keys} from './layout.js?v=0.5.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
@@ -46,17 +46,18 @@ export class KeymapWriteAuthorization{
 
 // A pure plan for the next macro writer. No transport capability is granted.
 export class MacroWriteAuthorization {
-  #before;#expected;#disabled;#packets=new Set();#offsets;
+  #before;#expected;#disabled;#packets=new Set();#offsets;#beforeDuration;#targetDuration;
   constructor(before,target){
     validateSnapshot(before,true);validateSnapshot(target,true);
     requireThat(before.deviceInfo[6]===24&&['deviceInfo','parameters','colors'].every(k=>equal(before[k],target[k])),'宏操作必须保留当前设备参数与灯效。');
     this.#before=clone(before);this.#expected=clone(target);this.#disabled=clone(before);
     const libraries=[decodeBank(before.macroData),decodeBank(target.macroData)];
+    this.#beforeDuration=finiteMacroDurationMilliseconds(before.keymap,libraries[0]);this.#targetDuration=finiteMacroDurationMilliseconds(target.keymap,libraries[1]);
     for(let slot=0;slot<126;slot++){
       const old=before.keymap.slice(slot*3,slot*3+3),next=target.keymap.slice(slot*3,slot*3+3);
       const wasMacro=[0x70,0x71].includes(old[0]),isMacro=[0x70,0x71].includes(next[0]);
       for(const [r,count] of [[old,libraries[0].length],[next,libraries[1].length]])if([0x70,0x71].includes(r[0])){
-        const playback=decodeMacroBinding(r,count);requireThat(playback.mode==='count'&&playback.count===1,'重复、持续与开关宏的停止流程尚未完成，暂不能写入。');
+        const playback=decodeMacroBinding(r,count);requireThat(playback.mode==='count','持续与开关宏的停止流程尚未完成，暂不能写入。');
       }
       if(wasMacro||isMacro){requireThat(KEYMAP_SLOTS.has(slot),'内部与隐藏位置的宏绑定不能改写。');this.#disabled.keymap.splice(slot*3,3,0x20,0,0);}
       if(!equal(old,next)){
@@ -69,7 +70,7 @@ export class MacroWriteAuthorization {
     for(const s of [this.#before,this.#expected,this.#disabled])for(let offset=0;offset<378;offset+=54)this.#packets.add(JSON.stringify(Array.from(this.packet(9,s.keymap,offset))));
     for(const s of [this.#before,this.#expected])for(const offset of this.#offsets)this.#packets.add(JSON.stringify(Array.from(this.packet(0x15,s.macroData,offset))));
   }
-  get before(){return clone(this.#before);}get expected(){return clone(this.#expected);}get disabled(){return clone(this.#disabled);}get changedOffsets(){return [...this.#offsets];}
+  get before(){return clone(this.#before);}get expected(){return clone(this.#expected);}get disabled(){return clone(this.#disabled);}get changedOffsets(){return [...this.#offsets];}get beforeDurationMilliseconds(){return this.#beforeDuration;}get targetDurationMilliseconds(){return this.#targetDuration;}
   packet(command,data,offset){
     requireThat([9,0x15].includes(command)&&bytes(data,command===9?378:3071)&&Number.isInteger(offset)&&offset>=0&&offset<data.length&&offset%54===0,'宏写包参数无效。');
     const b=new Uint8Array(64),length=Math.min(54,data.length-offset);b[0]=4;b[3]=command;b[4]=length;b[5]=offset&255;b[6]=offset>>8;b.set(data.slice(offset,offset+length),8);

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
-import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
+import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
@@ -259,7 +259,68 @@ test('macro transaction plan isolates blocks, freezes inputs and refuses unrelat
   assert.throws(()=>plan.validate(plan.packet(0x15,saved.macroData,3024))); // unchanged block not authorized
   for(const field of ['parameters','colors','deviceInfo']){const foreign=plan.expected;foreign[field][0]^=1;assert.throws(()=>new MacroWriteAuthorization(plan.before,foreign));}
   const unrelated=plan.expected;unrelated.keymap.splice(0,3,0x20,0,5);assert.throws(()=>new MacroWriteAuthorization(plan.before,unrelated));
-  for(const record of [[0x70,0,1],[0x70,0,2],[0x71,0,2],[0x70,31,0]]){const invalid=plan.expected;invalid.keymap.splice(306,3,...record);assert.throws(()=>new MacroWriteAuthorization(plan.before,invalid));}
+  for(const record of [[0x70,0,1],[0x70,0,2],[0x71,0,1],[0x70,31,0]]){const invalid=plan.expected;invalid.keymap.splice(306,3,...record);assert.throws(()=>new MacroWriteAuthorization(plan.before,invalid));}
   const hidden=plan.expected;hidden.keymap.splice(6*3,3,0x70,0,0);assert.throws(()=>new MacroWriteAuthorization(plan.before,hidden));
   const restore=plan.before;restore.keymap.splice(306,3,0x30,0x92,1);const restorePlan=new MacroWriteAuthorization(plan.expected,restore);restorePlan.validateRecovery(plan.expected);assert.deepEqual(restorePlan.expected,restore);
+});
+
+test('finite macro wait accounts for per-binding repeats and ignores unbound macros',()=>{
+  const before=demoSnapshot(),once=clone(before);once.macroData=encodeBank([macro]);once.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:1}));
+  const cycle=macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0);
+  for(const count of [1,2,3,255]){
+    const repeated=clone(once);repeated.keymap.splice(306,3,...macroBinding(0,{mode:'count',count}));const plan=new MacroWriteAuthorization(once,repeated);
+    assert.equal(plan.beforeDurationMilliseconds,cycle);assert.equal(plan.targetDurationMilliseconds,cycle*count);
+    const shared=clone(repeated);shared.keymap.splice(324,3,...macroBinding(0,{mode:'count',count:255}));assert.equal(new MacroWriteAuthorization(before,shared).targetDurationMilliseconds,cycle*255);
+  }
+  const unbound=[...decodeBank(once.macroData),{name:'unused',steps:[{usage:6,pressed:true,delayMilliseconds:60000},{usage:6,pressed:false,delayMilliseconds:60000}]}];
+  assert.equal(finiteMacroDurationMilliseconds(once.keymap,unbound),cycle);assert.equal(finiteMacroDurationMilliseconds(before.keymap,unbound),0);
+  for(const mode of ['held','toggle']){const unsupported=clone(once);unsupported.keymap.splice(306,3,...macroBinding(0,{mode,count:1}));assert.throws(()=>new MacroWriteAuthorization(once,unsupported));assert.throws(()=>new MacroWriteAuthorization(unsupported,once));}
+});
+
+class SimulatedMacroSession {
+  constructor(snapshot){this.state=clone(snapshot);this.packets=[];this.saved=[];this.drains=[];this.history=[];this.dead=false;this.reads=0;this.checks=0;this.failAt=0;this.externalChange=false;this.disconnect=false;this.operationId='previous';}
+  record(row){this.history.push(clone(row));}
+  async flushLogs(){if(this.logFailure)throw new Error('simulated log failure');}
+  async snapshot(){this.reads++;return clone(this.state);}
+  async read(cmd,count){assert.equal(cmd,0x14);assert.equal(count,3071);return [...this.state.macroData];}
+  async withMacroAuthorization(authorization,gate,body){assert.equal(this.authorization,undefined);this.authorization=authorization;try{return await body();}finally{delete this.authorization;}}
+  async exchange(packet){
+    this.authorization.validate(packet);assert.ok(this.checks>this.packets.length,'every packet must pass release gate');this.packets.push([...packet]);
+    const offset=packet[5]|packet[6]<<8,target=packet[3]===9?'keymap':'macroData';this.state[target].splice(offset,packet[4],...packet.slice(8,8+packet[4]));
+    if(this.failAt===this.packets.length){if(this.externalChange)this.state.parameters[9]^=1;if(this.disconnect)this.dead=true;throw new Error('simulated lost acknowledgement');}
+    return packet;
+  }
+  options(){return {gate:{check:async()=>{this.checks++;if(this.heldAt&&this.checks>=this.heldAt)throw new Error('simulated held key');}},backup:async value=>{if(this.backupFailure)throw new Error('simulated backup failure');this.saved.push(clone(value));},waitForCompletion:async ms=>this.drains.push(ms)};}
+}
+test('Web macro transaction writes header last, drains finite repeats and restores original media binding',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([{...macro,steps:Array.from({length:3},()=>macro.steps).flat()}]);target.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:3}));
+  const first=new SimulatedMacroSession(before);assert.ok(sameSnapshot(await applyMacroConfiguration(first,target,before,first.options()),target));
+  assert.deepEqual(first.saved,[before]);assert.deepEqual(first.drains,[]);assert.equal(first.operationId,'previous');assert.equal(first.authorization,undefined);
+  const macroPackets=first.packets.filter(p=>p[3]===0x15);assert.ok(macroPackets.length>1);assert.equal(macroPackets.at(-1)[5]|macroPackets.at(-1)[6]<<8,0);
+  assert.ok(macroPackets.every(p=>(p[5]|p[6]<<8)+p[4]<=3071));const firstKey=first.packets.findIndex(p=>p[3]===9);assert.ok(first.packets.slice(0,firstKey).every(p=>p[3]===0x15));
+  const repeatOnly=clone(target);repeatOnly.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:2}));const second=new SimulatedMacroSession(target);
+  await applyMacroConfiguration(second,repeatOnly,target,second.options());assert.deepEqual(second.drains,[630]);assert.equal(second.packets.length,14);assert.ok(second.packets.every(p=>p[3]===9));
+  assert.deepEqual(second.packets.slice(0,7).flatMap(p=>p.slice(8,62)).slice(306,309),[0x20,0,0]);
+  const restore=new SimulatedMacroSession(repeatOnly);await applyMacroConfiguration(restore,before,repeatOnly,restore.options());assert.ok(sameSnapshot(restore.state,before));assert.deepEqual(restore.drains,[420]);
+  assert.deepEqual(restore.state.keymap.slice(306,309),[0x30,0x92,1]);
+});
+test('Web macro lost acknowledgements recover only transaction blocks; disconnect and unrelated changes stop',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:3}));
+  const full=new SimulatedMacroSession(before);await applyMacroConfiguration(full,target,before,full.options());
+  for(const index of [1,full.packets.filter(p=>p[3]===0x15).length,full.packets.length]){
+    const failing=new SimulatedMacroSession(before);failing.failAt=index;
+    await assert.rejects(applyMacroConfiguration(failing,target,before,failing.options()),/已恢复原宏与绑定/);assert.ok(sameSnapshot(failing.state,before));assert.deepEqual(failing.drains,[210]);assert.equal(failing.authorization,undefined);
+  }
+  for(const kind of ['disconnect','externalChange']){
+    const failing=new SimulatedMacroSession(before);failing.failAt=1;failing[kind]=true;
+    await assert.rejects(applyMacroConfiguration(failing,target,before,failing.options()),kind==='disconnect'?/已停止发送/:/自动恢复未完成/);assert.equal(failing.packets.length,1);assert.equal(failing.authorization,undefined);
+  }
+});
+test('Web macro preflight blocks real closed transport, stale baseline, failed backup, held keys and logging failure',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,0x70,0,0);
+  const {hid,device}=await transport(before);await assert.rejects(applyMacroConfiguration(hid,target,before,{gate,backup:async()=>{},waitForCompletion:async()=>{}}),/宏传输尚未开放/);assert.equal(device.requests.length,0);await hid.close();
+  for(const kind of ['stale','backupFailure','held','logFailure']){
+    const session=new SimulatedMacroSession(before);if(kind==='stale')session.state.parameters[0]^=1;else if(kind==='held')session.heldAt=2;else session[kind]=true;
+    await assert.rejects(applyMacroConfiguration(session,target,before,session.options()));assert.equal(session.packets.length,0);assert.equal(session.operationId,'previous');assert.equal(session.authorization,undefined);
+  }
 });

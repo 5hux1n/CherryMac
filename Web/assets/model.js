@@ -171,3 +171,14 @@ export class MacroRecorder{
   finish(name){requireThat(this.active&&this.held.size===0,'请先松开全部录制按键，再停止录制。');const m={name,steps:clone(this.steps),recordingDelay:{fixed:this.timing==='fixed',milliseconds:this.fixedMilliseconds}};validateMacro(m);this.active=false;return m;}
   cancel(){this.active=false;this.steps=[];this.held.clear();}
 }
+
+// Nominal event-delay budget, not a claim about measured firmware timing.
+export function finiteMacroDurationMilliseconds(keymap,macros){
+  requireThat(bytes(keymap,378)&&Array.isArray(macros),'宏键位表或宏库无效。');let longest=0;
+  for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(keymap[slot*3])){
+    const record=keymap.slice(slot*3,slot*3+3),mode=decodeMacroBinding(record,macros.length);
+    requireThat(mode.mode==='count','持续与开关宏需要先确认停止，不能使用有限等待流程。');
+    const macro=macros[record[1]];validateMacro(macro);longest=Math.max(longest,macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0)*mode.count);
+  }
+  return longest;
+}

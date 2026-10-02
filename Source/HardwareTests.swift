@@ -390,6 +390,28 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
     precondition(replace.drains==[0.4] && replace.packets.prefix(7).allSatisfy{$0[3]==9})
     let disabledState=replace.packets.prefix(7).flatMap{Array($0[8..<62])}
     precondition(Array(disabledState[306..<309])==[0x20,0,0] && Array(disabledState[324..<327])==[0x20,0,0])
+    for count in [1,2,3,255] {
+        var repeated=desired;repeated.keymap.replaceSubrange(306..<309,with:try! CherryMacroCodec.binding(0,playback:MacroPlayback(count:count)))
+        let plan=try! MacroWriteAuthorization(baseline:desired,target:repeated)
+        precondition(plan.beforeDurationMilliseconds==400 && plan.targetDurationMilliseconds==400*count)
+        let update=SimulatedCherry(desired)
+        precondition(try! update.writeMacroConfiguration(repeated,baseline:desired)==repeated)
+        if count==1{precondition(update.packets.isEmpty && update.drains.isEmpty)}
+        else{precondition(update.drains==[0.4] && update.packets.allSatisfy{$0[3]==9})}
+        let replaceRepeated=SimulatedCherry(repeated)
+        precondition(try! replaceRepeated.writeMacroConfiguration(replacement,baseline:repeated)==replacement)
+        precondition(replaceRepeated.drains==[Double(400*count)/1000])
+        let lost=SimulatedCherry(original);lost.failSendAt=1
+        _=rejected{_ = try lost.writeMacroConfiguration(repeated,baseline:original)}
+        precondition(lost.state==original && lost.drains==[Double(400*count)/1000])
+    }
+    var unbound=original;unbound.macroData=try! CherryMacroCodec.encode([long,chord])
+    precondition(try! MacroWriteAuthorization(baseline:original,target:unbound).targetDurationMilliseconds==0)
+    for mode:MacroPlayback.Mode in [.held,.toggle] {
+        var unbounded=desired;unbounded.keymap.replaceSubrange(306..<309,with:try! CherryMacroCodec.binding(0,playback:MacroPlayback(mode:mode)))
+        _=rejected{_ = try MacroWriteAuthorization(baseline:unbounded,target:desired)}
+        _=rejected{_ = try MacroWriteAuthorization(baseline:desired,target:unbounded)}
+    }
     var unsupported=desired;unsupported.keymap[306]=0x71
     let unknown=SimulatedCherry(unsupported)
     _=rejected{_ = try unknown.writeMacroConfiguration(replacement,baseline:unsupported)}
@@ -401,7 +423,7 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
     let dangling=SimulatedCherry(original)
     _=rejected{_ = try dangling.writeKeymap(desired.keymap,baseline:original)}
     precondition(dangling.packets.isEmpty && dangling.saved.isEmpty)
-    print("PASS: macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
+    print("PASS: finite repeat budgets and binding-only disable/drain; macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
 }
 
 private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
