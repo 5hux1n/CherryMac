@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 func runHardwareTests() {
     func fails(_ block:() throws -> Void){do{try block();preconditionFailure("expected rejection")}catch{}}
     func hex(_ value:String)->[UInt8]{stride(from:0,to:value.count,by:2).map{index in let a=value.index(value.startIndex,offsetBy:index);let b=value.index(a,offsetBy:2);return UInt8(value[a..<b],radix:16)!}}
@@ -49,6 +50,13 @@ func runHardwareTests() {
     runWindowsProfileTests(snapshot)
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
+    for command:UInt8 in [1,2,6,7,9,0x0B,0x0D,0x15,0xFF]{fails{try HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(command,offset:0,length:3,data:[32,0,4]))}}
+    try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(5,offset:0,length:56))
+    try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(0x14,offset:3024,length:47))
+    for request in [try! CherryPacket.chunk(5,offset:55,length:2),try! CherryPacket.chunk(0x14,offset:0,length:56),try! CherryPacket.chunk(8,offset:0,length:1,data:[1])]{fails{try HardwareWritePolicy.validateReadRequest(request)}}
+    var invalidQuery=try! CherryPacket.chunk(3,offset:0,length:34);invalidQuery[1] ^= 1;fails{try HardwareWritePolicy.validateReadRequest(invalidQuery)}
+    fails{try HardwareWritePolicy.requireWrites()}
+    print("PASS: native USB policy rejects mutations and malformed queries; offline preview only")
     let service=try! CalculatorService.definition(system:["AMAccepts":["Types":["com.apple.cocoa.string"]],"AMProvides":["Types":["com.apple.cocoa.string"]],"CFBundleVersion":"9.0","NSPrincipalClass":"RunShellScriptAction"])
     let registered=(service.info["NSServices"] as! [[String:Any]])[0]
     precondition((registered["NSSendTypes"] as! [String]).isEmpty && (registered["NSRequiredContext"] as! [String:Any]).isEmpty)
@@ -271,6 +279,14 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
 
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let editor=HardwareWindowController()
+    precondition(editor.tabButtons.count==5 && editor.lightTabButtons.count==2)
+    let demoProfile=editor.profile
+    editor.chooseTab(editor.tabButtons[3]);precondition(editor.board.isHidden && editor.pageTitle.stringValue=="配置与备份")
+    editor.chooseTab(editor.tabButtons[4]);precondition(editor.board.isHidden && editor.profile==demoProfile)
+    editor.chooseTab(editor.tabButtons[1]);precondition(!editor.board.isHidden && editor.lightingTab)
+    editor.chooseLightTab(editor.lightTabButtons[1]);precondition(editor.lightTabView?.selectedTabViewItem?.identifier as? String == "逐键配色")
+    precondition(editor.writeButtons.allSatisfy{!$0.isEnabled})
+    editor.chooseTab(editor.tabButtons[0])
     precondition(editor.keyPicker.itemTitles.contains("仅修饰键") && !editor.keyPicker.itemTitles.contains("左 Control"),"key records use modifier masks, whereas macro events use separate modifier usages")
     precondition(editor.macroKey.itemTitles.contains("左 Control"))
     precondition(editor.macroText.frame.width>500 && editor.macroText.frame.height>90,"macro text must have visible editing bounds")
@@ -353,7 +369,9 @@ private func runLightingTests(_ fixture:HardwareSnapshot){
     editor.lightRegion.selectItem(at:6);editor.selectLightRegion()
     editor.stageLightOff()
     for key in keys where editor.lightSelection.contains(key.id){let slot=CherryMatrix.slot(key)!;precondition(Array(editor.profile!.snapshot.colors![slot*3..<slot*3+3])==[0,0,0])}
-    editor.profile=HardwareProfile(snapshot:fixture);editor.loadLighting();editor.setLightColor(LightRGB(1,2,3));editor.stageGlobalLightColor()
+    editor.profile=HardwareProfile(snapshot:fixture);editor.loadLighting();editor.setLightColor(LightRGB(7,8,9))
+    editor.globalLightColor.color=NSColor(srgbRed:1.0/255,green:2.0/255,blue:3.0/255,alpha:1);editor.stageGlobalLightColor()
+    precondition(editor.lightHex.stringValue=="#070809","global mode color must not replace the per-key color selection")
     editor.modePicker.selectItem(at:CherryLighting.modes.firstIndex{$0.1==3}!+1);editor.speed.doubleValue=4;editor.stageLights()
     let result=editor.profile!.snapshot
     precondition(result.parameters[1]==3 && result.parameters[3]==0 && result.parameters[5]==0 && Array(result.parameters[6..<9])==[1,2,3])
@@ -386,7 +404,7 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     let macro=try! WindowsProfile.decode(data(root),baseline:baseline)
     precondition(macro.macroCount==1 && macro.profile.macroBindings?[102]=="Control A" && macro.profile.macros[0].steps.first!.usage==224)
     precondition(try! CherryMacroCodec.decode(macro.profile.snapshot.macroData!)[0].steps==macro.profile.macros[0].steps)
-    let editor=HardwareWindowController();rejected{try editor.loadImport(data(root))};precondition(editor.profile==nil)
+    let editor=HardwareWindowController();let initialPreview=editor.profile;rejected{try editor.loadImport(data(root))};precondition(editor.profile==initialPreview)
     editor.baseline=baseline;try! editor.loadImport(data(root));precondition(editor.baseline==baseline && editor.profile==macro.profile)
     let saved=editor.profile;root["//"]="46";rejected{try editor.loadImport(data(root))};precondition(editor.profile==saved)
     root["//"]="47";keys[0]["DefaultAssignment"]=0;root["KeyList"]=keys;rejected{_ = try WindowsProfile.decode(data(root),baseline:baseline)}

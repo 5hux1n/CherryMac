@@ -1,12 +1,13 @@
-import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.1.1';
-import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,rgb,hex,paint} from './model.js?v=0.1.1';
-import {CherryHID,PageReleaseGate} from './hid.js?v=0.1.1';
-import {applyConfiguration,validatePlan,sameSnapshot} from './writer.js?v=0.1.1';
-import {saveBackup,listBackups,download} from './storage.js?v=0.1.1';
-import {WRITE_BLOCK_REASON,assertHardwareWriteAllowed} from './safety.js?v=0.1.1';
-import {saveLog,listLogs} from './logs.js?v=0.1.1';
+import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.2.0';
+import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,rgb,hex,paint} from './model.js?v=0.2.0';
+import {CherryHID,PageReleaseGate} from './hid.js?v=0.2.0';
+import {applyConfiguration,validatePlan,sameSnapshot} from './writer.js?v=0.2.0';
+import {saveBackup,listBackups,download} from './storage.js?v=0.2.0';
+import {WRITE_BLOCK_REASON,assertHardwareWriteAllowed} from './safety.js?v=0.2.0';
+import {saveLog,listLogs} from './logs.js?v=0.2.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
-let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
+const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
+let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const supported=isSecureContext&&'hid' in navigator;
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error);}
 function safeProfile(s){try{return fromHardware(s);}catch(error){status(`配置已读取；${error.message} 键位和灯效仍可编辑。`);return {format:'CherryMacProfile',version:1,snapshot:clone(s),macros:[]};}}
@@ -18,9 +19,12 @@ function render(){
     b.title=`${k.label} · ${describe(s.keymap.slice(k.slot*3,k.slot*3+3))}`;
   }
   const key=keys.find(k=>k.id===selected);$('selection-label').textContent=`已选 ${key.label}${selection.size>1?` · 共 ${selection.size} 键`:''}`;$('light-count').textContent=`${selection.size} 键`;$('selected-record').textContent=describe(s.keymap.slice(key.slot*3,key.slot*3+3));
-  document.querySelectorAll('[data-tab]').forEach(b=>{const active=b.dataset.tab===tab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$(`pane-${b.dataset.tab}`).hidden=!active;});
-  $('multi-label').hidden=tab!=='lights';$('board-hint').textContent=tab==='lights'?'颜色为静态预览 · ⌘ 点击多选':'普通键保持正方形 · 点击按键进行设置';
-  const online=hid&&!hid.dead&&baseline;$('connection').textContent=online?'● USB 已连接 · 已读取':'● 未连接 · 可编辑配置';$('connection').classList.toggle('connected',!!online);$('disconnect').hidden=!hid||hid.dead;
+  document.querySelectorAll('[data-tab]').forEach(b=>{const active=b.dataset.tab===tab;b.setAttribute('aria-selected',String(active));b.setAttribute('aria-controls',`pane-${b.dataset.tab}`);b.tabIndex=active?0:-1;$(`pane-${b.dataset.tab}`).hidden=!active;});
+  $('page-title').textContent=pages[tab][0];$('page-description').textContent=pages[tab][1];
+  const editorPage=['keys','lights','macros'].includes(tab);$('board-card').hidden=!editorPage;$('review-card').hidden=!editorPage;$('workspace').classList.toggle('single-page',!editorPage);
+  document.querySelectorAll('[data-light-tab]').forEach(b=>{const active=b.dataset.lightTab===lightTab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$(`light-${b.dataset.lightTab}`).hidden=!active;});
+  $('multi-label').hidden=tab!=='lights'||lightTab!=='perkey';$('board-hint').textContent=tab==='lights'?'颜色为静态预览 · ⌘ 点击多选':'普通键保持正方形 · 点击按键进行设置';
+  const online=hid&&!hid.dead&&baseline;$('connection').textContent=online?'● USB 已连接 · 已读取':'● 未连接 · 可编辑配置';$('connection').classList.toggle('connected',!!online);$('disconnect').hidden=!hid||hid.dead;$('device-status').textContent=online?'已连接 · 配置已读取，硬件写入停用':'尚未连接 · 可预览与编辑配置';
   $('change-title').textContent=baseline?(changed?'配置编辑预览':'与读取的配置一致'):'配置编辑预览';$('changes').replaceChildren();
   for(const [name,value] of [['按键功能',`${c.keys} 键`],['逐键颜色',`${c.colors} 键`],['灯效参数',c.params?'已修改':'未修改'],['宏存储',c.macros?'已修改':'未修改']]){const line=document.createElement('div');line.className='change-line';const text=document.createElement('span'),v=document.createElement('b');text.textContent=name;v.textContent=value;line.append(text,v);$('changes').append(line);}
   $('draft-note').textContent='USB 写入已停用。仍可读取、编辑、导入导出和下载已有备份；编辑不会改变键盘。';
@@ -31,7 +35,7 @@ function render(){
   for(const id of ['save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot));
   if(busy)$('connect').disabled=true;
 }
-function syncLights(){const p=profile.snapshot.parameters;$('mode').value=String(p[1]);$('brightness').value=Math.min(4,p[2]);$('brightness-label').textContent=p[2];$('speed').value=4-Math.min(4,p[3]);$('direction').value=p[4]<=1?String(p[4]):'';$('rainbow').value=p[5]<=1?String(p[5]):'';loadColor();}
+function syncLights(){const p=profile.snapshot.parameters;$('mode').value=String(p[1]);$('brightness').value=Math.min(4,p[2]);$('brightness-label').textContent=p[2];$('speed').value=4-Math.min(4,p[3]);$('direction').value=p[4]<=1?String(p[4]):'';$('rainbow').value=p[5]<=1?String(p[5]):'';$('global-color-input').value=hex(p.slice(6,9));loadColor();}
 function setColor(b){const value=hex(b);$('color').value=value;$('hex').value=value.toUpperCase();['red','green','blue'].forEach((id,i)=>$(id).value=b[i]);const strength=Math.round(Math.max(...b)*100/255);$('strength').value=strength;$('strength-label').textContent=`${strength}%`;}
 function loadColor(){const k=keys.find(k=>k.id===selected);if(profile.snapshot.colors)setColor(profile.snapshot.colors.slice(k.slot*3,k.slot*3+3));}
 function refreshMacros(name=''){const list=$('macro-list');list.replaceChildren(new Option('新建宏',''));profile.macros.forEach(m=>list.add(new Option(m.name,m.name)));list.value=name;if(list.value!==name)list.value='';}
@@ -48,13 +52,17 @@ function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
 async function read(){const s=await hid.snapshot();baseline=clone(s);profile=safeProfile(s);refreshMacros();loadMacro();syncLights();try{await saveBackup(s);}catch(error){status(`读取成功，但本地备份不可用：${error.message} USB 写入仍停用。`,true);return;}status('已读取完整配置并保存本地备份。USB 写入已停用；编辑不会改变键盘。');}
 async function operation(fn){if(busy)return;busy=true;render();try{await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
-function switchTab(next){tab=next;if(tab==='lights')syncLights();render();}
+function switchTab(next){if(!pages[next])return;tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
-for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
+for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
   selected=k.id;if(tab==='lights'&&(e.metaKey||e.ctrlKey||$('multi').checked)){if(selection.has(k.id)&&selection.size>1){selection.delete(k.id);selected=[...selection][0];}else selection.add(k.id);}else selection=new Set([k.id]);if(tab==='lights')loadColor();render();
 };$('keyboard').append(b);}
 $('shortcut-key').add(new Option('无主键（仅修饰键）',0));usageOptions($('shortcut-key'),false);usageOptions($('macro-key'));$('shortcut-key').value=21;$('macro-key').value=4;modes.forEach(([value,name])=>$('mode').add(new Option(name,value)));
-document.querySelectorAll('[data-tab]').forEach(b=>{b.onclick=()=>switchTab(b.dataset.tab);b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const tabs=[...document.querySelectorAll('[data-tab]')],i=tabs.indexOf(b),next=e.key==='Home'?0:e.key==='End'?3:(i+(e.key==='ArrowRight'?1:3))%4;tabs[next].focus();switchTab(tabs[next].dataset.tab);};});
+function navigation(selector,switchPage){const buttons=[...document.querySelectorAll(selector)];buttons.forEach(b=>{
+  b.onclick=()=>switchPage(b);b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();const i=buttons.indexOf(b),forward=['ArrowRight','ArrowDown'].includes(e.key),next=e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(forward?1:buttons.length-1))%buttons.length;buttons[next].focus();switchPage(buttons[next]);};
+});}
+navigation('[data-tab]',b=>switchTab(b.dataset.tab));
+navigation('[data-light-tab]',b=>{lightTab=b.dataset.lightTab;render();});
 document.querySelectorAll('[data-record]').forEach(b=>b.onclick=()=>act(()=>stageRecord(b.dataset.record.split(',').map(Number))));
 $('stage-shortcut').onclick=()=>act(()=>{const mask=[...document.querySelectorAll('.modifier:checked')].reduce((n,b)=>n|Number(b.value),0);stageRecord([0x20,mask,Number($('shortcut-key').value)]);});
 document.querySelectorAll('[data-region]').forEach(b=>b.onclick=()=>{const region=b.dataset.region;selection=new Set(keys.filter(k=>region==='all'||region==='main'&&k.x<576&&k.y>55||region==='function'&&k.y<55||region==='num'&&k.id.startsWith('num')||region==='arrows'&&['up','down','left','right'].includes(k.id)||region==='wasd'&&k.page===7&&[26,4,22,7].includes(k.usage)).map(k=>k.id));selected=[...selection][0];loadColor();render();});
@@ -64,8 +72,8 @@ $('strength').oninput=()=>{const b=rgb($('color').value),peak=Math.max(...b),sca
 $('paint').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,$('pattern').value,rgb($('hex').value),rgb($('end-color').value));syncLights();status(`已为 ${selection.size} 键加入配色，尚未写入。`);});
 $('off').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,'solid',[0,0,0],[0,0,0]);syncLights();status('所选键已设为熄灭，尚未写入。');});
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;
-$('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已加入待写入配置。');});
-$('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('hex').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已将起点色设为内置灯效单色，尚未写入。');});
+$('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
+$('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已设置内置灯效单色，尚未写入。');});
 $('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>{const usage=Number($('macro-key').value);steps.push({usage,pressed:true,delayMilliseconds:0},{usage,pressed:false,delayMilliseconds:30});renderSteps();};
 $('save-macro').onclick=()=>act(()=>{const p=clone(profile),old=$('macro-list').value,m={name:$('macro-name').value.trim(),steps:clone(steps)};validateMacro(m);requireThat(!p.macros.some(macro=>macro.name===m.name&&macro.name!==old),'宏名称已存在。');const index=p.macros.findIndex(m=>m.name===old);if(index<0)p.macros.push(m);else{p.macros[index]=m;for(const [slot,name] of Object.entries(p.macroBindings??{}))if(name===old)p.macroBindings[slot]=m.name;}p.snapshot=resolveMacros(p);profile=p;refreshMacros(m.name);loadMacro();status('宏已保存到编辑区，尚未写入键盘。');});
 $('assign-macro').onclick=()=>act(()=>{const name=$('macro-list').value,key=keys.find(k=>k.id===selected);requireThat(name&&editableSlots.has(key.slot),'请选择已保存的宏和可配置按键。');const p=clone(profile);p.macroBindings[key.slot]=name;p.snapshot=resolveMacros(p);profile=p;status(`已将 ${name} 分配到 ${key.label}，尚未写入。`);});
@@ -74,9 +82,9 @@ $('connect').onclick=()=>operation(async()=>{status('请在浏览器弹窗中选
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
 $('discard').onclick=()=>act(()=>{profile=safeProfile(baseline??demo);refreshMacros();loadMacro();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
 $('import').onclick=()=>$('file').click();$('file').onchange=()=>operation(async()=>{const file=$('file').files[0];$('file').value='';if(!file)return;requireThat(file.size<=1_000_000,'配置文件超过 1 MB。');const p=parseProfile(await file.text(),baseline);profile=p;refreshMacros();loadMacro();syncLights();status('配置已导入编辑区，尚未写入键盘。');});
-$('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出待写入配置。');});
+$('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出当前编辑配置。');});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();syncLights();status('备份仅导入编辑区预览，未恢复或修改实体键盘。USB 写入已停用。');});row.append(date,get,restore);$('backups').append(row);}});
-$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.1.1',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份及新版只读请求／回复／耗时／错误，不能重建 0.1.0 故障时实际发送的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。USB 写入已停用。${logError?' 日志存储异常：'+logError:''}`);});
+$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.2.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份及新版只读请求／回复／耗时／错误，不能重建 0.1.0 故障时实际发送的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。USB 写入已停用。${logError?' 日志存储异常：'+logError:''}`);});
 function plan(){assertHardwareWriteAllowed();}
 $('write').onclick=()=>act(()=>{pending=plan();requireThat(!sameSnapshot(pending,baseline),'选中的写入类别没有变化。');const c=counts(pending,baseline);$('confirm-summary').textContent=`将修改 ${c.keys} 个键位、${c.colors} 个按键颜色${c.params?'，以及灯效参数':''}${c.macros?'，以及宏存储':''}。`;$('confirm').showModal();});
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
@@ -89,4 +97,4 @@ $('confirm-write').onclick=e=>{let wanted;try{assertHardwareWriteAllowed();gate.
 });};
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
 if(!supported){$('compatibility').hidden=false;$('compatibility').textContent=!isSecureContext?'当前网址不是安全环境。请使用 HTTPS 或 localhost 打开，才能连接 USB 键盘。':'此浏览器不支持 WebHID。请在电脑上的 Chrome 或 Edge 打开；当前仍可预览与编辑配置。';}
-refreshMacros();syncLights();render();status(WRITE_BLOCK_REASON,true);
+refreshMacros();syncLights();render();status('预览模式 · 可编辑和导出配置。USB 写入暂时停用。');

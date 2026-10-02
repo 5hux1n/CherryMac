@@ -1169,7 +1169,8 @@ if CommandLine.arguments.contains("--self-test") {
     if let input=CommandLine.arguments.firstIndex(of:"--profile"),CommandLine.arguments.count>input+1{
         controller.profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[input+1])));controller.baseline=controller.profile?.snapshot;controller.connection.stringValue="配置预览 · 126 个固件键位 · 未连接硬件";controller.loadLighting();controller.refreshMacroPicker();controller.loadSelectedAssignment();controller.update()
     }
-    if let input=CommandLine.arguments.firstIndex(of:"--hardware-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),(0..<4).contains(tab){controller.chooseTab(controller.tabButtons[tab])}
+    if let input=CommandLine.arguments.firstIndex(of:"--hardware-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),controller.tabButtons.indices.contains(tab){controller.chooseTab(controller.tabButtons[tab])}
+    if let input=CommandLine.arguments.firstIndex(of:"--light-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),controller.lightTabButtons.indices.contains(tab){controller.chooseLightTab(controller.lightTabButtons[tab])}
     if CommandLine.arguments.contains("--lighting-demo"),controller.profile != nil{
         controller.lightRegion.selectItem(at:1);controller.selectLightRegion();controller.lightPattern.selectItem(at:3);controller.stageColor()
     }

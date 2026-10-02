@@ -2,33 +2,46 @@ import AppKit
 
 extension HardwareWindowController {
     func buildLighting(_ pane:NSView){
-        place(label("模式"),18,15,48,23,in:pane)
-        modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,66,11,238,28,in:pane)
-        place(label("亮度"),320,15,42,23,in:pane);place(brightness,366,11,133,28,in:pane)
-        place(label("慢 ← 速度 → 快",11),515,15,99,23,in:pane);place(speed,615,11,115,28,in:pane)
+        let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;lightTabView=tabs;place(tabs,0,44,930,246,in:pane)
+        for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
+        for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
+        let builtins=tabs.tabViewItems[0].view!
+        place(label("模式"),8,12,72,24,in:builtins)
+        modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,92,8,277,28,in:builtins)
+        place(label("亮度"),8,57,72,24,in:builtins);place(brightness,92,53,277,28,in:builtins)
+        place(label("慢 ← 速度 → 快",12),8,103,125,24,in:builtins);place(speed,151,99,218,28,in:builtins)
         for slider in [brightness,speed]{slider.numberOfTickMarks=5;slider.allowsTickMarkValuesOnly=true;controls.append(slider)}
-        place(label("方向"),746,15,42,23,in:pane)
-        lightDirection.addItems(withTitles:["保留方向","正向","反向"]);controls.append(lightDirection);place(lightDirection,793,11,143,28,in:pane)
-        controls.append(lightMultiple);place(lightMultiple,18,53,76,25,in:pane)
-        lightRegion.addItems(withTitles:CherryLighting.regions);controls.append(lightRegion);place(lightRegion,101,51,135,28,in:pane)
-        place(button("选择",#selector(selectLightRegion)),244,51,70,28,in:pane);place(lightCount,329,56,116,22,in:pane)
-        place(label("颜色"),457,56,37,23,in:pane);place(color,497,49,55,31,in:pane)
+        place(label("方向"),431,12,95,24,in:builtins)
+        lightDirection.addItems(withTitles:["保留方向","正向","反向"]);controls.append(lightDirection);place(lightDirection,549,8,215,28,in:builtins)
+        place(label("颜色选项"),431,57,95,24,in:builtins)
+        lightRainbow.addItems(withTitles:["保留颜色选项","单色","彩虹"]);controls.append(lightRainbow);place(lightRainbow,549,53,215,28,in:builtins)
+        place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)
+        place(button("使用此颜色",#selector(stageGlobalLightColor)),625,99,139,30,in:builtins)
+        place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
+        place(label("不同模式可能忽略不适用的速度、方向和颜色设置。",12),8,206,832,27,in:builtins)
+        let colors=tabs.tabViewItems[1].view!
+        controls.append(lightMultiple);place(lightMultiple,8,7,76,25,in:colors)
+        lightRegion.addItems(withTitles:CherryLighting.regions);controls.append(lightRegion);place(lightRegion,94,4,163,28,in:colors)
+        place(button("选择按键",#selector(selectLightRegion)),276,4,108,28,in:colors);place(lightCount,407,9,140,22,in:colors)
+        place(label("颜色"),8,57,65,23,in:colors);place(color,79,49,55,31,in:colors)
         color.target=self;color.action=#selector(lightColorChanged);controls.append(color)
+        place(label("HEX"),155,57,38,23,in:colors);lightHex.tag=104;lightHex.delegate=self;controls.append(lightHex);place(lightHex,200,53,113,25,in:colors)
         for index in 0..<3 {
-            place(label(["R","G","B"][index]),570+CGFloat(index)*121,56,20,23,in:pane)
-            let field=lightRGB[index];field.tag=101+index;field.delegate=self;controls.append(field);place(field,593+CGFloat(index)*121,52,80,25,in:pane)
+            place(label(["R","G","B"][index]),337+CGFloat(index)*110,57,20,23,in:colors)
+            let field=lightRGB[index];field.tag=101+index;field.delegate=self;controls.append(field);place(field,360+CGFloat(index)*110,53,75,25,in:colors)
         }
-        place(label("HEX"),18,97,36,23,in:pane);lightHex.tag=104;lightHex.delegate=self;controls.append(lightHex);place(lightHex,59,93,103,25,in:pane)
-        place(label("颜色强度",12),177,97,63,23,in:pane);lightStrength.target=self;lightStrength.action=#selector(lightStrengthChanged);controls.append(lightStrength);place(lightStrength,242,93,117,25,in:pane)
-        place(lightStrengthLabel,369,97,48,23,in:pane)
-        place(label("渐变终点",12),432,97,65,23,in:pane);endColor.color = .systemBlue;controls.append(endColor);place(endColor,497,91,55,31,in:pane)
-        lightPattern.addItems(withTitles:CherryLighting.patterns);controls.append(lightPattern);place(lightPattern,570,91,177,28,in:pane)
-        place(button("应用配色到所选键",#selector(stageColor)),762,91,174,28,in:pane)
-        place(button("将颜色用于内置灯效",#selector(stageGlobalLightColor)),18,135,220,28,in:pane)
-        lightRainbow.addItems(withTitles:["保留颜色选项","单色","彩虹"]);controls.append(lightRainbow);place(lightRainbow,250,135,149,28,in:pane)
-        place(button("加入灯效配置",#selector(stageLights)),416,135,162,28,in:pane)
-        place(button("熄灭所选键",#selector(stageLightOff)),602,135,134,28,in:pane)
-        place(label("⌘点击可多选。\n逐键配色为静态。",11),750,133,186,40,in:pane)
+        place(label("颜色强度",12),8,105,75,23,in:colors);lightStrength.target=self;lightStrength.action=#selector(lightStrengthChanged);controls.append(lightStrength);place(lightStrength,94,100,168,25,in:colors)
+        place(lightStrengthLabel,275,105,51,23,in:colors)
+        lightPattern.addItems(withTitles:CherryLighting.patterns);controls.append(lightPattern);place(lightPattern,337,99,188,28,in:colors)
+        place(label("渐变终点",12),548,105,66,23,in:colors);endColor.color = .systemBlue;controls.append(endColor);place(endColor,625,97,55,31,in:colors)
+        place(button("应用到所选键",#selector(stageColor)),8,158,192,30,in:colors)
+        place(button("熄灭所选键",#selector(stageLightOff)),218,158,172,30,in:colors)
+        place(label("⌘ 点击可多选。逐键配色为静态，切换页面不会丢失已保存的编辑。",12),8,206,866,27,in:colors)
+        chooseLightTab(lightTabButtons[0])
+    }
+    @objc func chooseLightTab(_ sender:NSButton){
+        guard (0..<2).contains(sender.tag) else{return};lightTabView?.selectTabViewItem(at:sender.tag)
+        for b in lightTabButtons{b.state=b.tag==sender.tag ? .on:.off;b.needsDisplay=true}
     }
     func rgb(_ value:NSColor)->LightRGB {
         let color=value.usingColorSpace(.sRGB) ?? NSColor.white
@@ -74,7 +87,7 @@ extension HardwareWindowController {
             let start=try readLightColor()
             draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:lightPattern.indexOfSelectedItem,start:start,end:rgb(endColor.color))
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1)
-            message.stringValue="已为 \(lightSelection.count) 键加入配色，并选择自定义模式。点击「写入灯效」应用到键盘。"
+            message.stringValue="已为 \(lightSelection.count) 键加入配色，并选择自定义模式。编辑仅用于预览，尚未写入键盘。"
             update();loadLightColor()
         }catch{message.stringValue=error.localizedDescription}
     }
@@ -82,7 +95,7 @@ extension HardwareWindowController {
         guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
         do{draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0))
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1);update();loadLightColor()
-            message.stringValue="已将所选 \(lightSelection.count) 键设为熄灭。点击「写入灯效」应用到键盘。"
+            message.stringValue="已将所选 \(lightSelection.count) 键设为熄灭。编辑仅用于预览，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func stageLights(){
@@ -92,12 +105,11 @@ extension HardwareWindowController {
         draft.snapshot.parameters[3]=UInt8(4-Int(speed.doubleValue.rounded()))
         if lightDirection.indexOfSelectedItem>0{draft.snapshot.parameters[4]=UInt8(lightDirection.indexOfSelectedItem-1)}
         if lightRainbow.indexOfSelectedItem>0{draft.snapshot.parameters[5]=UInt8(lightRainbow.indexOfSelectedItem-1)}
-        profile=draft;message.stringValue="已加入模式、亮度和速度设置。点击「写入灯效」应用到键盘。";update()
+        profile=draft;message.stringValue="已加入模式、亮度和速度设置。编辑仅用于预览，尚未写入键盘。";update()
     }
     @objc func stageGlobalLightColor(){
         guard !busy,var draft=profile else{message.stringValue="请先读取键盘。";return}
-        do{let value=try readLightColor();draft.snapshot.parameters.replaceSubrange(6..<9,with:value.bytes);draft.snapshot.parameters[5]=0
-            profile=draft;lightRainbow.selectItem(at:1);setLightColor(value);message.stringValue="已设置内置灯效的单色。选择模式后点击「加入灯效配置」，再写入。"
-        }catch{message.stringValue=error.localizedDescription}
+        let value=rgb(globalLightColor.color);draft.snapshot.parameters.replaceSubrange(6..<9,with:value.bytes);draft.snapshot.parameters[5]=0
+        profile=draft;lightRainbow.selectItem(at:1);message.stringValue="已把内置灯效颜色保存到编辑区，尚未写入。"
     }
 }

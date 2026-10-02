@@ -60,6 +60,39 @@ struct HardwareSnapshot: Codable, Equatable {
     }
 }
 
+enum HardwareWritePolicy {
+    static let reason="USB 写入已停用：灯效异常仍在排查。当前可读取、编辑和保存配置，不能修改实体键盘。"
+    static func requireWrites() throws {throw HardwareError(message:reason)}
+    static func validateReadRequest(_ request:[UInt8]) throws {
+        guard request.count==64,request[0]==4 else{throw HardwareError(message:"只读查询长度无效。")}
+        let limits:[UInt8:Int]=[3:34,5:56,8:378,0x0A:378,0x14:3071,0x1B:126]
+        guard let limit=limits[request[3]] else{try requireWrites();return}
+        let count=Int(request[4]),offset=Int(request[5]) | Int(request[6])<<8
+        let checksum=Int(request[1]) | Int(request[2])<<8
+        guard count>0,count <= (request[3]==0x14 ? 54:56),offset+count<=limit,
+              request[7]==0,request[8...].allSatisfy({$0==0}),
+              checksum == request[3...].reduce(0,{ $0+Int($1) }) else{
+            throw HardwareError(message:"只读查询参数无效，未发送到键盘。")
+        }
+    }
+}
+
+extension HardwareSnapshot {
+    static func demo() -> HardwareSnapshot {
+        var s=HardwareSnapshot(keymap:Array(repeating:0,count:378),deviceInfo:Array(repeating:0,count:34),parameters:Array(repeating:0,count:56),colors:Array(repeating:0,count:378),macroData:Array(repeating:0,count:3071))
+        s.deviceInfo[6]=24;s.parameters.replaceSubrange(1..<9,with:[8,4,2,0,0,255,214,0])
+        let modifiers:[Int:UInt8]=[4:2,82:32,5:1,11:8,17:4,65:64,83:16]
+        for key in keyboardLayout(){
+            guard let slot=CherryMatrix.slot(key) else{continue}
+            let parts=key.usage?.split(separator:":"),page=parts.flatMap{Int($0[0])},usage=parts.flatMap{UInt16($0[1])} ?? (key.id=="caps" ? 57:0)
+            var record:[UInt8]=page==12 ? [0x30,UInt8(usage&255),UInt8(usage>>8)]:[0x20,modifiers[slot] ?? 0,UInt8(usage&255)]
+            if [6,71].contains(slot){record=[0xA0,slot==6 ? 3:1,0]}
+            s.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);s.colors!.replaceSubrange(slot*3..<slot*3+3,with:[255,214,0])
+        }
+        return s
+    }
+}
+
 protocol CherryHardwareAccess: AnyObject {
     func exchange(_ request: [UInt8]) throws -> [UInt8]
     func read(_ command: UInt8, count: Int, baseOffset: Int) throws -> [UInt8]
@@ -212,6 +245,7 @@ final class CherryUSB: CherryHardwareAccess {
         buffer.deinitialize(count: 64); buffer.deallocate()
     }
     func exchange(_ request: [UInt8]) throws -> [UInt8] {
+        try HardwareWritePolicy.validateReadRequest(request)
         guard let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())

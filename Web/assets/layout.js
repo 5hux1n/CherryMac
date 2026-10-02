@@ -1,4 +1,4 @@
-import {SPECIAL, SLOTS} from './tables.js?v=0.1.1';
+import {SPECIAL, SLOTS} from './tables.js?v=0.2.0';
 export const keys=[];
 function add(id,label,usage,x,row,w=1,h=1,page=7){
   keys.push({id,label,usage,page,x:18+x*36,y:20+row*36,w:w*36-4,h:h*36-4,slot:SPECIAL[id]??SLOTS[usage]});

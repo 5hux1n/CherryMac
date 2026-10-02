@@ -1,5 +1,5 @@
-import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.1.1';
-import {keys,modes} from './layout.js?v=0.1.1';
+import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.2.0';
+import {keys,modes} from './layout.js?v=0.2.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}

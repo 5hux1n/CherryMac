@@ -5,12 +5,28 @@ final class HardwareCanvas: NSView {
     override func draw(_ dirtyRect:NSRect){NSColor.windowBackgroundColor.setFill();bounds.fill()}
 }
 
+final class HardwareNavigationButton:NSButton {
+    override func draw(_ dirtyRect:NSRect){
+        let active=state == .on
+        if active{NSColor.controlAccentColor.withAlphaComponent(0.14).setFill();NSBezierPath(roundedRect:bounds,xRadius:8,yRadius:8).fill()}
+        let text=NSAttributedString(string:title,attributes:[.font:NSFont.systemFont(ofSize:13,weight:active ? .semibold:.regular),.foregroundColor:active ? NSColor.controlAccentColor:NSColor.labelColor])
+        let size=text.size();text.draw(at:NSPoint(x:(bounds.width-size.width)/2,y:(bounds.height-size.height)/2))
+        if window?.firstResponder === self{NSColor.keyboardFocusIndicatorColor.setStroke();let ring=NSBezierPath(roundedRect:bounds.insetBy(dx:1,dy:1),xRadius:8,yRadius:8);ring.lineWidth=2;ring.stroke()}
+    }
+}
+
 final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
-    let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1040,height:700))
+    let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
     let connection = NSTextField(labelWithString:"尚未读取键盘")
     let message = NSTextField(wrappingLabelWithString:"用 USB 数据线连接键盘并切到有线模式，然后读取配置。")
     let selectedLabel = NSTextField(labelWithString:"计算器")
+    let pageTitle = NSTextField(labelWithString:"按键功能")
+    let pageDescription = NSTextField(labelWithString:"点选一个按键，设置你习惯的功能。")
+    var lightTabView:NSTabView?
+    var lightTabButtons:[NSButton]=[]
+    let globalLightColor=NSColorWell()
+    var writeButtons:[NSButton]=[]
     let recordLabel = NSTextField(labelWithString:"点击键盘上的按键查看当前功能")
     let actionPicker = NSPopUpButton()
     let keyPicker = NSPopUpButton()
@@ -63,10 +79,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     }()
     var shortcutKeys:[(String,UInt8)] {hidKeys.filter{$0.1<224}}
     init() {
-        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1040,height:700),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1152,height:860),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title="CherryMac · 键盘配置";window.minSize=NSSize(width:900,height:630);window.center()
-        let scroll=NSScrollView();scroll.hasVerticalScroller=true;scroll.hasHorizontalScroller=true;scroll.documentView=root;window.contentView=scroll
+        window.title="CherryMac · 键盘配置";window.minSize=NSSize(width:1152,height:650);window.center()
+        let scroll=NSScrollView();scroll.hasVerticalScroller=true;scroll.hasHorizontalScroller=false;scroll.documentView=root;window.contentView=scroll
         build()
     }
     required init?(coder:NSCoder){fatalError()}
@@ -74,59 +90,90 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     func label(_ title:String,_ size:CGFloat=13,_ weight:NSFont.Weight = .regular)->NSTextField{let l=NSTextField(wrappingLabelWithString:title);l.font = .systemFont(ofSize:size,weight:weight);return l}
     func button(_ title:String,_ selector:Selector)->NSButton{let b=NSButton(title:title,target:self,action:selector);controls.append(b);return b}
     func build(){
-        place(label("MX 3.0S POKÉMON Wireless",24,.semibold),24,22,750,35)
-        place(connection,24,65,675,23)
-        place(button("读取键盘",#selector(readKeyboard)),900,25,112,30)
-        place(label("点选按键，编辑配置。单键保持正方形；右上角四个按钮对应计算器和媒体控制。",12),24,96,960,20)
-        root.addSubview(board)
+        let sidebar=NSBox();sidebar.boxType = .custom;sidebar.borderWidth=0;sidebar.fillColor = .controlBackgroundColor;sidebar.cornerRadius=0
+        place(sidebar,0,0,166,860)
+        place(label("CherryMac",22,.semibold),22,24,142,32)
+        place(label("键盘配置",12),23,60,132,22)
+        pageTitle.font = .systemFont(ofSize:27,weight:.semibold)
+        place(pageTitle,192,24,654,39);pageDescription.textColor = .secondaryLabelColor;place(pageDescription,192,68,665,23)
+        place(button("读取键盘",#selector(readKeyboard)),997,30,126,32)
+        connection.textColor = .secondaryLabelColor;place(connection,192,106,920,23)
+        place(label("硬件写入暂时停用。当前可读取、编辑与保存配置。",12),192,140,925,24)
+        board.frame.origin=NSPoint(x:225,y:178);root.addSubview(board)
         for spec in keyboardLayout(){let key=KeyButton(spec);key.hardwareConfigurable=true;if spec.id=="cherry"{key.title="CH"};key.target=self;key.action=#selector(selectKey(_:));board.addSubview(key);keyButtons.append(key)}
-        let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;tabView=tabs;place(tabs,24,436,988,185)
-        for title in ["键位","灯效","宏","配置文件"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
-        for (index,title) in ["键位","灯效","宏","配置文件"].enumerated(){
-            let tab=NSButton(title:title,target:self,action:#selector(chooseTab(_:)));tab.tag=index;tab.bezelStyle = .rounded
-            place(tab,24+CGFloat(index)*152,394,140,29);tabButtons.append(tab)
+        let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;tabView=tabs;place(tabs,192,462,936,294)
+        let titles=["键位","灯效","宏","配置与备份","设备与诊断"]
+        for title in titles{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
+        for (index,title) in titles.enumerated(){
+            let tab=HardwareNavigationButton(title:title,target:self,action:#selector(chooseTab(_:)));tab.tag=index;tab.isBordered=false;tab.setButtonType(.toggle)
+            place(tab,14,124+CGFloat(index)*49,140,36);tabButtons.append(tab)
         }
-        tabButtons.first?.bezelColor = .controlAccentColor
+        place(label("MX 3.0S POKÉMON\nWireless",11),23,759,130,46)
         let keys=tabs.tabViewItems[0].view!
-        selectedLabel.font = .systemFont(ofSize:18,weight:.semibold)
-        place(selectedLabel,18,16,210,28,in:keys);place(recordLabel,18,52,235,50,in:keys)
-        place(label("设置为"),277,17,65,23,in:keys)
+        selectedLabel.font = .systemFont(ofSize:19,weight:.semibold)
+        place(selectedLabel,8,8,240,29,in:keys);place(recordLabel,8,48,235,62,in:keys)
+        place(label("设置功能"),282,12,86,23,in:keys)
         actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用"])
         actionPicker.target=self;actionPicker.action=#selector(actionChanged);controls.append(actionPicker)
-        place(actionPicker,344,13,235,28,in:keys)
-        keyPicker.addItems(withTitles:shortcutKeys.map{$0.0});controls.append(keyPicker);place(keyPicker,599,13,105,28,in:keys)
-        for (i,m) in modifiers.enumerated(){controls.append(m);place(m,277+CGFloat(i%2)*176,54+CGFloat(i/2)*30,170,25,in:keys)}
-        place(button("加入待写入配置",#selector(stageKey)),735,13,190,28,in:keys)
-        place(label("计算器需先安装 macOS 快捷操作；由系统服务启动，实体键调用仍待验证。",12),277,124,640,30,in:keys)
-        place(button("安装计算器快捷操作",#selector(installCalculator)),18,123,230,28,in:keys)
+        place(actionPicker,378,8,235,28,in:keys)
+        place(label("快捷键主键"),282,57,95,23,in:keys)
+        keyPicker.addItems(withTitles:shortcutKeys.map{$0.0});controls.append(keyPicker);place(keyPicker,378,53,155,28,in:keys)
+        for (i,m) in modifiers.enumerated(){controls.append(m);place(m,282+CGFloat(i%2)*196,99+CGFloat(i/2)*31,185,25,in:keys)}
+        place(button("保存到编辑区",#selector(stageKey)),282,182,186,30,in:keys)
+        place(button("安装计算器快捷操作",#selector(installCalculator)),8,161,230,30,in:keys)
+        place(label("系统计算器使用 macOS 快捷操作。\n安装后可把计算器键设置为 ⌃⌥⌘C。",12),8,210,236,60,in:keys)
         buildLighting(tabs.tabViewItems[1].view!)
         let macros=tabs.tabViewItems[2].view!
-        place(label("宏名称"),18,15,65,24,in:macros);controls.append(macroName);place(macroName,85,11,220,28,in:macros)
-        macroPicker.addItem(withTitle:"新建宏");macroPicker.target=self;macroPicker.action=#selector(chooseMacro);controls.append(macroPicker);place(macroPicker,323,11,210,28,in:macros)
-        place(button("删除",#selector(deleteMacro)),543,11,55,28,in:macros)
-        let macroScroll=NSScrollView(frame:NSRect(x:18,y:52,width:570,height:108));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
+        place(label("已保存的宏"),8,12,100,24,in:macros)
+        macroPicker.addItem(withTitle:"新建宏");macroPicker.target=self;macroPicker.action=#selector(chooseMacro);controls.append(macroPicker);place(macroPicker,116,8,226,28,in:macros)
+        place(button("删除宏",#selector(deleteMacro)),359,8,90,28,in:macros)
+        place(label("名称"),8,57,90,24,in:macros);controls.append(macroName);place(macroName,116,53,333,28,in:macros)
+        let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:154));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
         macroText.frame=NSRect(origin:.zero,size:macroScroll.contentSize);macroText.minSize=NSSize(width:0,height:macroScroll.contentSize.height);macroText.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
-        macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:6,height:6)
-        macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:12,weight:.regular);macroText.string="A 按下 0\nA 松开 50";macros.addSubview(macroScroll)
-        macroKey.addItems(withTitles:hidKeys.filter{$0.1 != 0}.map{$0.0});controls.append(macroKey);place(macroKey,614,11,122,28,in:macros)
-        place(label("间隔 ms"),744,15,64,24,in:macros);controls.append(macroDelay);place(macroDelay,815,11,88,28,in:macros)
-        place(button("添加按键",#selector(appendMacroKey)),614,52,135,30,in:macros)
-        place(button("保存宏",#selector(stageMacro)),766,52,139,30,in:macros)
-        place(button("分配到选中的键",#selector(assignMacro)),614,94,291,30,in:macros)
-        place(label("实验性：执行一次。存储读写已验证，实体触发与断电保存待验证。",11),614,132,315,38,in:macros)
+        macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
+        macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 0\nA 松开 50";macros.addSubview(macroScroll)
+        place(label("添加按键"),593,12,110,24,in:macros)
+        macroKey.addItems(withTitles:hidKeys.filter{$0.1 != 0}.map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
+        place(label("间隔（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
+        place(button("添加按下与松开",#selector(appendMacroKey)),593,99,282,30,in:macros)
+        place(button("保存宏",#selector(stageMacro)),593,144,282,30,in:macros)
+        place(button("分配到选中的键",#selector(assignMacro)),593,189,282,30,in:macros)
+        place(label("执行一次。实体触发、循环与鼠标宏仍在验证。",11),593,233,282,44,in:macros)
         let files=tabs.tabViewItems[3].view!
-        place(button("导出配置…",#selector(exportProfile)),18,18,180,30,in:files)
-        place(button("导入配置…",#selector(importProfile)),216,18,180,30,in:files)
-        place(button("打开自动备份",#selector(openBackups)),414,18,180,30,in:files)
-        place(button("撤销待写入改动",#selector(discardDraft)),612,18,265,30,in:files)
-        place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导入前先读取键盘；导入只载入编辑区，写入前会保留完整备份。",12),18,77,895,40,in:files)
-        place(message,24,632,557,58)
-        place(button("写入键位",#selector(writeKeys)),591,642,123,30)
-        place(button("写入宏与键位",#selector(writeMacros)),725,642,153,30)
-        place(button("写入灯效",#selector(writeLighting)),889,642,123,30)
+        place(label("配置文件",20,.semibold),8,12,850,30,in:files)
+        place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
+        place(button("导入配置…",#selector(importProfile)),8,94,180,32,in:files)
+        place(button("导出配置…",#selector(exportProfile)),208,94,180,32,in:files)
+        place(label("备份与撤销",17,.semibold),8,160,850,27,in:files)
+        place(button("打开自动备份",#selector(openBackups)),8,205,180,32,in:files)
+        place(button("撤销编辑区修改",#selector(discardDraft)),208,205,210,32,in:files)
+        place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导入前先读取键盘。导入和撤销均不修改实体键盘。",12),8,261,850,62,in:files)
+        let device=tabs.tabViewItems[4].view!
+        place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
+        place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
+        place(label("灯效写入异常正在排查，当前暂停硬件写入。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。",13),8,148,850,70,in:device)
+        place(button("Mac 端按键适配设置",#selector(openMacSettings)),8,253,230,32,in:device)
+        place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。",12),8,299,850,36,in:device)
+        place(message,192,787,925,58)
+        for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与键位",#selector(writeMacros))]{
+            let write=button(title,selector);write.tag=index;write.isEnabled=false;write.toolTip=HardwareWritePolicy.reason;place(write,954,752,174,30);writeButtons.append(write)
+        }
+        profile=try? HardwareProfile.fromHardware(HardwareSnapshot.demo())
+        connection.stringValue="预览配置 · 未连接键盘";message.stringValue="可先点选按键体验编辑。读取 USB 配置后会自动备份，当前不会写入键盘。"
+        loadLighting();refreshMacroPicker();loadSelectedAssignment();update();chooseTab(tabButtons[0])
+    }
+    @objc func openMacSettings(){(NSApp.delegate as? Adapter)?.showSettings()}
+    @objc func chooseTab(_ sender:NSButton){
+        guard let tabs=tabView,(0..<tabs.tabViewItems.count).contains(sender.tag) else{return}
+        tabs.selectTabViewItem(at:sender.tag)
+        for tab in tabButtons{tab.state=tab.tag==sender.tag ? .on:.off;tab.needsDisplay=true}
+        let titles=["按键功能","灯效","宏","配置与备份","设备与诊断"]
+        let descriptions=["点选一个按键，设置你习惯的功能。","选择内置模式，或为每个按键配色。","把连续的按键操作保存为一个动作。","保存配置，管理备份，迁移你的设置。","查看设备状态和 Mac 端适配选项。"]
+        pageTitle.stringValue=titles[sender.tag];pageDescription.stringValue=descriptions[sender.tag]
+        board.isHidden=sender.tag>=3;tabs.frame=NSRect(x:192,y:sender.tag>=3 ? 188:462,width:936,height:sender.tag>=3 ? 566:294)
+        writeButtons.forEach{$0.isHidden=$0.tag != sender.tag}
         update()
     }
-    @objc func chooseTab(_ sender:NSButton){tabView?.selectTabViewItem(at:sender.tag);for tab in tabButtons{tab.bezelColor=tab.tag==sender.tag ? .controlAccentColor:nil};update()}
     var lightingTab:Bool {tabView?.selectedTabViewItem?.identifier as? String == "灯效"}
     @objc func selectKey(_ sender:KeyButton){
         selected=sender.spec.id
@@ -150,6 +197,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         actionChanged()
     }
     func update(){
+        writeButtons.forEach{$0.isEnabled=false}
         for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
             b.lightingColor=nil
             if lightingTab,let slot=CherryMatrix.slot(b.spec),let colors=profile?.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
@@ -167,6 +215,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         guard let profile else{return}
         let parameters=profile.snapshot.parameters
         modes[0].1=parameters[1];modePicker.item(at:0)?.title="保留当前模式（\(parameters[1])）";modePicker.selectItem(at:0)
+        globalLightColor.color=NSColor(srgbRed:CGFloat(parameters[6])/255,green:CGFloat(parameters[7])/255,blue:CGFloat(parameters[8])/255,alpha:1)
         brightness.doubleValue=Double(parameters[2]);speed.doubleValue=Double(4-Int(parameters[3]));lightDirection.selectItem(at:0);lightRainbow.selectItem(at:0);loadLightColor()
     }
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
@@ -176,7 +225,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
             let result:Result<HardwareSnapshot,Error>=Result{
                 let usb=try CherryUSB();return try usb.completeSnapshot()
             }
-            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true}
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let snapshot):
                     self.baseline=snapshot;self.profile=(try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
@@ -195,11 +244,12 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         guard draft.snapshot.keymap != baseline.keymap else{message.stringValue="没有待写入的键位改动。";return}
         let newMacros=(0..<126).contains{slot in [UInt8(0x70),0x71].contains(draft.snapshot.keymap[slot*3]) && draft.snapshot.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
         if newMacros && draft.snapshot.macroData != baseline.macroData {message.stringValue="此键位依赖新的宏，请点击「写入宏与键位」。";return}
+        do{try HardwareWritePolicy.requireWrites()}catch{message.stringValue=error.localizedDescription;return}
         busy=true;controls.forEach{$0.isEnabled=false}
         message.stringValue="正在备份并写入键位，请松开全部按键，完成前不要使用键盘…"
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeKeymap(draft.snapshot.keymap,baseline:baseline)}
-            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false};self.actionChanged()
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;self.profile=remaining
@@ -214,10 +264,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         let expected:HardwareSnapshot
         do{expected=try draft.resolvedMacros()}catch{message.stringValue=error.localizedDescription;return}
         guard expected.keymap != baseline.keymap || expected.macroData != baseline.macroData else{message.stringValue="没有待写入的宏或键位改动。";return}
+        do{try HardwareWritePolicy.requireWrites()}catch{message.stringValue=error.localizedDescription;return}
         busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在备份并写入宏与键位，请松开全部按键，完成前不要使用键盘…"
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeMacroConfiguration(expected,baseline:baseline)}
-            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false};self.actionChanged()
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;remaining.snapshot.macroData=snapshot.macroData;self.profile=remaining
@@ -229,10 +280,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     }
     @objc func writeLighting(){
         guard !busy, let draft=profile,let baseline else{message.stringValue="请先读取键盘，再编辑灯效。";return}
+        do{try HardwareWritePolicy.requireWrites()}catch{message.stringValue=error.localizedDescription;return}
         busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在备份并写入灯效…"
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeLighting(draft.snapshot,baseline:baseline)}
-            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true}
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.parameters=snapshot.parameters;remaining.snapshot.colors=snapshot.colors;self.profile=remaining
@@ -274,7 +326,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
             let macro=KeyboardMacro(name:macroName.stringValue,steps:steps);try macro.validate()
             if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
-            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存，共 \(steps.count) 步。分配到按键后，可联合写入宏与键位。";update()
+            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前硬件写入停用。";update()
         }catch{message.stringValue=error.localizedDescription}
     }
     func refreshMacroPicker(selected:String?=nil){macroPicker.removeAllItems();macroPicker.addItem(withTitle:"新建宏");macroPicker.addItems(withTitles:profile?.macros.map{$0.name} ?? []);if let selected{macroPicker.selectItem(withTitle:selected)}}
