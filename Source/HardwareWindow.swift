@@ -351,7 +351,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 if name.hasPrefix("HID:"){usage=UInt8(name.dropFirst(4))}else{usage=self.hidKeys.first(where:{$0.0.caseInsensitiveCompare(name) == .orderedSame})?.1}
                 guard let usage else{throw HardwareError(message:"无法识别宏按键：\(name)")}
                 return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay)}
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps);try macro.validate()
+            let selectedIndex=macroPicker.indexOfSelectedItem-1
+            let existing=p.macros.first(where:{$0.name==macroName.stringValue})
+            let preference=existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil)
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference);try macro.validate()
             if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
             profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()

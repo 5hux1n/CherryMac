@@ -514,6 +514,25 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     let macro=try! WindowsProfile.decode(data(root),baseline:baseline)
     precondition(macro.macroCount==1 && macro.profile.macroBindings?[102]=="Control A" && macro.profile.macros[0].steps.first!.usage==224)
     precondition(try! CherryMacroCodec.decode(macro.profile.snapshot.macroData!)[0].steps==macro.profile.macros[0].steps)
+    var fixedRoot=root
+    var fixedActions=fixedRoot["ActionInfo"] as! [[String:Any]]
+    var fixedContent=fixedActions[0]["ActionContent"] as! [String:Any]
+    for flag in [0,1]{
+        fixedContent["ActionMacroFixTimeIsSelected"]=flag;fixedContent["ActionMacroFixTimeValue"]=777
+        fixedActions[0]["ActionContent"]=fixedContent;fixedRoot["ActionInfo"]=fixedActions
+        let imported=try! WindowsProfile.decode(data(fixedRoot),baseline:baseline).profile
+        precondition(imported.macros[0].recordingDelay == .init(fixed:flag==1,milliseconds:777))
+        precondition(imported.snapshot.macroData==macro.profile.snapshot.macroData,"fixed preference must not replace serialized per-event Delay")
+        precondition(try! HardwareProfile.decode(imported.encoded())==imported)
+        let edit=HardwareWindowController();edit.profile=imported;edit.refreshMacroPicker(selected:"Control A");edit.chooseMacro()
+        edit.macroText.string="HID:224 按下 0\nA 按下 20\nA 松开 75\nHID:224 松开 0";edit.stageMacro()
+        precondition(edit.profile!.macros[0].recordingDelay==imported.macros[0].recordingDelay)
+        precondition(edit.profile!.macros[0].steps[2].delayMilliseconds==75)
+    }
+    for invalid in [-1,60001]{
+        fixedContent["ActionMacroFixTimeValue"]=invalid;fixedActions[0]["ActionContent"]=fixedContent;fixedRoot["ActionInfo"]=fixedActions
+        rejected{_ = try WindowsProfile.decode(data(fixedRoot),baseline:baseline)}
+    }
     let editor=HardwareWindowController();let initialPreview=editor.profile;rejected{try editor.loadImport(data(root))};precondition(editor.profile==initialPreview)
     editor.baseline=baseline;try! editor.loadImport(data(root));precondition(editor.baseline==baseline && editor.profile==macro.profile)
     let saved=editor.profile;root["//"]="46";rejected{try editor.loadImport(data(root))};precondition(editor.profile==saved)

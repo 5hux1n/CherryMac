@@ -194,3 +194,23 @@ test('Windows macro playback imports all supported bindings without changing the
     root.ActionInfo[0].ActionContent.ActionMacroType=3;assert.throws(()=>importWindows(root,base));assert.deepEqual(base,old);
   }
 });
+
+test('Windows fixed-interval preference preserves actual event delays and profile roundtrip',()=>{
+  const root=windowsFixture(),baseline=demoSnapshot(),before=clone(baseline);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  const content={ActionMacroType:0,ActionMacroLoopValue:1,ActionMacroEvents:macro.steps.map(s=>({Type:10,Button:s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds}))};
+  root.ActionInfo=[{ActionType:2,ActionName:'AB',ActionContent:content}];
+  const bank=importWindows(root,baseline).snapshot.macroData;
+  for(const fixed of [0,1]){
+    Object.assign(content,{ActionMacroFixTimeIsSelected:fixed,ActionMacroFixTimeValue:777});
+    const p=importWindows(root,baseline);
+    assert.deepEqual(p.macros[0].recordingDelay,{fixed:fixed===1,milliseconds:777});
+    assert.deepEqual(p.macros[0].steps,macro.steps);assert.deepEqual(p.snapshot.macroData,bank);
+    assert.deepEqual(parseProfile(JSON.stringify(p)),p);
+  }
+  for(const milliseconds of [-1,60001,1.5,true]){
+    content.ActionMacroFixTimeValue=milliseconds;assert.throws(()=>importWindows(root,baseline));
+  }
+  assert.throws(()=>validateMacro({...macro,recordingDelay:{fixed:1,milliseconds:777}}));
+  assert.deepEqual(baseline,before);
+});

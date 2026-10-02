@@ -13,6 +13,7 @@ export function validateSnapshot(s,complete=false){
 }
 export function validateMacro(m){
   requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
+  if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
     requireThat(Number.isInteger(s.usage)&&s.usage>=4&&s.usage<=231&&typeof s.pressed==='boolean'&&Number.isInteger(s.delayMilliseconds)&&s.delayMilliseconds>=0&&s.delayMilliseconds<=60000,'宏按键或延迟超出范围。');
@@ -116,14 +117,14 @@ export function importWindows(root,baseline){
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         if(!imported.has(index)){
-          requireThat(winInt(c.ActionMacroFixTimeIsSelected??0,'固定延迟',0,1)===0,'固定间隔宏尚需核对，请保留逐步延迟。');
+          const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
           requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
           const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
             if(type===10&&button>=4&&button<224)usage=button;
             else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
             else throw new Error('鼠标和滚动宏尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000)};});
           const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
-          const macro={name,steps};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
+          const macro={name,steps,recordingDelay};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
         }const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
       }else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);

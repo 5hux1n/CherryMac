@@ -38,6 +38,22 @@ for(const [mode,count,record] of [['count',3,[0x71,0,3]],['held',1,[0x70,0,1]],[
   await page.locator('#tab-macros').click();
 }
 await page.screenshot({path:join(artifacts,'macro-playback.png'),fullPage:true});
+// Import a fixed-interval preference, edit/rename through the real form, and export.
+// This part runs before installing Fake: it has no keyboard connection.
+const fixedProfile=JSON.parse(await readFile(join(artifacts,'playback-toggle.json'),'utf8'));
+fixedProfile.macros[0].recordingDelay={fixed:true,milliseconds:777};
+await page.locator('#tab-profiles').click();
+await page.locator('#file').setInputFiles({name:'fixed-profile.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixedProfile))});
+await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('导入'));
+await page.locator('#tab-macros').click();await page.locator('#macro-list').selectOption('测试宏');
+await page.locator('#macro-name').fill('固定选项保留');await page.locator('#save-macro').click();
+await page.locator('#tab-profiles').click();const fixedDownload=page.waitForEvent('download');await page.locator('#export').click();
+await (await fixedDownload).saveAs(join(artifacts,'fixed-edited.json'));
+const edited=JSON.parse(await readFile(join(artifacts,'fixed-edited.json'),'utf8'));
+assert.deepEqual(edited.macros[0].recordingDelay,fixedProfile.macros[0].recordingDelay);
+assert.deepEqual(edited.macros[0].steps,fixedProfile.macros[0].steps);
+assert.deepEqual(edited.snapshot.macroData,fixedProfile.snapshot.macroData);
+assert.equal(edited.macroBindings['102'],'固定选项保留');
 // Install a simulated WebHID device. This never requests actual hardware access.
 await page.evaluate(()=>{
   class Fake extends EventTarget{

@@ -87,7 +87,7 @@ enum WindowsProfile {
                 case 2:
                     if importedMacros[actionIndex]==nil {
                         let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
-                        guard fixed==0 else{throw HardwareError(message:"Windows 固定间隔宏暂不支持导入，请改为逐步延迟。")}
+                        let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
                         guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
                         let steps=try events.map{event->KeyboardMacro.Step in
                             let type=try integer(event["Type"],"宏 Type",range:0...127)
@@ -104,7 +104,7 @@ enum WindowsProfile {
                         var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
                         let stem=name;var suffix=1
                         while result.macros.contains(where:{$0.name==name}){name="\(stem) (\(suffix))";suffix+=1}
-                        let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();result.macros.append(macro);importedMacros[actionIndex]=name
+                        let macro=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:fixed==1,milliseconds:fixedMilliseconds));try macro.validate();result.macros.append(macro);importedMacros[actionIndex]=name
                     }
                     let name=importedMacros[actionIndex]!;result.macroBindings![slot]=name
                     let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)

@@ -1,6 +1,10 @@
 import Foundation
 
 struct KeyboardMacro: Codable, Equatable {
+    struct RecordingDelay:Codable,Equatable {
+        var fixed:Bool
+        var milliseconds:Int
+    }
     struct Step: Codable, Equatable {
         var usage: UInt8
         var pressed: Bool
@@ -8,7 +12,10 @@ struct KeyboardMacro: Codable, Equatable {
     }
     var name: String
     var steps: [Step]
+    // Recorder preference from Windows JSON, not a firmware delay override.
+    var recordingDelay:RecordingDelay? = nil
     func validate() throws {
+        if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 80,
               !steps.isEmpty, steps.count <= 256 else { throw HardwareError(message: "宏名称或步骤数量无效。") }
         var held = Set<UInt8>()
