@@ -86,3 +86,36 @@ enum CherryMacroCodec {
         throw HardwareError(message:"未知宏执行方式，原始数据保留。")
     }
 }
+
+// Focused recorder state only: callers supply observed events and a monotonic
+// millisecond clock. No hooks, HID writes, or synthesized release events.
+struct MacroRecorder {
+    enum Timing:String {case actual,fixed,ignore}
+    let timing:Timing
+    let fixedMilliseconds:Int
+    private(set) var active=true
+    private(set) var steps:[KeyboardMacro.Step]=[]
+    private var held=Set<Int>()
+    private var lastMilliseconds:Int
+    init(timing:Timing,fixedMilliseconds:Int=0,startedMilliseconds:Int)throws{
+        guard (0...60000).contains(fixedMilliseconds),startedMilliseconds>=0 else{throw HardwareError(message:"录制间隔或时钟无效。")}
+        self.timing=timing;self.fixedMilliseconds=fixedMilliseconds;lastMilliseconds=startedMilliseconds
+    }
+    mutating func observe(usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,milliseconds:Int,repeatEvent:Bool=false)throws{
+        guard active else{throw HardwareError(message:"录制已停止。")}
+        guard milliseconds>=lastMilliseconds,(kind == .mouse ? [UInt8(1),2,4,8,16].contains(usage):(4...231).contains(usage)) else{throw HardwareError(message:"录制事件或时钟无效。")}
+        let identity=Int(usage)+(kind == .mouse ? 256:0)
+        if repeatEvent || (pressed ? held.contains(identity):!held.contains(identity)){return}
+        guard steps.count<256 else{throw HardwareError(message:"录制最多 256 个事件，请取消或缩短操作。")}
+        let delay=timing == .fixed ? fixedMilliseconds:timing == .ignore ? 0:min(60000,milliseconds-lastMilliseconds)
+        steps.append(.init(usage:usage,pressed:pressed,delayMilliseconds:delay,kind:kind))
+        if pressed{held.insert(identity)}else{held.remove(identity)}
+        lastMilliseconds=milliseconds
+    }
+    mutating func finish(name:String)throws->KeyboardMacro{
+        guard active,held.isEmpty else{throw HardwareError(message:"请先松开全部录制按键，再停止录制。")}
+        let result=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:timing == .fixed,milliseconds:fixedMilliseconds))
+        try result.validate();active=false;return result
+    }
+    mutating func cancel(){active=false;steps=[];held=[]}
+}

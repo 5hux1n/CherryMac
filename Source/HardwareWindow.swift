@@ -62,6 +62,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var selected = "calculator"
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
+    var macroRecordingSheet:MacroRecordingSheet?
+    var recordingPreference:KeyboardMacro.RecordingDelay?
     var busy=false
     var lastKeyBackup:URL?{UserDefaults.standard.string(forKey:"hardware.lastKeyBackup").map{URL(fileURLWithPath:$0)}}
     var controls:[NSControl]=[]
@@ -145,7 +147,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroPlayback.addItems(withTitles:["指定执行次数","按住持续","再次按键停止"]);macroPlayback.target=self;macroPlayback.action=#selector(playbackChanged);controls.append(macroPlayback)
         place(label("执行方式"),8,262,95,24,in:macros);place(macroPlayback,116,258,170,28,in:macros)
         place(label("次数"),306,262,55,24,in:macros);controls.append(macroRepeat);place(macroRepeat,370,258,80,28,in:macros)
-        place(label("仅编辑与导出；宏实体写入暂缓。",11),593,233,282,44,in:macros)
+        place(button("录制操作…",#selector(recordMacro)),593,233,282,30,in:macros)
         let files=tabs.tabViewItems[3].view!
         place(label("配置文件",20,.semibold),8,12,850,30,in:files)
         place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
@@ -355,18 +357,30 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay,kind:mouse != nil ? .mouse:nil)}
             let selectedIndex=macroPicker.indexOfSelectedItem-1
             let existing=p.macros.first(where:{$0.name==macroName.stringValue})
-            let preference=existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil)
+            let preference=recordingPreference ?? (existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil))
             let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference);try macro.validate()
             if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
-            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
+            profile=p;recordingPreference=nil;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
         }catch{message.stringValue=error.localizedDescription}
     }
     func refreshMacroPicker(selected:String?=nil){macroPicker.removeAllItems();macroPicker.addItem(withTitle:"新建宏");macroPicker.addItems(withTitles:profile?.macros.map{$0.name} ?? []);if let selected{macroPicker.selectItem(withTitle:selected)}}
     @objc func chooseMacro(){
+        recordingPreference=nil
         guard macroPicker.indexOfSelectedItem>0,let profile else{macroName.stringValue="新宏";macroText.string="";return}
         let macro=profile.macros[macroPicker.indexOfSelectedItem-1];macroName.stringValue=macro.name
         macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+    }
+    @objc func recordMacro(){
+        guard !busy,profile?.macroBindings != nil,let parent=window,macroRecordingSheet==nil else{return}
+        let sheet=MacroRecordingSheet(name:macroName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "录制宏":macroName.stringValue){[weak self] macro in
+            guard let self else{return};self.macroRecordingSheet=nil
+            guard let macro else{self.message.stringValue="录制已取消，原步骤保留。";return}
+            self.recordingPreference=macro.recordingDelay;self.macroName.stringValue=macro.name
+            self.macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+            self.message.stringValue="已采用 \(macro.steps.count) 个录制事件，请点击保存宏。"
+        }
+        macroRecordingSheet=sheet;parent.beginSheet(sheet.window!)
     }
     @objc func appendMacroKey(){
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
@@ -391,7 +405,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
             let imported=try WindowsProfile.decode(data,baseline:baseline);next=imported.profile;summary=imported.summary
         }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}
-        profile=next;message.stringValue=summary;loadLighting();refreshMacroPicker();loadSelectedAssignment();update()
+        profile=next;recordingPreference=nil;message.stringValue=summary;loadLighting();refreshMacroPicker();loadSelectedAssignment();update()
     }
     @objc func importProfile(){
         let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
@@ -418,6 +432,63 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
     func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
-    @objc func discardDraft(){guard let baseline else{return};profile=(try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
+    @objc func discardDraft(){guard let baseline else{return};recordingPreference=nil;profile=(try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作。把目标键设为“打开系统计算器”，保存到编辑区后点击“写入键位”。"}catch{message.stringValue=error.localizedDescription}}
+}
+
+// An explicit sheet records AppKit events delivered to its focus area only.
+// No global event monitors, accessibility hooks or hardware access.
+final class MacroRecordingArea:NSView {
+    weak var owner:MacroRecordingSheet?
+    override var acceptsFirstResponder:Bool{true}
+    override func draw(_ dirtyRect:NSRect){NSColor.controlBackgroundColor.setFill();bounds.fill();let text=owner?.recorder == nil ? "录制区 · 点击开始后在此操作":"正在录制 · 松开全部按键后停止";(text as NSString).draw(at:NSPoint(x:16,y:bounds.midY),withAttributes:[.font:NSFont.systemFont(ofSize:15),.foregroundColor:NSColor.labelColor])}
+    override func keyDown(with event:NSEvent){owner?.keyboard(event,pressed:true)}
+    override func keyUp(with event:NSEvent){owner?.keyboard(event,pressed:false)}
+    override func flagsChanged(with event:NSEvent){owner?.modifier(event)}
+    override func performKeyEquivalent(with event:NSEvent)->Bool{guard owner?.recorder != nil else{return false};owner?.keyboard(event,pressed:true);return true}
+    override func mouseDown(with event:NSEvent){window?.makeFirstResponder(self);owner?.mouse(event,pressed:true)}
+    override func mouseUp(with event:NSEvent){owner?.mouse(event,pressed:false)}
+    override func rightMouseDown(with event:NSEvent){owner?.mouse(event,pressed:true)}
+    override func rightMouseUp(with event:NSEvent){owner?.mouse(event,pressed:false)}
+    override func otherMouseDown(with event:NSEvent){owner?.mouse(event,pressed:true)}
+    override func otherMouseUp(with event:NSEvent){owner?.mouse(event,pressed:false)}
+}
+final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
+    let name:String
+    let completion:(KeyboardMacro?)->Void
+    let timing=NSPopUpButton(frame:.zero,pullsDown:false),delay=NSTextField(string:"30")
+    let mouseOption=NSButton(checkboxWithTitle:"记录录制区内的鼠标按钮",target:nil,action:nil)
+    let start=NSButton(title:"开始录制",target:nil,action:nil),stop=NSButton(title:"停止并采用",target:nil,action:nil),cancelButton=NSButton(title:"取消",target:nil,action:nil)
+    let area=MacroRecordingArea(frame:NSRect(x:20,y:82,width:520,height:112)),status=NSTextField(labelWithString:"只记录本窗口事件；系统占用的快捷键请手动添加。")
+    var recorder:MacroRecorder?
+    var closed=false
+    static let modifiers:[UInt16:(UInt8,UInt)] = [59:(224,1),56:(225,2),58:(226,32),55:(227,8),62:(228,8192),60:(229,4),61:(230,64),54:(231,16)]
+    static let nativeUsages:[UInt16:UInt8] = Dictionary(uniqueKeysWithValues:Dictionary(grouping:hidToMacKey.filter{$0.key>=4 && $0.key<=231},by:{$0.value}).compactMap{code,entries in entries.count==1 ? (code,UInt8(entries[0].key)):nil})
+    init(name:String,completion:@escaping(KeyboardMacro?)->Void){
+        self.name=name;self.completion=completion
+        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:330),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        panel.title="录制宏";super.init(window:panel);panel.delegate=self
+        let root=panel.contentView!;root.wantsLayer=true;root.layer?.backgroundColor=NSColor.windowBackgroundColor.cgColor;area.owner=self
+        let intro=NSTextField(wrappingLabelWithString:"选择事件间隔，开始后在录制区按键。完成前松开全部按键；切换窗口会取消录制并保留原步骤。")
+        intro.frame=NSRect(x:20,y:274,width:520,height:40);root.addSubview(intro)
+        timing.addItems(withTitles:["实际间隔","固定间隔","忽略间隔"]);timing.frame=NSRect(x:20,y:236,width:180,height:28);delay.frame=NSRect(x:216,y:236,width:80,height:26);root.addSubview(timing);root.addSubview(delay)
+        let unit=NSTextField(labelWithString:"毫秒（0–60000）");unit.frame=NSRect(x:306,y:236,width:190,height:24);root.addSubview(unit)
+        mouseOption.frame=NSRect(x:20,y:204,width:300,height:24);root.addSubview(mouseOption);root.addSubview(area)
+        status.frame=NSRect(x:20,y:50,width:520,height:24);root.addSubview(status)
+        for (index,button) in [start,stop,cancelButton].enumerated(){button.frame=NSRect(x:20+index*172,y:10,width:160,height:30);button.bezelStyle = .rounded;button.target=self;root.addSubview(button)}
+        start.action=#selector(begin);stop.action=#selector(finish);cancelButton.action=#selector(cancel);stop.isEnabled=false
+    }
+    required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
+    static func clock()->Int{Int(ProcessInfo.processInfo.systemUptime*1000)}
+    func controls(){let active=recorder != nil;start.isEnabled = !active;stop.isEnabled=active;timing.isEnabled = !active;delay.isEnabled = !active;mouseOption.isEnabled = !active;area.needsDisplay=true}
+    @objc func begin(){do{guard NSEvent.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{throw HardwareError(message:"请先松开修饰键，再开始录制。")};guard let value=Int(delay.stringValue)else{throw HardwareError(message:"请输入固定间隔毫秒。")};recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock());controls();status.stringValue="0 个事件";window?.makeFirstResponder(area)}catch{status.stringValue=error.localizedDescription}}
+    func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{recorder?.cancel();recorder=nil;controls();status.stringValue=error.localizedDescription}}
+    func keyboard(_ event:NSEvent,pressed:Bool){guard recorder != nil else{return};guard let usage=Self.nativeUsages[event.keyCode]else{recorder?.cancel();recorder=nil;controls();status.stringValue="此按键编码不明确，请手动添加；录制已取消。";return};observe(usage,pressed:pressed,repeatEvent:event.isARepeat)}
+    func modifier(_ event:NSEvent){guard let (usage,mask)=Self.modifiers[event.keyCode]else{return};observe(usage,pressed:event.modifierFlags.rawValue & mask != 0)}
+    func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on,let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{return};observe(usage,kind:.mouse,pressed:pressed)}
+    @objc func finish(){do{guard recorder != nil else{return};let macro=try recorder!.finish(name:name);complete(macro)}catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
+    @objc func cancel(){recorder?.cancel();complete(nil)}
+    func complete(_ macro:KeyboardMacro?){guard !closed else{return};closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}
+    func windowShouldClose(_ sender:NSWindow)->Bool{cancel();return false}
+    func windowDidResignKey(_ notification:Notification){guard recorder != nil,!closed else{return};recorder?.cancel();recorder=nil;controls();status.stringValue="窗口失去焦点，录制已取消；原步骤保留。"}
 }

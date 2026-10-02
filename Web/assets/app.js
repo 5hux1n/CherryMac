@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.5.0';
-import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,validatePlayback,rgb,hex,paint} from './model.js?v=0.5.0';
+import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint} from './model.js?v=0.5.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.5.0';
 import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.5.0';
 import {saveBackup,listBackups,download} from './storage.js?v=0.5.0';
@@ -7,6 +7,7 @@ import {WRITE_BLOCK_REASON} from './safety.js?v=0.5.0';
 import {saveLog,listLogs} from './logs.js?v=0.5.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
+let recorder=null,recordingPreference=null;
 let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const supported=isSecureContext&&'hid' in navigator;
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error);}
@@ -34,6 +35,8 @@ function render(){
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
   for(const id of ['save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot));
+  $('record-start').disabled=busy||!macroKnown||!!recorder;$('record-stop').disabled=!recorder;$('record-cancel').disabled=!recorder;
+  if(recorder)recordControls(true);
   if(busy)$('connect').disabled=true;
 }
 function syncLights(){const p=profile.snapshot.parameters;$('mode').value=String(p[1]);$('brightness').value=Math.min(4,p[2]);$('brightness-label').textContent=p[2];$('speed').value=4-Math.min(4,p[3]);$('direction').value=p[4]<=1?String(p[4]):'';$('rainbow').value=p[5]<=1?String(p[5]):'';$('global-color-input').value=hex(p.slice(6,9));loadColor();}
@@ -41,7 +44,7 @@ function setColor(b){const value=hex(b);$('color').value=value;$('hex').value=va
 function loadColor(){const k=keys.find(k=>k.id===selected);if(profile.snapshot.colors)setColor(profile.snapshot.colors.slice(k.slot*3,k.slot*3+3));}
 function refreshMacros(name=''){const list=$('macro-list');list.replaceChildren(new Option('新建宏',''));profile.macros.forEach(m=>list.add(new Option(m.name,m.name)));list.value=name;if(list.value!==name)list.value='';}
 function loadPlayback(){const k=keys.find(k=>k.id===selected),p=profile.macroModes?.[k.slot]??{mode:'count',count:1};const name=profile.macroBindings?.[k.slot];if(name){$('macro-list').value=name;loadMacro();}$('macro-playback').value=p.mode;$('macro-repeat').value=p.count;$('macro-repeat').disabled=p.mode!=='count'||busy;}
-function loadMacro(){const m=profile.macros.find(m=>m.name===$('macro-list').value);steps=clone(m?.steps??[]);$('macro-name').value=m?.name??'';renderSteps();}
+function loadMacro(){recordingPreference=null;const m=profile.macros.find(m=>m.name===$('macro-list').value);steps=clone(m?.steps??[]);$('macro-name').value=m?.name??'';renderSteps();}
 function usageOptions(select,modifiers=true){for(const [u,name] of Object.entries(usageNames))if(modifiers||Number(u)<224)select.add(new Option(`${name} · ${u}`,u));}
 const mouseMacroNames={1:'鼠标左键',2:'鼠标右键',4:'鼠标中键',8:'鼠标后退',16:'鼠标前进'};
 function macroOptions(select){usageOptions(select);for(const [code,name] of Object.entries(mouseMacroNames))select.add(new Option(name,`mouse:${code}`));}
@@ -80,7 +83,7 @@ $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').va
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
 $('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已设置内置灯效单色，尚未写入。');});
 $('macro-playback').onchange=()=>{$('macro-repeat').disabled=$('macro-playback').value!=='count';};$('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>{const event={};setMacroUsage(event,$('macro-key').value);steps.push({...event,pressed:true,delayMilliseconds:0},{...event,pressed:false,delayMilliseconds:30});renderSteps();};
-$('save-macro').onclick=()=>act(()=>{const p=clone(profile),old=$('macro-list').value,m={name:$('macro-name').value.trim(),steps:clone(steps)};const preference=p.macros.find(m=>m.name===old)?.recordingDelay;if(preference!=null)m.recordingDelay=clone(preference);validateMacro(m);requireThat(!p.macros.some(macro=>macro.name===m.name&&macro.name!==old),'宏名称已存在。');const index=p.macros.findIndex(m=>m.name===old);if(index<0)p.macros.push(m);else{p.macros[index]=m;for(const [slot,name] of Object.entries(p.macroBindings??{}))if(name===old)p.macroBindings[slot]=m.name;}p.snapshot=resolveMacros(p);profile=p;refreshMacros(m.name);loadMacro();status('宏已保存到编辑区，尚未写入键盘。');});
+$('save-macro').onclick=()=>act(()=>{const p=clone(profile),old=$('macro-list').value,m={name:$('macro-name').value.trim(),steps:clone(steps)};const preference=recordingPreference??p.macros.find(m=>m.name===old)?.recordingDelay;if(preference!=null)m.recordingDelay=clone(preference);validateMacro(m);requireThat(!p.macros.some(macro=>macro.name===m.name&&macro.name!==old),'宏名称已存在。');const index=p.macros.findIndex(m=>m.name===old);if(index<0)p.macros.push(m);else{p.macros[index]=m;for(const [slot,name] of Object.entries(p.macroBindings??{}))if(name===old)p.macroBindings[slot]=m.name;}p.snapshot=resolveMacros(p);profile=p;refreshMacros(m.name);loadMacro();status('宏已保存到编辑区，尚未写入键盘。');});
 $('assign-macro').onclick=()=>act(()=>{const name=$('macro-list').value,key=keys.find(k=>k.id===selected);requireThat(name&&editableSlots.has(key.slot),'请选择已保存的宏和可配置按键。');const p=clone(profile);const playback={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(playback);p.macroBindings[key.slot]=name;p.macroModes??={};p.macroModes[key.slot]=playback;p.snapshot=resolveMacros(p);profile=p;status(`已将 ${name} 分配到 ${key.label}，尚未写入。`);});
 $('delete-macro').onclick=()=>act(()=>{const name=$('macro-list').value;requireThat(name,'请选择要删除的宏。');const p=clone(profile);for(const [slot,binding] of Object.entries(p.macroBindings))if(binding===name){p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];}p.macros=p.macros.filter(m=>m.name!==name);p.snapshot=resolveMacros(p);profile=p;refreshMacros();loadMacro();status('已删除宏，原绑定键设为禁用，尚未写入。');});
 $('connect').onclick=()=>operation(async()=>{status('请在浏览器弹窗中选择 CHERRY USB 键盘。');const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘，配置没有变化。');if(hid)await hid.close();baseline=null;hid=new CherryHID(devices[0],{log:saveLog,progress:message=>status(message+'…'),onDisconnect:error=>{status(error.message,true);render();}});await hid.open();await read();});
@@ -103,3 +106,24 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
 if(!supported){$('compatibility').hidden=false;$('compatibility').textContent=!isSecureContext?'当前网址不是安全环境。请使用 HTTPS 或 localhost 打开，才能连接 USB 键盘。':'此浏览器不支持 WebHID。请在电脑上的 Chrome 或 Edge 打开；当前仍可预览与编辑配置。';}
 refreshMacros();syncLights();render();status('预览模式 · 连接读取后可独立写入按键；灯效和宏写入暂缓。');
+
+// Record only within the visible focus area. No global hooks or HID commands.
+const physicalCodes={Enter:40,Escape:41,Backspace:42,Tab:43,Space:44,Minus:45,Equal:46,BracketLeft:47,BracketRight:48,Backslash:49,Semicolon:51,Quote:52,Backquote:53,Comma:54,Period:55,Slash:56,CapsLock:57,PrintScreen:70,ScrollLock:71,Pause:72,Insert:73,Home:74,PageUp:75,Delete:76,End:77,PageDown:78,ArrowRight:79,ArrowLeft:80,ArrowDown:81,ArrowUp:82,NumLock:83,NumpadDivide:84,NumpadMultiply:85,NumpadSubtract:86,NumpadAdd:87,NumpadEnter:88,Numpad0:98,NumpadDecimal:99,ContextMenu:101,ControlLeft:224,ShiftLeft:225,AltLeft:226,MetaLeft:227,ControlRight:228,ShiftRight:229,AltRight:230,MetaRight:231};
+for(let i=0;i<26;i++)physicalCodes[`Key${String.fromCharCode(65+i)}`]=4+i;
+for(let i=1;i<=9;i++){physicalCodes[`Digit${i}`]=29+i;physicalCodes[`Numpad${i}`]=88+i;}physicalCodes.Digit0=39;
+for(let i=1;i<=24;i++)physicalCodes[`F${i}`]=i<=12?57+i:91+i;
+const recordClock=()=>Math.floor(performance.now());
+function recordControls(active){for(const id of ['record-start','record-timing','record-delay','record-mouse','macro-list','macro-name','save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=active;$('record-stop').disabled=!active;$('record-cancel').disabled=!active;}
+function cancelRecording(reason){if(!recorder)return;recorder.cancel();recorder=null;recordControls(false);render();$('record-status').textContent=reason;$('record-area').textContent='录制已取消 · 原步骤保留';}
+$('record-start').onclick=event=>{if(busy||profile.macroBindings==null)return;if(event.ctrlKey||event.shiftKey||event.altKey||event.metaKey){$('record-status').textContent='请先松开修饰键，再开始录制。';return;}try{recorder=new MacroRecorder({timing:$('record-timing').value,fixedMilliseconds:Number($('record-delay').value),startedMilliseconds:recordClock()});recordControls(true);$('record-area').textContent='正在录制 · 完全松开按键后点击停止';$('record-status').textContent='0 个事件';$('record-area').focus();}catch(error){$('record-status').textContent=error.message;}};
+$('record-stop').onclick=()=>{if(!recorder)return;try{const m=recorder.finish($('macro-name').value.trim()||'录制宏');steps=clone(m.steps);recordingPreference=m.recordingDelay;recorder=null;recordControls(false);renderSteps();render();$('record-status').textContent=`已采用 ${steps.length} 个事件，点击保存宏保留。`;}catch(error){$('record-status').textContent=error.message;$('record-area').focus();}};
+$('record-cancel').onclick=()=>cancelRecording('录制已取消，原步骤保留。');
+function observeRecording(event,usage,pressed,kind){if(!recorder||!event.isTrusted)return;try{recorder.observe({usage,pressed,kind,milliseconds:recordClock(),repeatEvent:!!event.repeat});$('record-status').textContent=`${recorder.steps.length} 个事件 · ${recorder.held.size} 个尚未松开`;}catch(error){cancelRecording(error.message);}}
+for(const [type,pressed] of [['keydown',true],['keyup',false]])$('record-area').addEventListener(type,event=>{if(!recorder)return;event.preventDefault();event.stopPropagation();if(event.isComposing||physicalCodes[event.code]==null){cancelRecording('该按键或输入法事件无法可靠识别，请手动添加。');return;}observeRecording(event,physicalCodes[event.code],pressed);});
+$('record-area').addEventListener('mousedown',event=>{if(!recorder||!$('record-mouse').checked)return;event.preventDefault();observeRecording(event,({0:1,1:4,2:2,3:8,4:16})[event.button],true,'mouse');});
+document.addEventListener('mouseup',event=>{if(!recorder||!$('record-mouse').checked)return;observeRecording(event,({0:1,1:4,2:2,3:8,4:16})[event.button],false,'mouse');});
+$('record-area').addEventListener('contextmenu',event=>{if(recorder)event.preventDefault();});
+$('record-area').addEventListener('blur',event=>{if(recorder&&!['record-stop','record-cancel'].includes(event.relatedTarget?.id))cancelRecording('录制区失去焦点，已取消；原步骤保留。');});
+window.addEventListener('blur',()=>cancelRecording('窗口失去焦点，已取消录制。'));
+document.addEventListener('visibilitychange',()=>{if(document.hidden)cancelRecording('页面已隐藏，录制已取消。');});
+document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>cancelRecording('已切换页面，录制已取消。')));

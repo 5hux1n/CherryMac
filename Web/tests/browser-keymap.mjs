@@ -61,6 +61,21 @@ await page.locator('#tab-profiles').click();const mouseDownload=page.waitForEven
 await (await mouseDownload).saveAs(join(artifacts,'mouse-edited.json'));
 const mouseProfile=JSON.parse(await readFile(join(artifacts,'mouse-edited.json'),'utf8'));
 assert.deepEqual(mouseProfile.macros.find(m=>m.name==='鼠标中键测试').steps,[{kind:'mouse',usage:4,pressed:true,delayMilliseconds:0},{kind:'mouse',usage:4,pressed:false,delayMilliseconds:30}]);
+// Focused recorder: trusted browser automation events, no real keyboard/HID.
+await page.locator('#tab-macros').click();await page.locator('#macro-list').selectOption('');await page.locator('#macro-name').fill('录制测试');
+await page.locator('#macro-recording summary').click();await page.locator('#record-timing').selectOption('fixed');await page.locator('#record-delay').fill('777');
+await page.keyboard.down('Shift');await page.locator('#record-start').click();assert.match(await page.locator('#record-status').textContent(),/松开修饰键/);assert.equal(await page.locator('#record-stop').isDisabled(),true);await page.keyboard.up('Shift');
+await page.locator('#record-start').click();await page.keyboard.down('a');await page.locator('#record-stop').click();
+assert.match(await page.locator('#record-status').textContent(),/松开/);await page.keyboard.up('a');await page.locator('#record-stop').click();await page.locator('#save-macro').click();
+await page.locator('#tab-profiles').click();const recordedDownload=page.waitForEvent('download');await page.locator('#export').click();await (await recordedDownload).saveAs(join(artifacts,'recorded.json'));
+const recorded=JSON.parse(await readFile(join(artifacts,'recorded.json'),'utf8')).macros.find(m=>m.name==='录制测试');
+assert.deepEqual(recorded.steps,[{usage:4,pressed:true,delayMilliseconds:777},{usage:4,pressed:false,delayMilliseconds:777}]);assert.deepEqual(recorded.recordingDelay,{fixed:true,milliseconds:777});
+await page.locator('#tab-macros').click();await page.locator('#record-start').click();await page.keyboard.down('b');await page.locator('#tab-profiles').click();await page.keyboard.up('b');await page.locator('#tab-macros').click();
+assert.equal(await page.locator('#record-stop').isDisabled(),true);assert.equal(await page.locator('.macro-step').count(),2);assert.match(await page.locator('#record-status').textContent(),/取消/);
+await page.locator('#macro-name').fill('录制鼠标');await page.locator('#record-mouse').check();await page.locator('#record-start').click();await page.locator('#record-area').click();await page.locator('#record-stop').click();await page.locator('#save-macro').click();
+await page.locator('#tab-profiles').click();const mouseRecordDownload=page.waitForEvent('download');await page.locator('#export').click();await (await mouseRecordDownload).saveAs(join(artifacts,'recorded-mouse.json'));
+const recordedMouse=JSON.parse(await readFile(join(artifacts,'recorded-mouse.json'),'utf8')).macros.find(m=>m.name==='录制鼠标');
+assert.deepEqual(recordedMouse.steps,[{usage:1,pressed:true,delayMilliseconds:777,kind:'mouse'},{usage:1,pressed:false,delayMilliseconds:777,kind:'mouse'}]);
 // Install a simulated WebHID device. This never requests actual hardware access.
 await page.evaluate(()=>{
   class Fake extends EventTarget{

@@ -22,6 +22,46 @@ func runHardwareTests() {
     precondition(CherryMatrix.special["calculator"]==102 && CherryMatrix.usageSlots[71]==90 && CherryMatrix.usageSlots[82]==94)
     let valid=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])
     try! valid.validate()
+    for timing:MacroRecorder.Timing in [.actual,.fixed,.ignore]{
+        var recorder=try! MacroRecorder(timing:timing,fixedMilliseconds:777,startedMilliseconds:100)
+        try! recorder.observe(usage:4,pressed:false,milliseconds:105)
+        try! recorder.observe(usage:4,pressed:true,milliseconds:110)
+        try! recorder.observe(usage:4,pressed:true,milliseconds:120,repeatEvent:true)
+        fails{_ = try recorder.finish(name:"record")}
+        try! recorder.observe(usage:4,kind:.mouse,pressed:true,milliseconds:130)
+        try! recorder.observe(usage:4,kind:.mouse,pressed:false,milliseconds:170)
+        try! recorder.observe(usage:4,pressed:false,milliseconds:180)
+        let result=try! recorder.finish(name:"record")
+        precondition(result.steps.map{$0.delayMilliseconds} == (timing == .actual ? [10,20,40,10]:timing == .fixed ? [777,777,777,777]:[0,0,0,0]))
+        precondition(try! CherryMacroCodec.decodeEvents(CherryMacroCodec.encodeEvents(result),name:result.name).steps==result.steps)
+        fails{try recorder.observe(usage:4,pressed:true,milliseconds:200)}
+    }
+    var captured:KeyboardMacro?
+    let sheet=MacroRecordingSheet(name:"native recorder"){captured=$0};sheet.timing.selectItem(at:1);sheet.delay.stringValue="777";sheet.begin()
+    func key(_ down:Bool)->NSEvent{NSEvent.keyEvent(with:down ? .keyDown:.keyUp,location:.zero,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,characters:"a",charactersIgnoringModifiers:"a",isARepeat:false,keyCode:0)!}
+    sheet.keyboard(key(true),pressed:true);sheet.finish();precondition(!sheet.closed && captured==nil)
+    sheet.keyboard(key(false),pressed:false);sheet.finish()
+    precondition(captured?.steps.map{$0.usage}==[4,4] && captured?.steps.map{$0.delayMilliseconds}==[777,777])
+    var chordCaptured:KeyboardMacro?
+    let chordSheet=MacroRecordingSheet(name:"chord") {chordCaptured=$0};chordSheet.begin()
+    for (pressed,raw) in [(true,UInt(1)|(1<<18)),(false,UInt(0))]{
+        let flag=NSEvent.keyEvent(with:.flagsChanged,location:.zero,modifierFlags:NSEvent.ModifierFlags(rawValue:raw),timestamp:0,windowNumber:0,context:nil,characters:"",charactersIgnoringModifiers:"",isARepeat:false,keyCode:59)!
+        chordSheet.modifier(flag)
+        if pressed{chordSheet.keyboard(key(true),pressed:true);chordSheet.keyboard(key(false),pressed:false)}
+    }
+    chordSheet.finish();precondition(chordCaptured?.steps.map{$0.usage}==[224,4,4,224])
+    let cancelled=MacroRecordingSheet(name:"cancel"){_ in preconditionFailure("focus loss must not commit recording")};cancelled.begin();cancelled.keyboard(key(true),pressed:true)
+    cancelled.windowDidResignKey(Notification(name:NSWindow.didResignKeyNotification));precondition(cancelled.recorder==nil && cancelled.stop.isEnabled==false)
+    if let path=ProcessInfo.processInfo.environment["CHERRY_RECORDER_PREVIEW"],let view=cancelled.window?.contentView{
+        view.displayIfNeeded();if let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds){view.cacheDisplay(in:view.bounds,to:bitmap);try! bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:path))}
+    }
+    var recorder=try! MacroRecorder(timing:.actual,startedMilliseconds:100)
+    try! recorder.observe(usage:4,pressed:true,milliseconds:110)
+    fails{try recorder.observe(usage:5,pressed:true,milliseconds:109)}
+    precondition(recorder.steps.count==1)
+    try! recorder.observe(usage:4,pressed:false,milliseconds:100000);precondition(recorder.steps[1].delayMilliseconds==60000)
+    recorder.cancel();precondition(recorder.steps.isEmpty);fails{_ = try recorder.finish(name:"cancelled")}
+
     let mouse=KeyboardMacro(name:"Middle + A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:true,delayMilliseconds:20,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:50,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:0)])
     let mouseGolden:[UInt8]=[0,0,0x8A,4,20,0,0x81,4,50,0,1,4,0,0,10,4]
     precondition(try! CherryMacroCodec.encodeEvents(mouse)==mouseGolden)

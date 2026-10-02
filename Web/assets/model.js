@@ -151,3 +151,23 @@ export function paint(s,selection,pattern,start,end){
     s.colors.splice(k.slot*3,3,...color);
   }s.parameters[1]=8;
 }
+
+// No I/O: focused UI adapters provide trusted observations and a monotonic clock.
+export class MacroRecorder{
+  constructor({timing='actual',fixedMilliseconds=0,startedMilliseconds}){
+    requireThat(['actual','fixed','ignore'].includes(timing)&&Number.isInteger(fixedMilliseconds)&&fixedMilliseconds>=0&&fixedMilliseconds<=60000&&Number.isSafeInteger(startedMilliseconds)&&startedMilliseconds>=0,'录制间隔或时钟无效。');
+    this.timing=timing;this.fixedMilliseconds=fixedMilliseconds;this.lastMilliseconds=startedMilliseconds;this.active=true;this.steps=[];this.held=new Set();
+  }
+  observe({usage,kind,pressed,milliseconds,repeatEvent=false}){
+    requireThat(this.active,'录制已停止。');
+    requireThat(Number.isSafeInteger(milliseconds)&&milliseconds>=this.lastMilliseconds&&typeof pressed==='boolean'&&(kind==null||kind==='mouse')&&Number.isInteger(usage)&&(kind==='mouse'?[1,2,4,8,16].includes(usage):usage>=4&&usage<=231),'录制事件或时钟无效。');
+    const identity=`${kind==='mouse'?'mouse':'key'}:${usage}`;
+    if(repeatEvent||(pressed?this.held.has(identity):!this.held.has(identity)))return;
+    requireThat(this.steps.length<256,'录制最多 256 个事件，请取消或缩短操作。');
+    const delayMilliseconds=this.timing==='fixed'?this.fixedMilliseconds:this.timing==='ignore'?0:Math.min(60000,milliseconds-this.lastMilliseconds);
+    this.steps.push({usage,pressed,delayMilliseconds,...(kind==='mouse'?{kind}:{})});
+    if(pressed)this.held.add(identity);else this.held.delete(identity);this.lastMilliseconds=milliseconds;
+  }
+  finish(name){requireThat(this.active&&this.held.size===0,'请先松开全部录制按键，再停止录制。');const m={name,steps:clone(this.steps),recordingDelay:{fixed:this.timing==='fixed',milliseconds:this.fixedMilliseconds}};validateMacro(m);this.active=false;return m;}
+  cancel(){this.active=false;this.steps=[];this.held.clear();}
+}

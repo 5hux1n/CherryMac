@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,encodeBank,decodeBank,validateMacro,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
 import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -222,4 +222,26 @@ test('official mouse macro bytes distinguish middle button from keyboard A',()=>
   for(const usage of [1,2,4,8,16]){const m={name:'mouse',steps:[{kind:'mouse',usage,pressed:true,delayMilliseconds:0},{kind:'mouse',usage,pressed:false,delayMilliseconds:50}]};assert.deepEqual(decodeBank(encodeBank([m]))[0].steps,m.steps);}
   assert.throws(()=>validateMacro({name:'cross',steps:[mixed.steps[0],mixed.steps[2]]}));
   assert.throws(()=>validateMacro({name:'bad',steps:[{kind:'mouse',usage:3,pressed:true,delayMilliseconds:0}]}));
+});
+
+test('recorder timing, repeat suppression, balanced finish, cancel and capacity',()=>{
+  for(const [timing,expected] of [['actual',[10,20,40,10]],['fixed',[777,777,777,777]],['ignore',[0,0,0,0]]]){
+    const r=new MacroRecorder({timing,fixedMilliseconds:777,startedMilliseconds:100});
+    r.observe({usage:4,pressed:false,milliseconds:105});
+    r.observe({usage:4,pressed:true,milliseconds:110});
+    r.observe({usage:4,pressed:true,milliseconds:120,repeatEvent:true});
+    assert.throws(()=>r.finish('test'));
+    r.observe({usage:4,kind:'mouse',pressed:true,milliseconds:130});
+    r.observe({usage:4,kind:'mouse',pressed:false,milliseconds:170});
+    r.observe({usage:4,pressed:false,milliseconds:180});
+    const m=r.finish('test');assert.deepEqual(m.steps.map(s=>s.delayMilliseconds),expected);
+    assert.deepEqual(decodeBank(encodeBank([m]))[0].steps,m.steps);
+    assert.throws(()=>r.observe({usage:4,pressed:true,milliseconds:200}));
+  }
+  const r=new MacroRecorder({startedMilliseconds:100});r.observe({usage:4,pressed:true,milliseconds:110});
+  assert.throws(()=>r.observe({usage:5,pressed:true,milliseconds:109}));assert.equal(r.steps.length,1);
+  r.observe({usage:4,pressed:false,milliseconds:100000});assert.equal(r.steps[1].delayMilliseconds,60000);
+  r.cancel();assert.equal(r.steps.length,0);assert.throws(()=>r.finish('test'));
+  const limit=new MacroRecorder({startedMilliseconds:0});for(let i=0;i<256;i++)limit.observe({usage:4,pressed:i%2===0,milliseconds:i});
+  assert.throws(()=>limit.observe({usage:4,pressed:true,milliseconds:257}));assert.equal(limit.steps.length,256);assert.equal(limit.held.size,0);
 });
