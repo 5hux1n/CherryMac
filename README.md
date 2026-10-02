@@ -10,6 +10,18 @@
 
 点选图上的按键即可编辑。普通单键保持正方形，右上角四个按钮分别为计算器、上一曲、播放／暂停和下一曲。
 
+## 网页版（PHP，无需构建）
+
+也可以在 **Chrome 或 Edge** 中打开网页版，点选键盘设置快捷键、逐键灯光、内置灯效和单次键盘宏，导入导出配置，并通过 WebHID 进行 USB 通信。
+
+将 [Web](Web) 目录中的 `index.php` 与 `assets` 上传到 HTTPS 的 PHP 网站即可使用，不需要 Composer、npm 或数据库服务。本机可在该目录运行 `php -S 127.0.0.1:8768 -t .`，再打开 <http://localhost:8768/>。
+
+网页版已通过离线与模拟设备读写测试，浏览器授权和实体 USB 写入仍待实测。配置文件在浏览器本地处理，不上传服务器；写入前保存本地备份，完成后读回核对。它不能代替原生 App 的全系统按键适配或 macOS 快捷操作安装。
+
+[下载 PHP 网页源码包](https://github.com/5hux1n/CherryMac/releases/download/web-v0.1.0/CherryMac-Web-0.1.0.zip) · [网页版使用与部署说明](Web/README.md)
+
+![网页版逐键配色界面](docs/网页版预览.png)
+
 ## 能做什么
 
 | 你想做的事 | CherryMac 提供的功能 | 当前状态 |
