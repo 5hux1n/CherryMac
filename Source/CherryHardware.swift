@@ -126,7 +126,7 @@ extension CherryHardwareAccess {
 }
 
 extension CherryHardwareAccess {
-    func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot) throws -> HardwareSnapshot {
+    func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot,operationLog:HardwareOperationLog? = nil) throws -> HardwareSnapshot {
         let authorization=try MacroWriteAuthorization(baseline:baseline,target:expected)
         guard let wanted=expected.macroData,let original=baseline.macroData else{throw HardwareError(message:"请重新读取包含宏数据的完整配置。")}
         let oldSlots=(0..<126).filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
@@ -134,6 +134,7 @@ extension CherryHardwareAccess {
         guard before.deviceInfo==baseline.deviceInfo,before.keymap==baseline.keymap,before.macroData==original,before.parameters==baseline.parameters,before.colors==baseline.colors else{throw HardwareError(message:"键盘配置已经变化，请重新读取后写入。")}
         if before.keymap==expected.keymap && original==wanted{return before}
         let backup=try backup(before)
+        operationLog?.record("backup",backup.path);operationLog?.record("phase","backed-up");try operationLog?.requireHealthy()
         try waitUntilKeysReleased()
         let offsets=stride(from:0,to:3071,by:54).filter{offset in let end=min(offset+54,3071);return wanted[offset..<end] != original[offset..<end]}
         func keys(_ data:[UInt8])throws{
@@ -147,19 +148,23 @@ extension CherryHardwareAccess {
         let drain=authorization.beforeDurationMilliseconds
         do {
             if !oldSlots.isEmpty {
+                operationLog?.record("phase","disabling-old-triggers")
                 try keys(disabled)
                 // No new trigger is possible; let a previously started finite
                 // sequence finish before changing its stored events.
                 try waitForMacroCompletion(seconds:Double(drain)/1000)
             }
+            operationLog?.record("phase","writing-macro-bank")
             try bank(wanted)
             guard try read(0x14,count:3071)==wanted else{throw HardwareError(message:"宏数据写后读取不一致。")}
-            if expected.keymap != before.keymap || !oldSlots.isEmpty{try keys(expected.keymap)}
+            if expected.keymap != before.keymap || !oldSlots.isEmpty{operationLog?.record("phase","writing-macro-bindings");try keys(expected.keymap)}
+            operationLog?.record("phase","readback")
             let after=try completeSnapshot()
             guard after.deviceInfo==before.deviceInfo,after.keymap==expected.keymap,after.macroData==wanted,after.parameters==before.parameters,after.colors==before.colors else{throw HardwareError(message:"宏和键位写后校验失败。")}
             return after
         }catch{
             let failure=error.localizedDescription
+            operationLog?.record("writeError",failure);operationLog?.record("phase","recovery-preflight")
             do {
                 try waitUntilKeysReleased()
                 // Disable both old and newly introduced triggers before
@@ -168,10 +173,12 @@ extension CherryHardwareAccess {
                 try keys(authorization.disabled.keymap)
                 let newDuration=authorization.targetDurationMilliseconds
                 try waitForMacroCompletion(seconds:Double(max(drain,newDuration))/1000)
+                operationLog?.record("phase","restoring-macro-and-bindings")
                 try bank(original);try keys(before.keymap)
                 let restored=try completeSnapshot()
                 guard restored.deviceInfo==before.deviceInfo,restored.keymap==before.keymap,restored.macroData==original,restored.parameters==before.parameters,restored.colors==before.colors else{throw HardwareError(message:"宏恢复后读取不一致。")}
             }catch{throw HardwareError(message:"\(failure) 自动恢复失败：\(error.localizedDescription)。备份：\(backup.path)")}
+            operationLog?.record("recovered",true)
             throw HardwareError(message:"\(failure) 已恢复原宏和键位。备份：\(backup.path)")
         }
     }
@@ -198,11 +205,15 @@ final class CherryUSB: CherryHardwareAccess {
     private let runLoop = CFRunLoopGetCurrent()!
     var trace: ((String) -> Void)?
     var observedReport: ((UInt32,[UInt8]) -> Void)?
+    private var transportDead=false
     private var keymapAuthorization:KeymapWriteAuthorization?
     private var keymapLog:HardwareOperationLog?
     private var lastKeyWriteAt:TimeInterval?
     func applyKeymap(_ keymap:[UInt8],baseline:HardwareSnapshot,log:HardwareOperationLog) throws -> HardwareSnapshot {
         guard keymapAuthorization==nil else{throw HardwareError(message:"此会话已经用于键位写入，不能更换目标。")}
+        #if CHERRY_MACRO_TEST
+        guard macroAuthorization==nil else{throw HardwareError(message:"宏事务尚未结束，不能更换目标。")}
+        #endif
         let authorization=try KeymapWriteAuthorization(baseline:baseline,keymap:keymap)
         try log.requireHealthy();keymapAuthorization=authorization;keymapLog=log;trace=log.trace
         log.record("changedSlots",authorization.changedSlots);log.record("phase","preflight")
@@ -214,6 +225,18 @@ final class CherryUSB: CherryHardwareAccess {
             return result
         }catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
     }
+    #if CHERRY_MACRO_TEST
+    private var macroAuthorization:MacroWriteAuthorization?
+    func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog)throws->HardwareSnapshot {
+        guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
+        let authorization=try MacroWriteAuthorization(baseline:baseline,target:target)
+        try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
+        defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
+        log.record("scope","macro bank and macro bindings only");log.record("before",try HardwareProfile(snapshot:baseline).encoded().base64EncodedString());log.record("target",try HardwareProfile(snapshot:target).encoded().base64EncodedString());log.record("phase","preflight")
+        do{let result=try writeMacroConfiguration(target,baseline:baseline,operationLog:log);log.record("phase","complete");try log.requireHealthy();return result}
+        catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
+    }
+    #endif
     #if CHERRY_CALCULATOR_TEST
     private var calculatorTestAuthorization:CalculatorKeyTestAuthorization?
     func authorizeCalculatorTest(baseline:HardwareSnapshot) throws {
@@ -227,7 +250,7 @@ final class CherryUSB: CherryHardwareAccess {
         self.manager = manager
         IOHIDManagerSetDeviceMatching(manager, [kIOHIDVendorIDKey: 0x046A, kIOHIDProductIDKey: 0x01CE, kIOHIDTransportKey: "USB"] as CFDictionary)
         let result = IOHIDManagerOpen(manager, 0)
-        guard result == 0 else { throw HardwareError(message: "无法打开 USB 键盘（\(result)）。请检查输入监控权限。") }
+        guard result == 0 else { transportDead=true;throw HardwareError(message: "无法打开 USB 键盘（\(result)）。请检查输入监控权限。") }
         let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
         guard devices.count == 1, let device = devices.first else {
             throw HardwareError(message: "请用数据线连接一把宝可梦键盘并切换到有线模式。")
@@ -255,8 +278,22 @@ final class CherryUSB: CherryHardwareAccess {
         if let manager { IOHIDManagerClose(manager, 0) }
         buffer.deinitialize(count: 64); buffer.deallocate()
     }
+    private func validateMacroResearchPacket(_ request:[UInt8])throws->Bool {
+        #if CHERRY_MACRO_TEST
+        if request.count==64,[UInt8(9),0x15].contains(request[3]),let authorization=macroAuthorization {
+            try authorization.validate(request);return true
+        }
+        #endif
+        return false
+    }
     func exchange(_ request: [UInt8]) throws -> [UInt8] {
-        if request.count==64,request[3]==9,let authorization=keymapAuthorization {
+        guard !transportDead else{throw HardwareError(message:"USB 会话已失效，停止发送。命令可能已执行，请重新连接并读取后恢复。")}
+        let scopedWrite=try validateMacroResearchPacket(request)
+        if scopedWrite{
+            try keymapLog?.requireHealthy()
+            if let lastKeyWriteAt{while ProcessInfo.processInfo.systemUptime-lastKeyWriteAt<1.5{RunLoop.current.run(until:Date().addingTimeInterval(0.02))}}
+            try waitUntilKeysReleased()
+        }else if request.count==64,request[3]==9,let authorization=keymapAuthorization {
             try authorization.validate(request);try keymapLog?.requireHealthy()
             if let lastKeyWriteAt{
                 while ProcessInfo.processInfo.systemUptime-lastKeyWriteAt<1.5 {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
@@ -275,19 +312,20 @@ final class CherryUSB: CherryHardwareAccess {
         guard let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())
-        if request[3]==9,keymapAuthorization != nil{try keymapLog?.requireHealthy();lastKeyWriteAt=ProcessInfo.processInfo.systemUptime}
+        if scopedWrite || (request[3]==9 && keymapAuthorization != nil){try keymapLog?.requireHealthy();lastKeyWriteAt=ProcessInfo.processInfo.systemUptime}
         let result = request.withUnsafeBufferPointer { IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 4, $0.baseAddress!, 64) }
-        guard result == 0 else { throw HardwareError(message: "USB 发送失败（\(result)）。") }
+        guard result == 0 else { transportDead=true;throw HardwareError(message: "USB 发送失败（\(result)）。") }
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
             if let index = received.firstIndex(where: { $0[3] == request[3] && (!([UInt8(3),5,6,7,8,9,0x0A,0x0B,0x14,0x15,0x1B].contains(request[3])) || $0[4..<7].elementsEqual(request[4..<7])) }) {
                 let reply = received.remove(at: index)
                 trace?("IN  " + reply.map { String(format: "%02x", $0) }.joined())
-                try CherryPacket.validate(reply, request: request)
+                do{try CherryPacket.validate(reply, request: request)}catch{transportDead=true;throw error}
                 return reply
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
+        transportDead=true
         throw HardwareError(message: "键盘回复超时（命令 \(String(format: "%02x", request[3]))）。未自动重试写入。")
     }
     func read(_ command: UInt8, count: Int, baseOffset: Int = 0) throws -> [UInt8] {
@@ -309,7 +347,7 @@ final class CherryUSB: CherryHardwareAccess {
         guard let device else {throw HardwareError(message:"USB 会话已关闭。")}
         let elements=IOHIDDeviceCopyMatchingElements(device,nil,0) as? [IOHIDElement] ?? []
         let buttons=elements.filter{element in
-            IOHIDElementGetType(element)==kIOHIDElementTypeInput_Button && IOHIDElementGetUsage(element) != 0 && [UInt32(7),12,1].contains(IOHIDElementGetUsagePage(element))
+            IOHIDElementGetType(element)==kIOHIDElementTypeInput_Button && IOHIDElementGetUsage(element) != 0 && [UInt32(7),12,1,9].contains(IOHIDElementGetUsagePage(element))
         }
         guard !buttons.isEmpty else{throw HardwareError(message:"无法确认键盘按键状态，停止写入。")}
         let valueOut=UnsafeMutablePointer<Unmanaged<IOHIDValue>>.allocate(capacity:1)

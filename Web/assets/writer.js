@@ -65,8 +65,8 @@ export async function applyConfiguration(hid,wanted,before,{gate,backup,progress
 }
 
 // This generic transaction is exercised with a scoped simulated transport.
-// CherryHID does not yet expose withMacroAuthorization, so the actual product
-// cannot use it until macro transport permissions and completion checks ship.
+// Normal CherryHID construction exposes no macro permission. The explicit
+// research transport exercises framing and recovery before product acceptance.
 export async function applyMacroConfiguration(hid,target,before,{gate,backup,waitForCompletion,progress=()=>{}}={}){
   requireThat(typeof hid?.withMacroAuthorization==='function','宏传输尚未开放，未读取或写入键盘。');
   const authorization=new MacroWriteAuthorization(before,target),wanted=authorization.expected,original=authorization.before,disabled=authorization.disabled;

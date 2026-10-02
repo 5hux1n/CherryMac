@@ -259,3 +259,27 @@ struct MacroExecutionReport:Encodable {
     let inputSHA256:String
     let assessment:MacroExecutionEvidence.Assessment
 }
+
+// Normalizes state changes from a device-filtered IOHID value stream. Neutral
+// and repeated report values are not new presses; no expected events are
+// deleted or rearranged to make the evidence pass.
+struct MacroHIDObservationAdapter {
+    private var held=Set<String>()
+    var allReleased:Bool{held.isEmpty}
+    mutating func receive(page:UInt32,usage:UInt32,value:Int,milliseconds:Int)throws -> MacroExecutionEvidence.Observation? {
+        let key=page==7 && (4...231).contains(usage)
+        let mouse=page==9 && (1...5).contains(usage)
+        guard key || mouse else {
+            if value != 0 && (page==7 || page==9 || page==12 || (page==1 && [UInt32(0x30),0x31,0x38].contains(usage))) {
+                throw HardwareError(message:"观察到尚未支持的 HID 输出，不能按普通键事件通过。")
+            }
+            return nil
+        }
+        guard value==0 || value==1,milliseconds>=0 else{throw HardwareError(message:"HID 按钮值或时钟无效。")}
+        let code:UInt8=mouse ? UInt8(1 << (usage-1)):UInt8(usage)
+        let identity="\(mouse ? "mouse":"key"):\(code)",pressed=value==1
+        guard pressed != held.contains(identity) else{return nil}
+        if pressed{held.insert(identity)}else{held.remove(identity)}
+        return .init(usage:code,pressed:pressed,milliseconds:milliseconds,kind:mouse ? .mouse:nil)
+    }
+}

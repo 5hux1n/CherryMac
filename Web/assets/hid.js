@@ -1,5 +1,5 @@
 import {requireThat,validateSnapshot} from './model.js?v=0.5.0';
-import {assertReadOnlyRequest,KeymapWriteAuthorization} from './safety.js?v=0.5.0';
+import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.5.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
 export function packet(command,offset,length,data=[],flag=0){
@@ -21,10 +21,13 @@ export function supportsDevice(device){
     descendants(c).some(d=>(d[kind]??[]).some(r=>r.reportId===4&&(r.items??[]).reduce((n,i)=>n+i.reportSize*i.reportCount,0)===504))));
 }
 export class CherryHID{
-  #keyAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
-  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{}}={}){
+  #keyAuthorization=null;#macroAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
+  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
+    // Research-only entry. Normal product construction exposes no macro write
+    // method until execution/stop/recovery and the UI have been accepted.
+    if(macroResearch===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
     this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
     this.input=e=>{if(e.reportId!==4||!this.pending)return;const p=this.pending;
       try{const bytes=new Uint8Array(1+e.data.byteLength);bytes[0]=4;bytes.set(new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength),1);p.entry.reply=Array.from(bytes);validateReply(bytes,p.request);this.finish(null,bytes);}
@@ -39,17 +42,23 @@ export class CherryHID{
   async close(){this.poison(new Error('USB 会话已关闭。'));await this.tail.catch(()=>{});}
   async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
   async withKeymapAuthorization(authorization,gate,body){
-    requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
+    requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
     this.#keyAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
+  }
+  async #withMacroAuthorization(authorization,gate,body){
+    requireThat(authorization instanceof MacroWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&gate&&typeof gate.check==='function'&&typeof body==='function','宏事务授权或释放检查无效。');
+    this.#macroAuthorization=authorization;this.#writeGate=gate;
+    try{return await body();}finally{this.#macroAuthorization=null;this.#writeGate=null;}
   }
   exchange(request){
     // Copy before queueing: callers cannot alter a previously validated packet.
     request=Array.from(request);
     const task=this.tail.then(async()=>{
       requireThat(request.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'USB 包包含无效字节。');
-      const writing=request[3]===9&&this.#keyAuthorization;
-      if(writing)this.#keyAuthorization.validate(request);else assertReadOnlyRequest(request);
+      const authorization=(request[3]===9&&this.#keyAuthorization)||([9,0x15].includes(request[3])&&this.#macroAuthorization);
+      const writing=Boolean(authorization);
+      if(writing)authorization.validate(request);else assertReadOnlyRequest(request);
       requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
       if(writing){
         if(this.#lastKeyWriteAt!=null)await sleep(Math.max(0,1500-(performance.now()-this.#lastKeyWriteAt)));

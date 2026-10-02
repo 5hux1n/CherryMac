@@ -364,3 +364,48 @@ test('execution capture capacity refuses to report success after dropping observ
   e.requestStop({milliseconds:70000,source:'simulation'});const result=e.assessment(71000);
   assert.equal(e.observations.length,65536);assert.equal(result.observedEvents,65537);assert.equal(result.failure,'captureOverflow');assert.equal(result.passed,false);
 });
+
+
+test('research macro transport uses real framing, rejects unrelated writes and revokes scope',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,...macroBinding(0));
+  const authorization=new MacroWriteAuthorization(before,target),{hid,device}=await transport(before,{macroResearch:true});
+  let checks=0;
+  await hid.withMacroAuthorization(authorization,{async check(){checks++;}},async()=>{
+    const chunk=authorization.packet(0x15,target.macroData,0);
+    await assert.rejects(hid.exchange(packet(0x0b,0,54,target.colors.slice(0,54))));
+    await assert.rejects(hid.withKeymapAuthorization(new KeymapWriteAuthorization(before,before.keymap),gate,async()=>{}));
+    assert.equal(device.requests.length,0);
+    await hid.exchange(chunk);
+    assert.deepEqual(Array.from(device.requests[0]),Array.from(chunk));
+    assert.deepEqual(device.s.macroData.slice(0,54),target.macroData.slice(0,54));
+  });
+  assert.ok(checks>=2);assert.equal(device.writeCount,1);
+  await assert.rejects(hid.exchange(authorization.packet(0x15,target.macroData,0)));
+  assert.equal(device.writeCount,1);await hid.close();
+});
+test('research macro logging failure blocks send and reply loss poisons recovery',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,...macroBinding(0));
+  const authorization=new MacroWriteAuthorization(before,target);
+  for(const fault of ['logging','timeout']){
+    const {hid,device}=await transport(before,{macroResearch:true,timeout:20,log:async()=>{if(fault==='logging')throw new Error('disk failed');}});
+    if(fault==='timeout')device.drop=true;
+    await assert.rejects(hid.withMacroAuthorization(authorization,gate,async()=>hid.exchange(authorization.packet(0x15,target.macroData,0))));
+    assert.equal(device.writeCount,fault==='logging'?0:1);
+    await assert.rejects(hid.exchange(authorization.packet(0x15,target.macroData,0)));assert.equal(device.writeCount,fault==='logging'?0:1);
+    await hid.close();
+  }
+});
+
+test('macro writer runs through framed research HID with header last and full-bank readback',async()=>{
+  const before=demoSnapshot(),target=clone(before),longMacro={name:'AB twice',steps:[...clone(macro.steps),...clone(macro.steps),...clone(macro.steps)]};
+  target.macroData=encodeBank([longMacro]);target.keymap.splice(306,3,...macroBinding(0));
+  const {hid,device}=await transport(before,{macroResearch:true});let saved,drains=[];
+  const result=await applyMacroConfiguration(hid,target,before,{gate,backup:async s=>{saved=clone(s);},waitForCompletion:async ms=>drains.push(ms)});
+  assert.ok(sameSnapshot(saved,before));assert.ok(sameSnapshot(result,target));assert.ok(sameSnapshot(device.s,target));
+  const writes=device.requests.filter(p=>[9,0x15].includes(p[3]));assert.equal(writes.length,9);
+  assert.deepEqual(writes.filter(p=>p[3]===0x15).map(p=>p[5]|p[6]<<8),[54,0]);
+  assert.ok(device.requests.every(p=>[3,5,8,10,20,9,21].includes(p[3])));assert.deepEqual(drains,[]);
+  const outgoing=hid.history.filter(e=>[9,0x15].includes(e.command));
+  for(let i=1;i<outgoing.length;i++)assert.ok(new Date(outgoing[i].at)-new Date(outgoing[i-1].at)>=1400,'packets must be throttled');
+  await assert.rejects(hid.exchange(writes[0]));assert.equal(device.writeCount,9);await hid.close();
+});

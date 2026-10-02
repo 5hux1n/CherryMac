@@ -1140,6 +1140,14 @@ func runSelfTests() {
 }
 
 let app = NSApplication.shared
+#if CHERRY_MACRO_TEST
+if CommandLine.arguments.contains("--macro-observer-self-test"){
+    MacroObserverTestController().runOfflineTests();exit(0)
+}
+if CommandLine.arguments.contains("--macro-output-observer"){
+    let tester=MacroObserverTestController();app.delegate=tester;app.run();exit(0)
+}
+#endif
 #if CHERRY_PRODUCT_TEST
 if CommandLine.arguments.contains("--product-flow-self-test"){
     ProductKeymapTestController().runOfflineTests();exit(0)
