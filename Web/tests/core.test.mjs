@@ -70,39 +70,37 @@ test('malformed reply and disconnect abort active request',async()=>{
   const {hid,device}=await transport();device.corrupt=true;await assert.rejects(hid.read(8,378),/校验/);assert.equal(hid.dead,true);
   const next=await transport();next.device.drop=true;const pending=next.hid.read(8,378);queueMicrotask(()=>next.hid.disconnected({device:next.device}));await assert.rejects(pending,/断开/);
 });
-test('backup failure and changed baseline never send writes',async()=>{
-  for(const stale of [false,true]){const {hid,device}=await transport();const base=clone(device.s),target=clone(base);target.keymap.splice(306,3,32,8,21);if(stale)device.s.parameters[8]++;
-    await assert.rejects(applyConfiguration(hid,target,base,{gate,backup:async()=>{throw new Error('disk full');}}));assert.equal(device.writeCount,0);await hid.close();}
+test('quarantined high-level entry never reads, saves or writes',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.colors.splice(42,3,22,33,44);wanted.parameters[1]=8;
+  const unexpected=async()=>{throw new Error('UNEXPECTED IO');};
+  await assert.rejects(applyConfiguration({snapshot:unexpected,exchange:unexpected},wanted,base,{gate:{check:unexpected},backup:unexpected}),/写入已停用/);
+});
+test('all device mutation and unknown commands are blocked before sendReport',async()=>{
+  const {hid,device}=await transport();
+  for(const cmd of [1,2,6,7,9,11,13,21,0xff])await assert.rejects(hid.exchange(packet(cmd,0,3,[32,0,4])),/写入已停用/);
+  assert.equal(device.requests.length,0);assert.equal(device.writeCount,0);assert.equal(hid.dead,false);
+  assert.ok(sameSnapshot(await hid.snapshot(),device.s));assert.equal(device.writeCount,0);await hid.close();
+});
+test('malformed or out-of-range queries never reach sendReport',async()=>{
+  const {hid,device}=await transport();
+  for(const request of [packet(8,377,3),packet(5,0,1,[1]),packet(5,0,1,[],0x55),packet(8,0,55)])await assert.rejects(hid.exchange(request));
+  const bad=packet(5,0,1);bad[1]++;await assert.rejects(hid.exchange(bad));
+  assert.equal(device.requests.length,0);await hid.close();
 });
 test('internal keys, hidden colors and unknown system parameters cannot be changed',()=>{
   const base=demoSnapshot();for(const mutate of [s=>s.keymap[18]=32,s=>s.colors[125*3]=1,s=>s.parameters[9]=1]){const target=clone(base);mutate(target);assert.throws(()=>validatePlan(target,base));}
-});
-test('key and lighting transaction preserves macro bank and unknown parameters',async()=>{
-  const {hid,device}=await transport(),base=clone(device.s),wanted=clone(base);wanted.keymap.splice(306,3,32,10,33);wanted.colors.splice(42,3,22,33,44);wanted.parameters[1]=3;let backup;
-  const after=await applyConfiguration(hid,wanted,base,{gate,backup:async s=>backup=clone(s)});assert.ok(sameSnapshot(backup,base));assert.ok(sameSnapshot(after,wanted));assert.deepEqual(after.macroData,base.macroData);assert.deepEqual(after.parameters.slice(9),base.parameters.slice(9));assert.ok(!device.requests.some(b=>[1,2,13].includes(b[3])));await hid.close();
-});
-test('macro bank and binding are verified together, header block last',async()=>{
-  const {hid,device}=await transport(),base=clone(device.s),p=fromHardware(base);p.macros=[macro];p.macroBindings={102:'AB'};p.snapshot=resolveMacros(p);
-  const after=await applyConfiguration(hid,p.snapshot,base,{gate,backup:async()=>{}});assert.ok(sameSnapshot(after,p.snapshot));const offsets=device.requests.filter(b=>b[3]===21).map(b=>b[5]|b[6]<<8);assert.equal(offsets.at(-1),0);assert.ok(device.requests.findIndex(b=>b[3]===21)<device.requests.findIndex(b=>b[3]===9));await hid.close();
-});
-test('rejected partial write closes session; reconnect can restore backup',async()=>{
-  const {hid,device}=await transport(),base=clone(device.s),wanted=clone(base);wanted.keymap.splice(306,3,32,8,21);device.failWrite=3;
-  // A known rejection is not a transport framing error; reopen for recovery is
-  // deliberately unnecessary here: the protocol driver closes on any bad reply.
-  await assert.rejects(applyConfiguration(hid,wanted,base,{gate,backup:async()=>{}}),/自动恢复未完成/);assert.equal(hid.dead,true);
-  const recovery=await transport(device.s);await applyConfiguration(recovery.hid,base,clone(recovery.device.s),{gate,backup:async()=>{}});assert.ok(sameSnapshot(recovery.device.s,base));await recovery.hid.close();
-});
-test('valid replies with mismatching readback automatically restore the original',async()=>{
-  const {hid,device}=await transport(),base=clone(device.s),wanted=clone(base);wanted.keymap.splice(306,3,32,8,21);device.wrongReadback=true;
-  await assert.rejects(applyConfiguration(hid,wanted,base,{gate,backup:async()=>{}}),/已恢复写入前/);assert.ok(sameSnapshot(device.s,base));assert.equal(device.writeCount,14);await hid.close();
-});
-test('losing release acknowledgement during a write stops all further mutation',async()=>{
-  const {hid,device}=await transport(),base=clone(device.s),wanted=clone(base);wanted.keymap.splice(306,3,32,8,21);let checks=0;
-  await assert.rejects(applyConfiguration(hid,wanted,base,{gate:{async check(){if(++checks>3)throw new Error('page lost focus');}},backup:async()=>{}}),/自动恢复未完成/);assert.equal(device.writeCount,2);await hid.close();
 });
 test('page gate requires mouse acknowledgement, waits for key release, disarms on blur',async()=>{
   const win=new EventTarget(),doc=new EventTarget();doc.hasFocus=()=>true;doc.visibilityState='visible';const g=new PageReleaseGate(win,doc);
   await assert.rejects(g.check());assert.throws(()=>g.acknowledge({detail:0}));assert.throws(()=>g.acknowledge({detail:1,ctrlKey:true}));g.acknowledge({detail:1});
   const down=new Event('keydown');Object.assign(down,{code:'ControlLeft'});win.dispatchEvent(down);await assert.rejects(g.check(),/按住/);
   const up=new Event('keyup');Object.assign(up,{code:'ControlLeft'});win.dispatchEvent(up);await g.check();win.dispatchEvent(new Event('blur'));await assert.rejects(g.check(),/前台/);
+});
+test('local log records request, reply, duration and timeout without retries',async()=>{
+  const stored=new Map(),{hid,device}=await transport(undefined,{log:async entry=>stored.set(entry.id,entry)});
+  await hid.read(3,34);await hid.logTasks;const entry=[...stored.values()][0];assert.equal(entry.request.length,64);assert.equal(entry.reply.length,64);assert.equal(entry.status,'ok');assert.ok(entry.durationMs>=0);assert.equal(device.writeCount,0);await hid.close();
+  const timed=await transport(undefined,{timeout:15,log:async entry=>stored.set(entry.id,entry)});timed.device.drop=true;await assert.rejects(timed.hid.read(5,56));await timed.hid.logTasks;const failed=[...stored.values()].find(e=>e.status==='error');assert.match(failed.error,/超时/);assert.equal(failed.reply,null);assert.ok(failed.durationMs>0);assert.equal(timed.device.requests.length,1);
+});
+test('malformed raw reply remains in the diagnostic log',async()=>{
+  const stored=new Map(),{hid,device}=await transport(undefined,{log:async entry=>stored.set(entry.id,entry)});device.corrupt=true;await assert.rejects(hid.read(3,34));await hid.logTasks;const entry=[...stored.values()][0];assert.equal(entry.status,'error');assert.match(entry.error,/校验/);assert.equal(entry.reply.length,64);assert.notDeepEqual(entry.reply.slice(1,3),entry.request.slice(1,3));
 });

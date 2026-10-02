@@ -1,4 +1,4 @@
-import {validateSnapshot,equal} from './model.js';
+import {validateSnapshot,equal} from './model.js?v=0.1.1';
 let database;
 function db(){if(!database)database=new Promise((resolve,reject)=>{const r=indexedDB.open('CherryMacWeb',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('备份数据库被其他页面占用。'));});return database;}
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
