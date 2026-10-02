@@ -1137,6 +1137,11 @@ func runSelfTests() {
 }
 
 let app = NSApplication.shared
+#if CHERRY_CALCULATOR_TEST
+if CommandLine.arguments.contains("--calculator-key-test"){
+    let tester=CalculatorHardwareTestController();app.delegate=tester;app.run();exit(0)
+}
+#endif
 app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {
     runSelfTests()

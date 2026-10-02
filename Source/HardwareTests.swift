@@ -50,6 +50,23 @@ func runHardwareTests() {
     runWindowsProfileTests(snapshot)
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
+    var calculatorBaseline=hardware;calculatorBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    let calculatorAuthorization=try! CalculatorKeyTestAuthorization(baseline:calculatorBaseline)
+    for map in [calculatorAuthorization.before.keymap,calculatorAuthorization.expected.keymap] {
+        for offset in stride(from:0,to:378,by:54){
+            let packet=try! CherryPacket.chunk(9,offset:offset,length:54,data:Array(map[offset..<offset+54]))
+            try! calculatorAuthorization.validate(packet)
+            fails{try HardwareWritePolicy.validateReadRequest(packet)}
+        }
+    }
+    var unrelated=calculatorAuthorization.expected.keymap;unrelated[300] ^= 1
+    fails{try calculatorAuthorization.validate(CherryPacket.chunk(9,offset:270,length:54,data:Array(unrelated[270..<324])))}
+    fails{try calculatorAuthorization.validate(CherryPacket.chunk(9,offset:306,length:3,data:[32,13,6]))}
+    for command:UInt8 in [1,2,6,7,0x0B,0x15]{fails{try calculatorAuthorization.validate(CherryPacket.chunk(command,offset:0,length:54))}}
+    var calculatorCorrupt=try! CherryPacket.chunk(9,offset:270,length:54,data:Array(calculatorAuthorization.expected.keymap[270..<324]));calculatorCorrupt[1] ^= 1
+    fails{try calculatorAuthorization.validate(calculatorCorrupt)}
+    var other=calculatorBaseline;other.keymap[306]=0x70;fails{_ = try CalculatorKeyTestAuthorization(baseline:other)}
+    print("PASS: isolated calculator test allows exact original/target keymap only; rejects unrelated keys, lighting, macros, partial blocks and malformed packets; release build stays read-only")
     for command:UInt8 in [1,2,6,7,9,0x0B,0x0D,0x15,0xFF]{fails{try HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(command,offset:0,length:3,data:[32,0,4]))}}
     try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(5,offset:0,length:56))
     try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(0x14,offset:3024,length:47))

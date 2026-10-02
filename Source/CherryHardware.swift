@@ -210,6 +210,13 @@ final class CherryUSB: CherryHardwareAccess {
     private let runLoop = CFRunLoopGetCurrent()!
     var trace: ((String) -> Void)?
     var observedReport: ((UInt32,[UInt8]) -> Void)?
+    #if CHERRY_CALCULATOR_TEST
+    private var calculatorTestAuthorization:CalculatorKeyTestAuthorization?
+    func authorizeCalculatorTest(baseline:HardwareSnapshot) throws {
+        guard calculatorTestAuthorization==nil else{throw HardwareError(message:"此 USB 测试会话已经授权，不能更换基线。")}
+        calculatorTestAuthorization=try CalculatorKeyTestAuthorization(baseline:baseline)
+    }
+    #endif
     init() throws {
         buffer.initialize(repeating: 0, count: 64)
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
@@ -245,7 +252,14 @@ final class CherryUSB: CherryHardwareAccess {
         buffer.deinitialize(count: 64); buffer.deallocate()
     }
     func exchange(_ request: [UInt8]) throws -> [UInt8] {
+        #if CHERRY_CALCULATOR_TEST
+        if request.count==64,request[3]==9,let authorization=calculatorTestAuthorization {
+            try authorization.validate(request)
+            try waitUntilKeysReleased()
+        }else{try HardwareWritePolicy.validateReadRequest(request)}
+        #else
         try HardwareWritePolicy.validateReadRequest(request)
+        #endif
         guard let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())
