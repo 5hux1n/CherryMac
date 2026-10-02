@@ -61,7 +61,7 @@ struct HardwareSnapshot: Codable, Equatable {
 }
 
 enum HardwareWritePolicy {
-    static let reason="USB 写入已停用：灯效异常仍在排查。当前可读取、编辑和保存配置，不能修改实体键盘。"
+    static let reason="此功能写入暂缓：灯效与宏写入尚未开放。请使用按键页面的独立键位写入。"
     static func requireWrites() throws {throw HardwareError(message:reason)}
     static func validateReadRequest(_ request:[UInt8]) throws {
         guard request.count==64,request[0]==4 else{throw HardwareError(message:"只读查询长度无效。")}
@@ -210,6 +210,22 @@ final class CherryUSB: CherryHardwareAccess {
     private let runLoop = CFRunLoopGetCurrent()!
     var trace: ((String) -> Void)?
     var observedReport: ((UInt32,[UInt8]) -> Void)?
+    private var keymapAuthorization:KeymapWriteAuthorization?
+    private var keymapLog:HardwareOperationLog?
+    private var lastKeyWriteAt:TimeInterval?
+    func applyKeymap(_ keymap:[UInt8],baseline:HardwareSnapshot,log:HardwareOperationLog) throws -> HardwareSnapshot {
+        guard keymapAuthorization==nil else{throw HardwareError(message:"此会话已经用于键位写入，不能更换目标。")}
+        let authorization=try KeymapWriteAuthorization(baseline:baseline,keymap:keymap)
+        try log.requireHealthy();keymapAuthorization=authorization;keymapLog=log;trace=log.trace
+        log.record("changedSlots",authorization.changedSlots);log.record("phase","preflight")
+        log.record("beforeKeymap",baseline.keymap);log.record("targetKeymap",keymap)
+        do{
+            let result=try writeKeymap(keymap,baseline:baseline,recoveryAuthorization:authorization,operationLog:log)
+            log.record("phase","complete")
+            do{try log.requireHealthy()}catch{throw HardwareError(message:"键位已写入并读回一致，但操作日志收尾失败：\(error.localizedDescription)")}
+            return result
+        }catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
+    }
     #if CHERRY_CALCULATOR_TEST
     private var calculatorTestAuthorization:CalculatorKeyTestAuthorization?
     func authorizeCalculatorTest(baseline:HardwareSnapshot) throws {
@@ -252,6 +268,13 @@ final class CherryUSB: CherryHardwareAccess {
         buffer.deinitialize(count: 64); buffer.deallocate()
     }
     func exchange(_ request: [UInt8]) throws -> [UInt8] {
+        if request.count==64,request[3]==9,let authorization=keymapAuthorization {
+            try authorization.validate(request);try keymapLog?.requireHealthy()
+            if let lastKeyWriteAt{
+                while ProcessInfo.processInfo.systemUptime-lastKeyWriteAt<1.5 {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+            }
+            try waitUntilKeysReleased()
+        }else{
         #if CHERRY_CALCULATOR_TEST
         if request.count==64,request[3]==9,let authorization=calculatorTestAuthorization {
             try authorization.validate(request)
@@ -260,9 +283,11 @@ final class CherryUSB: CherryHardwareAccess {
         #else
         try HardwareWritePolicy.validateReadRequest(request)
         #endif
+        }
         guard let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())
+        if request[3]==9,keymapAuthorization != nil{try keymapLog?.requireHealthy();lastKeyWriteAt=ProcessInfo.processInfo.systemUptime}
         let result = request.withUnsafeBufferPointer { IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 4, $0.baseAddress!, 64) }
         guard result == 0 else { throw HardwareError(message: "USB 发送失败（\(result)）。") }
         let deadline = Date().addingTimeInterval(2)
@@ -327,12 +352,12 @@ extension CherryHardwareAccess {
         try writeKeymap(expected)
     }
     @discardableResult
-    func writeKeymap(_ data: [UInt8], baseline: HardwareSnapshot? = nil) throws -> HardwareSnapshot {
+    func writeKeymap(_ data: [UInt8], baseline: HardwareSnapshot? = nil,recoveryAuthorization:KeymapWriteAuthorization? = nil,operationLog:HardwareOperationLog? = nil) throws -> HardwareSnapshot {
         guard data.count == 378 else { throw HardwareError(message: "键位表长度必须为 378 字节。") }
         let before=try snapshotForBaseline(baseline)
         if let baseline {
             try baseline.validate()
-            guard before.keymap==baseline.keymap, before.parameters==baseline.parameters, before.colors==baseline.colors,
+            guard before.deviceInfo==baseline.deviceInfo, before.keymap==baseline.keymap, before.parameters==baseline.parameters, before.colors==baseline.colors,
                   baseline.macroData==nil || before.macroData==baseline.macroData else {
                 throw HardwareError(message:"键盘配置已经变化，请重新读取后再写入。")
             }
@@ -349,6 +374,7 @@ extension CherryHardwareAccess {
         }
         if data==before.keymap { return before }
         let backup=try backup(before)
+        operationLog?.record("backup",backup.path);operationLog?.record("phase","writing")
         try waitUntilKeysReleased()
         func send(_ bytes:[UInt8]) throws {
             // 07 is the factory table. 08 reads the actual user table.
@@ -361,18 +387,23 @@ extension CherryHardwareAccess {
         }
         do {
             try send(data)
+            operationLog?.record("phase","verifying")
             let after=try snapshotForBaseline(baseline)
-            guard after.keymap==data, after.parameters==before.parameters, after.colors==before.colors,after.macroData==before.macroData else {
+            guard after.deviceInfo==before.deviceInfo, after.keymap==data, after.parameters==before.parameters, after.colors==before.colors,after.macroData==before.macroData else {
                 throw HardwareError(message:"键位表写后读取不一致，或灯效发生意外变化。")
             }
             return after
         }catch{
             let failure=error.localizedDescription
+            operationLog?.record("writeError",failure);operationLog?.record("phase","checking-recovery")
             do {
                 // Never change a mapping while a key or modifier is held.
+                if let recoveryAuthorization{try recoveryAuthorization.validateRecovery(snapshotForBaseline(baseline))}
+                operationLog?.record("phase","restoring")
                 try waitUntilKeysReleased();try send(before.keymap)
                 let restored=try snapshotForBaseline(baseline)
-                guard restored.keymap==before.keymap, restored.parameters==before.parameters, restored.colors==before.colors,restored.macroData==before.macroData else{throw HardwareError(message:"恢复后配置仍不一致。")}
+                guard restored.deviceInfo==before.deviceInfo, restored.keymap==before.keymap, restored.parameters==before.parameters, restored.colors==before.colors,restored.macroData==before.macroData else{throw HardwareError(message:"恢复后配置仍不一致。")}
+                operationLog?.record("recovered",true)
             }catch{throw HardwareError(message:"\(failure) 自动恢复失败：\(error.localizedDescription)。备份：\(backup.path)")}
             throw HardwareError(message:"\(failure) 已恢复写入前的键位表。备份：\(backup.path)")
         }
@@ -388,6 +419,9 @@ extension HardwareSnapshot {
         let url=directory.appendingPathComponent("Before-write-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
         try encoder.encode(self).write(to:url,options:.atomic)
+        let saved=try JSONDecoder().decode(HardwareSnapshot.self,from:Data(contentsOf:url))
+        try saved.validate()
+        guard saved.keymap==keymap,saved.deviceInfo==deviceInfo,saved.parameters==parameters,saved.colors==colors,saved.macroData==macroData else{throw HardwareError(message:"自动备份读回不一致，未写入。")}
         return url
     }
 }

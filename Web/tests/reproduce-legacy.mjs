@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {PageReleaseGate as PatchedGate} from '../assets/hid.js';
-import {validatePlan as patchedPreflight,applyConfiguration as quarantinedEntry} from '../assets/writer.js';
+import {validatePlan as patchedPreflight,applyConfiguration as currentEntry} from '../assets/writer.js';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const revision='7c7f31f7c82f737ea8acc75700afff9736c58c67';
@@ -106,9 +106,12 @@ try{
       patched={preflight:'accepted',legacyWriterWithPatchedGateInMemory:simulated};
     }
     let ioCalls=0;const unexpected=async()=>{ioCalls++;throw new Error('UNEXPECTED IO');};
-    await assert.rejects(quarantinedEntry({snapshot:unexpected,exchange:unexpected},wanted,before,{gate:{check:unexpected},backup:unexpected}),/写入已停用/);
+    // Current product permits keys only. Explicitly include a paused lighting
+    // change even when an observed historical transition changed keys alone.
+    const pausedTarget=clone(wanted);pausedTarget.colors[0]=before.colors[0]^1;
+    await assert.rejects(currentEntry({snapshot:unexpected,exchange:unexpected},pausedTarget,before,{gate:{check:unexpected},backup:unexpected}),/仅允许键位写入/);
     assert.equal(ioCalls,0);
-    results.push({name,success,injectedFailures:failures,patched,currentWriteEntryIOCalls:ioCalls});
+    results.push({name,success,injectedFailures:failures,patched,currentNonKeyWriteEntryIOCalls:ioCalls});
   }
   console.log(JSON.stringify({format:'CherryMacOfflineReproduction',revision,sourceSHA256:hashes,
     physicalDeviceAccess:false,physicalMalfunctionReproduced:false,

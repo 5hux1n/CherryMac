@@ -15,7 +15,7 @@ final class HardwareNavigationButton:NSButton {
     }
 }
 
-final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
+final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSWindowDelegate {
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
     let connection = NSTextField(labelWithString:"尚未读取键盘")
@@ -61,6 +61,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
     var busy=false
+    var lastKeyBackup:URL?{UserDefaults.standard.string(forKey:"hardware.lastKeyBackup").map{URL(fileURLWithPath:$0)}}
     var controls:[NSControl]=[]
     var modes:[(String,UInt8)] = [("保留当前模式",23)] + CherryLighting.modes
     let hidKeys:[(String,UInt8)] = {
@@ -81,7 +82,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     init() {
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1152,height:860),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title="CherryMac · 键盘配置";window.minSize=NSSize(width:1152,height:650);window.center()
+        window.title="CherryMac · 键盘配置";window.minSize=NSSize(width:1152,height:650);window.center();window.delegate=self
         let scroll=NSScrollView();scroll.hasVerticalScroller=true;scroll.hasHorizontalScroller=false;scroll.documentView=root;window.contentView=scroll
         build()
     }
@@ -98,7 +99,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         place(pageTitle,192,24,654,39);pageDescription.textColor = .secondaryLabelColor;place(pageDescription,192,68,665,23)
         place(button("读取键盘",#selector(readKeyboard)),997,30,126,32)
         connection.textColor = .secondaryLabelColor;place(connection,192,106,920,23)
-        place(label("硬件写入暂时停用。当前可读取、编辑与保存配置。",12),192,140,925,24)
+        place(label("按键可独立写入；灯效和宏可编辑、保存，实体写入暂缓。",12),192,140,925,24)
         board.frame.origin=NSPoint(x:225,y:178);root.addSubview(board)
         for spec in keyboardLayout(){let key=KeyButton(spec);key.hardwareConfigurable=true;if spec.id=="cherry"{key.title="CH"};key.target=self;key.action=#selector(selectKey(_:));board.addSubview(key);keyButtons.append(key)}
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;tabView=tabs;place(tabs,192,462,936,294)
@@ -147,11 +148,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         place(label("备份与撤销",17,.semibold),8,160,850,27,in:files)
         place(button("打开自动备份",#selector(openBackups)),8,205,180,32,in:files)
         place(button("撤销编辑区修改",#selector(discardDraft)),208,205,210,32,in:files)
+        place(button("恢复最近按键备份",#selector(restoreLastKeys)),438,205,222,32,in:files)
         place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导入前先读取键盘。导入和撤销均不修改实体键盘。",12),8,261,850,62,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
-        place(label("灯效写入异常正在排查，当前暂停硬件写入。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。",13),8,148,850,70,in:device)
+        place(label("仅开放按键写入，自动备份、逐包检查释放并完整读回。灯效与宏写入暂缓。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。",13),8,148,850,70,in:device)
+        place(button("打开操作日志",#selector(openLogs)),261,253,180,32,in:device)
         place(button("Mac 端按键适配设置",#selector(openMacSettings)),8,253,230,32,in:device)
         place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。",12),8,299,850,36,in:device)
         place(message,192,787,925,58)
@@ -159,7 +162,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
             let write=button(title,selector);write.tag=index;write.isEnabled=false;write.toolTip=HardwareWritePolicy.reason;place(write,954,752,174,30);writeButtons.append(write)
         }
         profile=try? HardwareProfile.fromHardware(HardwareSnapshot.demo())
-        connection.stringValue="预览配置 · 未连接键盘";message.stringValue="可先点选按键体验编辑。读取 USB 配置后会自动备份，当前不会写入键盘。"
+        connection.stringValue="预览配置 · 未连接键盘";message.stringValue="先读取 USB 配置，再点选按键编辑。点击写入键位后才会修改键盘。"
         loadLighting();refreshMacroPicker();loadSelectedAssignment();update();chooseTab(tabButtons[0])
     }
     @objc func openMacSettings(){(NSApp.delegate as? Adapter)?.showSettings()}
@@ -198,6 +201,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
     }
     func update(){
         writeButtons.forEach{$0.isEnabled=false}
+        if !busy,let baseline,let profile,profile.snapshot.deviceInfo==baseline.deviceInfo,let plan=try? KeymapWriteAuthorization(baseline:baseline,keymap:profile.snapshot.keymap){writeButtons.first?.isEnabled = !plan.changedSlots.isEmpty;writeButtons.first?.toolTip="仅写键位表；灯效与宏区保留。"}
         for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
             b.lightingColor=nil
             if lightingTab,let slot=CherryMatrix.slot(b.spec),let colors=profile?.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
@@ -219,11 +223,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         brightness.doubleValue=Double(parameters[2]);speed.doubleValue=Double(4-Int(parameters[3]));lightDirection.selectItem(at:0);lightRainbow.selectItem(at:0);loadLightColor()
     }
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
-    @objc func readKeyboard(){
+    @objc func readKeyboard(){readKeyboardThen()}
+    func readKeyboardThen(_ completion:((HardwareSnapshot)->Void)? = nil){
         guard !busy else{return};busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在读取 USB 配置…"
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{
-                let usb=try CherryUSB();return try usb.completeSnapshot()
+                let usb=try CherryUSB(),log=try? HardwareOperationLog(kind:"read")
+                usb.trace=log?.trace
+                do{let result=try usb.completeSnapshot();log?.record("phase","complete");return result}
+                catch{log?.record("phase","failed");log?.record("error",error.localizedDescription);throw error}
             }
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let snapshot):
@@ -235,27 +243,38 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
                         try self.profile!.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
                     self.loadSelectedAssignment();self.update()
-                case .failure(let error):self.connection.stringValue="USB 读取失败";self.message.stringValue=error.localizedDescription}
+                    completion?(snapshot)
+                case .failure(let error):self.baseline=nil;self.connection.stringValue="USB 读取失败";self.message.stringValue=error.localizedDescription;self.update()}
             }
         }
     }
     @objc func writeKeys(){
         guard !busy,let draft=profile,let baseline else{message.stringValue="请先读取键盘，再编辑键位。";return}
         guard draft.snapshot.keymap != baseline.keymap else{message.stringValue="没有待写入的键位改动。";return}
-        let newMacros=(0..<126).contains{slot in [UInt8(0x70),0x71].contains(draft.snapshot.keymap[slot*3]) && draft.snapshot.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
-        if newMacros && draft.snapshot.macroData != baseline.macroData {message.stringValue="此键位依赖新的宏，请点击「写入宏与键位」。";return}
-        do{try HardwareWritePolicy.requireWrites()}catch{message.stringValue=error.localizedDescription;return}
+        let plan:KeymapWriteAuthorization
+        do{guard draft.snapshot.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请使用当前读取配置编辑。")};plan=try KeymapWriteAuthorization(baseline:baseline,keymap:draft.snapshot.keymap)}catch{message.stringValue=error.localizedDescription;return}
+        let alert=NSAlert();alert.messageText="写入 \(plan.changedSlots.count) 个按键？"
+        let names=keyboardLayout().filter{key in CherryMatrix.slot(key).map{plan.changedSlots.contains($0)} ?? false}.map{key in "\(key.label.replacingOccurrences(of:"\n",with:" / ")) → \(CherryMatrix.describe(Array(plan.expected.keymap[CherryMatrix.slot(key)!*3..<CherryMatrix.slot(key)!*3+3])))"}
+        alert.informativeText=names.prefix(10).joined(separator:"\n")+(names.count>10 ? "\n另有 \(names.count-10) 个按键":"")+"\n\n请松开全部按键，写入时不要使用键盘。程序会先保存备份、检查释放并读回核对。灯效与宏区不会写入。"
+        alert.addButton(withTitle:"开始写入");alert.addButton(withTitle:"返回编辑")
+        alert.beginSheetModal(for:window!){[weak self] response in guard response == .alertFirstButtonReturn,let self else{return};self.performKeyWrite(draft: draft,baseline:baseline)}
+    }
+    func performKeyWrite(draft:HardwareProfile,baseline:HardwareSnapshot){
+        guard !busy else{return}
         busy=true;controls.forEach{$0.isEnabled=false}
         message.stringValue="正在备份并写入键位，请松开全部按键，完成前不要使用键盘…"
         queue.async{[weak self] in
-            let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeKeymap(draft.snapshot.keymap,baseline:baseline)}
+            var log:HardwareOperationLog?
+            let result:Result<HardwareSnapshot,Error>=Result{let operation=try HardwareOperationLog(kind:"keymap");log=operation;return try CherryUSB().applyKeymap(draft.snapshot.keymap,baseline:baseline,log:operation)}
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false};self.actionChanged()
+                if let path=log?.string("backup"){UserDefaults.standard.set(path,forKey:"hardware.lastKeyBackup")}
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;self.profile=remaining
-                    self.message.stringValue="键位已写入，读回校验通过。断电保存仍待验证。";self.update()
-                case .failure(let error):self.message.stringValue=error.localizedDescription
+                    self.message.stringValue="键位已写入，读回校验通过。备份和操作日志已自动保存。计算器键保留已验证，其他映射以实际测试为准。"
+                case .failure(let error):self.baseline=nil;self.connection.stringValue="需要重新读取键盘";self.message.stringValue=error.localizedDescription+(log.map{"\n日志：\($0.url.path)"} ?? "")
                 }
+                self.update()
             }
         }
     }
@@ -364,6 +383,23 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate {
         }
     }
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
+    @objc func restoreLastKeys(){
+        guard !busy else{return}
+        guard let url=lastKeyBackup else{message.stringValue="还没有本客户端写入前的按键备份。其他备份可用“导入配置”载入。";return}
+        let saved:HardwareSnapshot
+        do{saved=try HardwareProfile.decode(Data(contentsOf:url)).snapshot}catch{message.stringValue="备份无法读取：\(error.localizedDescription)";return}
+        readKeyboardThen{[weak self] current in
+            guard let self else{return}
+            do{
+                guard saved.deviceInfo==current.deviceInfo else{throw HardwareError(message:"备份的设备／固件信息不符，未恢复。")}
+                _ = try KeymapWriteAuthorization(baseline:current,keymap:saved.keymap)
+                guard var draft=self.profile else{return};draft.snapshot.keymap=saved.keymap
+                self.profile=draft;self.loadSelectedAssignment();self.update();self.writeKeys()
+            }catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
+    func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
     @objc func discardDraft(){guard let baseline else{return};profile=(try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
-    @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作：⌃⌥⌘C 打开计算器。键盘写入仍在验证。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作。把目标键设为“打开系统计算器”，保存到编辑区后点击“写入键位”。"}catch{message.stringValue=error.localizedDescription}}
 }

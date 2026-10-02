@@ -310,6 +310,8 @@ final class Adapter: NSObject, NSApplicationDelegate {
         updateKeys()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        CalculatorService.configureApplicationMenu()
         paused = true
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         status.button?.title = "⌨︎"
@@ -1178,6 +1180,9 @@ if CommandLine.arguments.contains("--self-test") {
     if let input=CommandLine.arguments.firstIndex(of:"--light-tab"),CommandLine.arguments.count>input+1,let tab=Int(CommandLine.arguments[input+1]),controller.lightTabButtons.indices.contains(tab){controller.chooseLightTab(controller.lightTabButtons[tab])}
     if CommandLine.arguments.contains("--lighting-demo"),controller.profile != nil{
         controller.lightRegion.selectItem(at:1);controller.selectLightRegion();controller.lightPattern.selectItem(at:3);controller.stageColor()
+    }
+    if CommandLine.arguments.contains("--key-demo"),controller.profile != nil{
+        controller.actionPicker.selectItem(at:3);controller.stageKey();controller.loadSelectedAssignment()
     }
     controller.window?.displayIfNeeded()
     if let bitmap=controller.root.bitmapImageRepForCachingDisplay(in:controller.root.bounds){controller.root.cacheDisplay(in:controller.root.bounds,to:bitmap);if let data=bitmap.representation(using:.png,properties:[:]){try data.write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]))}}

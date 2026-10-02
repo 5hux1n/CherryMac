@@ -1,16 +1,26 @@
 // Offline only. This script never opens a device or invokes a HID API.
 import {readFileSync} from 'node:fs';
 import {validateReply} from '../assets/hid.js';
-import {assertReadOnlyRequest} from '../assets/safety.js';
+import {assertReadOnlyRequest,KeymapWriteAuthorization} from '../assets/safety.js?v=0.3.0';
 import {bytes,validateSnapshot} from '../assets/model.js';
 const filename=process.argv[2];
 if(!filename){console.error('用法：node tests/replay-diagnostics.mjs CherryMac-diagnostics.json');process.exit(1);}
 const raw=readFileSync(filename);if(raw.length>50_000_000)throw new Error('排查文件超过 50 MB。');
 const data=JSON.parse(raw);if(data.format!=='CherryMacWebDiagnostics'||data.version!==1)throw new Error('排查文件格式无效。');
 const logs=new Map();for(const entry of [...(data.usbLogs??[]),...(data.sessionLogs??[])])logs.set(entry.id,entry);
-const report={mode:'offline; no USB access',logs:logs.size,validReplies:0,missingReplies:0,issues:[],snapshotChanges:[]};
+const report={mode:'offline; no USB access',logs:logs.size,phases:0,blockedRequests:0,validReplies:0,missingReplies:0,issues:[],snapshotChanges:[]};
+const authorizations=new Map();
+for(const e of logs.values())if(e.kind==='phase'){
+  report.phases++;
+  if(e.baseline&&e.targetKeymap)try{authorizations.set(e.operationId,new KeymapWriteAuthorization(e.baseline,e.targetKeymap));}
+  catch(error){report.issues.push({at:e.at,operationId:e.operationId,error:error.message});}
+}
 for(const e of logs.values()){
-  try{if(!bytes(e.request,64))throw new Error('请求长度或字节无效');assertReadOnlyRequest(Uint8Array.from(e.request));
+  if(e.kind==='phase')continue;
+  try{if(!bytes(e.request,64))throw new Error('请求长度或字节无效');
+    if(e.request[3]===9){const auth=authorizations.get(e.operationId);if(!auth)throw new Error('缺少该键位操作的原表／目标授权证据');auth.validate(e.request);}
+    else assertReadOnlyRequest(Uint8Array.from(e.request));
+    if(e.status==='blocked'){report.blockedRequests++;continue;}
     if(e.reply==null){report.missingReplies++;continue;}
     if(!bytes(e.reply,64))throw new Error('回复长度或字节无效');validateReply(Uint8Array.from(e.reply),Uint8Array.from(e.request));report.validReplies++;
   }catch(error){report.issues.push({at:e.at,command:e.command,offset:e.offset,error:error.message});}

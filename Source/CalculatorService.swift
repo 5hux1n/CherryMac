@@ -5,6 +5,18 @@ import AppKit
 enum CalculatorService {
     static let name="CherryMac 打开计算器"
     static let bundleID="local.cherrymac.calculator-service"
+    static func configureApplicationMenu(){
+        let main=NSMenu(),appItem=NSMenuItem(),appMenu=NSMenu(title:"CherryMac")
+        appItem.submenu=appMenu;main.addItem(appItem)
+        let services=NSMenu(title:"服务"),item=NSMenuItem(title:"服务",action:nil,keyEquivalent:"")
+        item.submenu=services;appMenu.addItem(item);appMenu.addItem(.separator())
+        let quit=NSMenuItem(title:"退出 CherryMac",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");quit.target=NSApp;appMenu.addItem(quit)
+        let edit=NSMenu(title:"编辑"),editItem=NSMenuItem(title:"编辑",action:nil,keyEquivalent:"");editItem.submenu=edit;main.addItem(editItem)
+        for (title,action,key) in [("撤销","undo:","z"),("剪切","cut:","x"),("拷贝","copy:","c"),("粘贴","paste:","v"),("全选","selectAll:","a")]{edit.addItem(NSMenuItem(title:title,action:Selector(action),keyEquivalent:key))}
+        NSApp.servicesMenu=services;NSApp.mainMenu=main
+        NSApp.registerServicesMenuSendTypes([.string,.fileURL],returnTypes:[])
+        NSUpdateDynamicServices()
+    }
     static func definition(system:[String:Any]) throws -> (info:[String:Any],document:[String:Any]) {
         let actionPath="/System/Library/Automator/Run Shell Script.action"
         guard let accepts=system["AMAccepts"],let provides=system["AMProvides"],let version=system["CFBundleVersion"] as? String,let actionClass=system["NSPrincipalClass"] as? String else{throw HardwareError(message:"系统缺少 Automator Shell Script 动作。")}

@@ -1,10 +1,10 @@
-import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.2.0';
-import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,rgb,hex,paint} from './model.js?v=0.2.0';
-import {CherryHID,PageReleaseGate} from './hid.js?v=0.2.0';
-import {applyConfiguration,validatePlan,sameSnapshot} from './writer.js?v=0.2.0';
-import {saveBackup,listBackups,download} from './storage.js?v=0.2.0';
-import {WRITE_BLOCK_REASON,assertHardwareWriteAllowed} from './safety.js?v=0.2.0';
-import {saveLog,listLogs} from './logs.js?v=0.2.0';
+import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.3.0';
+import {clone,equal,requireThat,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,rgb,hex,paint} from './model.js?v=0.3.0';
+import {CherryHID,PageReleaseGate} from './hid.js?v=0.3.0';
+import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.3.0';
+import {saveBackup,listBackups,download} from './storage.js?v=0.3.0';
+import {WRITE_BLOCK_REASON} from './safety.js?v=0.3.0';
+import {saveLog,listLogs} from './logs.js?v=0.3.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
@@ -24,12 +24,13 @@ function render(){
   const editorPage=['keys','lights','macros'].includes(tab);$('board-card').hidden=!editorPage;$('review-card').hidden=!editorPage;$('workspace').classList.toggle('single-page',!editorPage);
   document.querySelectorAll('[data-light-tab]').forEach(b=>{const active=b.dataset.lightTab===lightTab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$(`light-${b.dataset.lightTab}`).hidden=!active;});
   $('multi-label').hidden=tab!=='lights'||lightTab!=='perkey';$('board-hint').textContent=tab==='lights'?'颜色为静态预览 · ⌘ 点击多选':'普通键保持正方形 · 点击按键进行设置';
-  const online=hid&&!hid.dead&&baseline;$('connection').textContent=online?'● USB 已连接 · 已读取':'● 未连接 · 可编辑配置';$('connection').classList.toggle('connected',!!online);$('disconnect').hidden=!hid||hid.dead;$('device-status').textContent=online?'已连接 · 配置已读取，硬件写入停用':'尚未连接 · 可预览与编辑配置';
-  $('change-title').textContent=baseline?(changed?'配置编辑预览':'与读取的配置一致'):'配置编辑预览';$('changes').replaceChildren();
+  const online=hid&&!hid.dead&&baseline;$('connection').textContent=online?'● USB 已连接 · 已读取':'● 未连接 · 可编辑配置';$('connection').classList.toggle('connected',!!online);$('disconnect').hidden=!hid||hid.dead;$('device-status').textContent=online?'已连接 · 配置已读取，可独立写入按键':'尚未读取 · 可预览与编辑配置';
+  $('change-title').textContent=tab==='keys'?'待写入按键':'编辑预览';$('changes').replaceChildren();
   for(const [name,value] of [['按键功能',`${c.keys} 键`],['逐键颜色',`${c.colors} 键`],['灯效参数',c.params?'已修改':'未修改'],['宏存储',c.macros?'已修改':'未修改']]){const line=document.createElement('div');line.className='change-line';const text=document.createElement('span'),v=document.createElement('b');text.textContent=name;v.textContent=value;line.append(text,v);$('changes').append(line);}
-  $('draft-note').textContent='USB 写入已停用。仍可读取、编辑、导入导出和下载已有备份；编辑不会改变键盘。';
+  let keyPlan=null,keyError=null;if(baseline)try{keyPlan=makeKeymapPlan(s,baseline);}catch(error){keyError=error.message;}
+  $('draft-note').textContent=tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
-  $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=true;$('write').textContent='USB 写入已停用';$('confirm-write').disabled=true;
+  $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!online||tab!=='keys'||!keyPlan||!c.keys;$('write').textContent=tab==='keys'?'写入按键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
   for(const id of ['save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot));
@@ -50,7 +51,7 @@ function renderSteps(){const parent=$('macro-steps');parent.replaceChildren();st
   });}
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
-async function read(){const s=await hid.snapshot();baseline=clone(s);profile=safeProfile(s);refreshMacros();loadMacro();syncLights();try{await saveBackup(s);}catch(error){status(`读取成功，但本地备份不可用：${error.message} USB 写入仍停用。`,true);return;}status('已读取完整配置并保存本地备份。USB 写入已停用；编辑不会改变键盘。');}
+async function read(){const s=await hid.snapshot();baseline=clone(s);profile=safeProfile(s);refreshMacros();loadMacro();syncLights();try{await saveBackup(s);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status('已读取完整配置并保存本地备份。编辑后点击“写入按键”才会修改键盘。');}
 async function operation(fn){if(busy)return;busy=true;render();try{await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
 function switchTab(next){if(!pages[next])return;tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
@@ -83,18 +84,18 @@ $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(asyn
 $('discard').onclick=()=>act(()=>{profile=safeProfile(baseline??demo);refreshMacros();loadMacro();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
 $('import').onclick=()=>$('file').click();$('file').onchange=()=>operation(async()=>{const file=$('file').files[0];$('file').value='';if(!file)return;requireThat(file.size<=1_000_000,'配置文件超过 1 MB。');const p=parseProfile(await file.text(),baseline);profile=p;refreshMacros();loadMacro();syncLights();status('配置已导入编辑区，尚未写入键盘。');});
 $('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出当前编辑配置。');});
-$('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();syncLights();status('备份仅导入编辑区预览，未恢复或修改实体键盘。USB 写入已停用。');});row.append(date,get,restore);$('backups').append(row);}});
-$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.2.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份及新版只读请求／回复／耗时／错误，不能重建 0.1.0 故障时实际发送的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。USB 写入已停用。${logError?' 日志存储异常：'+logError:''}`);});
-function plan(){assertHardwareWriteAllowed();}
-$('write').onclick=()=>act(()=>{pending=plan();requireThat(!sameSnapshot(pending,baseline),'选中的写入类别没有变化。');const c=counts(pending,baseline);$('confirm-summary').textContent=`将修改 ${c.keys} 个键位、${c.colors} 个按键颜色${c.params?'，以及灯效参数':''}${c.macros?'，以及宏存储':''}。`;$('confirm').showModal();});
+$('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
+$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.3.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份、按键写入阶段、请求／回复／耗时与错误；不能重建 0.1.0 故障时的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。${logError?' 日志存储异常：'+logError:''}`);});
+function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return makeKeymapPlan(profile.snapshot,baseline);}
+$('write').onclick=()=>act(()=>{pending=plan();requireThat(!sameSnapshot(pending,baseline),'选中的写入类别没有变化。');const c=counts(pending,baseline);$('confirm-summary').textContent=`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
-$('confirm-write').onclick=e=>{let wanted;try{assertHardwareWriteAllowed();gate.acknowledge(e);wanted=pending;requireThat(wanted,'没有待写入配置。');}catch(error){status(error.message,true);return;}$('confirm').close();pending=null;void operation(async()=>{
-  const after=await applyConfiguration(hid,wanted,baseline,{gate,backup:async snapshot=>{await saveBackup(snapshot);status('写入前备份已保存。');},progress:message=>status(message+'…')});
-  const draft=clone(profile.snapshot);baseline=clone(after);profile.snapshot=clone(after);
-  if($('scope').value==='keys'){profile.snapshot.parameters=draft.parameters;profile.snapshot.colors=draft.colors;}
-  if($('scope').value==='lights'){profile.snapshot.keymap=draft.keymap;profile.snapshot.macroData=draft.macroData;}
-  syncLights();status('写入完成，完整读回一致。可以正常使用键盘；断电保留尚未验证。');
+$('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending;requireThat(wanted,'没有待写入配置。');}catch(error){status(error.message,true);return;}$('confirm').close();pending=null;void operation(async()=>{
+  let after;
+  try{after=await applyConfiguration(hid,wanted,baseline,{gate,backup:async snapshot=>{await saveBackup(snapshot);status('写入前备份已保存。');},progress:message=>status(message+'…')});}
+  catch(error){baseline=null;throw error;}
+  baseline=clone(after);profile.snapshot.keymap=clone(after.keymap);
+  syncLights();status('按键写入完成，完整读回一致。备份和日志已自动保存；其他草稿尚未写入。');
 });};
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
 if(!supported){$('compatibility').hidden=false;$('compatibility').textContent=!isSecureContext?'当前网址不是安全环境。请使用 HTTPS 或 localhost 打开，才能连接 USB 键盘。':'此浏览器不支持 WebHID。请在电脑上的 Chrome 或 Edge 打开；当前仍可预览与编辑配置。';}
-refreshMacros();syncLights();render();status('预览模式 · 可编辑和导出配置。USB 写入暂时停用。');
+refreshMacros();syncLights();render();status('预览模式 · 连接读取后可独立写入按键；灯效和宏写入暂缓。');

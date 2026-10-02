@@ -1,5 +1,5 @@
-import {requireThat,validateSnapshot} from './model.js?v=0.2.0';
-import {assertReadOnlyRequest} from './safety.js?v=0.2.0';
+import {requireThat,validateSnapshot} from './model.js?v=0.3.0';
+import {assertReadOnlyRequest,KeymapWriteAuthorization} from './safety.js?v=0.3.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
 export function packet(command,offset,length,data=[],flag=0){
@@ -21,10 +21,11 @@ export function supportsDevice(device){
     descendants(c).some(d=>(d[kind]??[]).some(r=>r.reportId===4&&(r.items??[]).reduce((n,i)=>n+i.reportSize*i.reportCount,0)===504))));
 }
 export class CherryHID{
+  #keyAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
   constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{}}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
-    this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;
+    this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
     this.input=e=>{if(e.reportId!==4||!this.pending)return;const p=this.pending;
       try{const bytes=new Uint8Array(1+e.data.byteLength);bytes[0]=4;bytes.set(new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength),1);p.entry.reply=Array.from(bytes);validateReply(bytes,p.request);this.finish(null,bytes);}
       catch(error){this.poison(error);}
@@ -36,17 +37,33 @@ export class CherryHID{
   finish(error,result){const p=this.pending;if(!p)return;this.pending=null;clearTimeout(p.timer);p.entry.durationMs=performance.now()-p.start;p.entry.status=error?'error':'ok';p.entry.error=error?.message??null;this.record(p.entry);if(error)p.reject(error);else p.resolve(result);}
   poison(error){if(this.dead)return;this.dead=true;this.finish(error);this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);void this.device.close().catch(()=>{});this.onDisconnect(error);}
   async close(){this.poison(new Error('USB 会话已关闭。'));await this.tail.catch(()=>{});}
+  async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
+  async withKeymapAuthorization(authorization,gate,body){
+    requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
+    this.#keyAuthorization=authorization;this.#writeGate=gate;
+    try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
+  }
   exchange(request){
-    const task=this.tail.then(()=>{
-      assertReadOnlyRequest(request);
+    // Copy before queueing: callers cannot alter a previously validated packet.
+    request=Array.from(request);
+    const task=this.tail.then(async()=>{
+      requireThat(request.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'USB 包包含无效字节。');
+      const writing=request[3]===9&&this.#keyAuthorization;
+      if(writing)this.#keyAuthorization.validate(request);else assertReadOnlyRequest(request);
       requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
-      const entry={id:crypto.randomUUID(),at:new Date().toISOString(),command:request[3],offset:request[5]|request[6]<<8,length:request[4],request:Array.from(request),reply:null,status:'pending',durationMs:null,error:null};
+      if(writing){
+        if(this.#lastKeyWriteAt!=null)await sleep(Math.max(0,1500-(performance.now()-this.#lastKeyWriteAt)));
+        await this.#writeGate.check();await this.flushLogs();
+      }
+      const entry={id:crypto.randomUUID(),operationId:this.operationId??null,at:new Date().toISOString(),command:request[3],offset:request[5]|request[6]<<8,length:request[4],request:Array.from(request),reply:null,status:'pending',durationMs:null,error:null};
       this.history.push(entry);this.record(entry);
       if(this.history.length>300)this.history.shift();
+      if(writing){try{await this.flushLogs();await this.#writeGate.check();requireThat(!this.dead&&this.device.opened,'键盘已经断开，停止写入。');}catch(error){entry.status='blocked';entry.error=error.message;this.record(entry);throw error;}}
       return new Promise((resolve,reject)=>{
         this.pending={request,resolve,reject,entry,start:performance.now(),timer:setTimeout(()=>this.poison(new Error('USB 回复超时；命令可能已执行。已停止发送，请重新连接并读取。')),this.timeout)};
         // WebHID receives the ID separately: 4 + 63 bytes, never a duplicated ID.
-        this.device.sendReport(4,request.slice(1)).catch(error=>this.poison(error));
+        if(writing){this.keyWritesSent++;this.#lastKeyWriteAt=performance.now();}
+        this.device.sendReport(4,Uint8Array.from(request.slice(1))).catch(error=>this.poison(error));
       });
     });this.tail=task.catch(()=>{});return task;
   }

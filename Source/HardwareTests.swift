@@ -50,6 +50,7 @@ func runHardwareTests() {
     runWindowsProfileTests(snapshot)
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
+    runScopedKeymapTests()
     var calculatorBaseline=hardware;calculatorBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let calculatorAuthorization=try! CalculatorKeyTestAuthorization(baseline:calculatorBaseline)
     for map in [calculatorAuthorization.before.keymap,calculatorAuthorization.expected.keymap] {
@@ -66,7 +67,7 @@ func runHardwareTests() {
     var calculatorCorrupt=try! CherryPacket.chunk(9,offset:270,length:54,data:Array(calculatorAuthorization.expected.keymap[270..<324]));calculatorCorrupt[1] ^= 1
     fails{try calculatorAuthorization.validate(calculatorCorrupt)}
     var other=calculatorBaseline;other.keymap[306]=0x70;fails{_ = try CalculatorKeyTestAuthorization(baseline:other)}
-    print("PASS: isolated calculator test allows exact original/target keymap only; rejects unrelated keys, lighting, macros, partial blocks and malformed packets; release build stays read-only")
+    print("PASS: isolated calculator research scope allows exact original/target only; rejects unrelated keys, lighting, macros, partial blocks and malformed packets")
     precondition(CalculatorKeyRetention.compare(calculatorAuthorization.expected,authorization:calculatorAuthorization) == .retained,"reconnected target retained")
     precondition(CalculatorKeyRetention.compare(calculatorAuthorization.before,authorization:calculatorAuthorization) == .reverted,"reconnected original reverted")
     var unexpectedMap=calculatorAuthorization.expected;unexpectedMap.keymap[3] ^= 1
@@ -92,7 +93,7 @@ func runHardwareTests() {
     for request in [try! CherryPacket.chunk(5,offset:55,length:2),try! CherryPacket.chunk(0x14,offset:0,length:56),try! CherryPacket.chunk(8,offset:0,length:1,data:[1])]{fails{try HardwareWritePolicy.validateReadRequest(request)}}
     var invalidQuery=try! CherryPacket.chunk(3,offset:0,length:34);invalidQuery[1] ^= 1;fails{try HardwareWritePolicy.validateReadRequest(invalidQuery)}
     fails{try HardwareWritePolicy.requireWrites()}
-    print("PASS: native USB policy rejects mutations and malformed queries; offline preview only")
+    print("PASS: native USB policy rejects unscoped mutations and malformed queries; lighting and macro writes remain blocked")
     let service=try! CalculatorService.definition(system:["AMAccepts":["Types":["com.apple.cocoa.string"]],"AMProvides":["Types":["com.apple.cocoa.string"]],"CFBundleVersion":"9.0","NSPrincipalClass":"RunShellScriptAction"])
     let registered=(service.info["NSServices"] as! [[String:Any]])[0]
     precondition((registered["NSSendTypes"] as! [String]).isEmpty && (registered["NSRequiredContext"] as! [String:Any]).isEmpty)
@@ -117,6 +118,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
     var heldFromCheck: Int?
     var corruptReadAt: Int?
     var backupFails = false
+    var unexpectedChangeAt:Int?
     var drains: [TimeInterval] = []
     init(_ state: HardwareSnapshot) { self.state = state }
     func snapshot(includeColors: Bool) throws -> HardwareSnapshot {
@@ -165,10 +167,51 @@ private final class SimulatedCherry: CherryHardwareAccess {
         default: preconditionFailure("unexpected mutation")
         }
         // A lost acknowledgement may follow a successful device-side write.
+        if unexpectedChangeAt==packets.count{state.parameters[9] ^= 1}
         if failSendAt == packets.count { throw HardwareError(message:"simulated lost acknowledgement") }
         try CherryPacket.validate(packet,request:packet)
         return packet
     }
+}
+
+private func runScopedKeymapTests(){
+    func fails(_ block:() throws->Void){do{try block();preconditionFailure("expected key-scope rejection")}catch{}}
+    let original=HardwareSnapshot.demo()
+    var map=original.keymap;map.replaceSubrange(306..<309,with:[32,13,6]);map.replaceSubrange(27..<30,with:[32,0,5])
+    let authorization=try! KeymapWriteAuthorization(baseline:original,keymap:map)
+    precondition(authorization.changedSlots==[9,102])
+    for bytes in [original.keymap,map]{for o in stride(from:0,to:378,by:54){try! authorization.validate(CherryPacket.chunk(9,offset:o,length:54,data:Array(bytes[o..<o+54])))}}
+    for slot in [6,71,125]{var next=original.keymap;next.replaceSubrange(slot*3..<slot*3+3,with:[32,0,4]);fails{_ = try KeymapWriteAuthorization(baseline:original,keymap:next)}}
+    var macro=original.keymap;macro.replaceSubrange(306..<309,with:[0x70,0,0]);fails{_ = try KeymapWriteAuthorization(baseline:original,keymap:macro)}
+    var oldMacro=original;oldMacro.keymap=macro;fails{_ = try KeymapWriteAuthorization(baseline:oldMacro,keymap:map)}
+    for record:[UInt8] in [[32,0,0],[32,0,4],[32,255,0],[48,205,0]]{var next=original.keymap;next.replaceSubrange(306..<309,with:record);_ = try! KeymapWriteAuthorization(baseline:original,keymap:next)}
+    for code:UInt8 in [1,2,3,224,255]{var next=original.keymap;next.replaceSubrange(306..<309,with:[32,0,code]);fails{_ = try KeymapWriteAuthorization(baseline:original,keymap:next)}}
+    fails{try authorization.validate(CherryPacket.chunk(9,offset:306,length:3,data:[32,13,6]))}
+    fails{try authorization.validate(CherryPacket.chunk(0x0B,offset:0,length:54,data:Array(original.colors!.prefix(54))))}
+    var mixed=original;mixed.keymap.replaceSubrange(0..<54,with:map[0..<54]);try! authorization.validateRecovery(mixed)
+    mixed.keymap[12] ^= 1;fails{try authorization.validateRecovery(mixed)}
+    let success=SimulatedCherry(original)
+    precondition(try! success.writeKeymap(map,baseline:original,recoveryAuthorization:authorization).keymap==map)
+    precondition(success.saved==[original] && success.packets.count==7 && success.packets.allSatisfy{$0[3]==9})
+    for packet in success.packets{try! authorization.validate(packet)}
+    let swapped=SimulatedCherry(original);swapped.state.deviceInfo[0] ^= 1
+    fails{_ = try swapped.writeKeymap(map,baseline:original,recoveryAuthorization:authorization)}
+    precondition(swapped.packets.isEmpty && swapped.saved.isEmpty)
+    let lost=SimulatedCherry(original);lost.failSendAt=6
+    fails{_ = try lost.writeKeymap(map,baseline:original,recoveryAuthorization:authorization)}
+    precondition(lost.state==original && lost.packets.count==13)
+    let outside=SimulatedCherry(original);outside.unexpectedChangeAt=7
+    fails{_ = try outside.writeKeymap(map,baseline:original,recoveryAuthorization:authorization)}
+    precondition(outside.packets.count==7 && outside.state.parameters[9] != original.parameters[9])
+    let directory=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacLogTest-\(UUID().uuidString)")
+    let logger=try! HardwareOperationLog(kind:"keymap",directory:directory)
+    logger.trace("OUT "+String(repeating:"00",count:64));logger.trace("IN  "+String(repeating:"00",count:64));logger.record("phase","complete");try! logger.requireHealthy()
+    let saved=try! JSONSerialization.jsonObject(with:Data(contentsOf:logger.url)) as! [String:Any]
+    let trace=saved["trace"] as! [[String:Any]]
+    precondition(saved["phase"] as? String == "complete" && trace.contains{$0["durationMs"] != nil})
+    precondition(trace.last?["field"] as? String == "phase" && trace.last?["value"] as? String == "complete")
+    try! FileManager.default.removeItem(at:directory);logger.record("phase","will-fail");fails{try logger.requireHealthy()}
+    print("PASS: product key scope supports ordinary/chord/media/disable, preserves hidden/internal/macro bindings, rejects non-key packets, backs up and checks scope before recovery (simulated firmware)")
 }
 
 private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
@@ -326,13 +369,14 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(editor.keyPicker.itemTitles.contains("仅修饰键") && !editor.keyPicker.itemTitles.contains("左 Control"),"key records use modifier masks, whereas macro events use separate modifier usages")
     precondition(editor.macroKey.itemTitles.contains("左 Control"))
     precondition(editor.macroText.frame.width>500 && editor.macroText.frame.height>90,"macro text must have visible editing bounds")
-    var original=fixture;original.parameters[1]=12
+    var original=fixture;original.parameters[1]=12;original.deviceInfo[6]=24;original.macroData=Array(repeating:0,count:3071)
     editor.baseline=original;editor.profile=HardwareProfile(snapshot:original)
     editor.loadLighting();editor.stageLights()
     precondition(editor.profile!.snapshot.parameters[1]==12,"keep mode must preserve this firmware's mode")
     editor.actionPicker.selectItem(at:3);editor.stageKey()
     precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x20,10,33])
     precondition(editor.baseline==original,"staging must never advance the device baseline")
+    precondition(editor.writeButtons[0].isEnabled && editor.writeButtons.dropFirst().allSatisfy{!$0.isEnabled},"only valid key writes become available")
     let printScreen=editor.keyButtons.first{$0.spec.id=="print" || $0.spec.usage=="7:70"}!
     editor.selectKey(printScreen)
     precondition(editor.actionPicker.indexOfSelectedItem==0,"selection must not reuse another key's preset")
@@ -354,7 +398,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x70,0,0])
     let assigned=editor.profile
     editor.writeKeys()
-    precondition(!editor.busy && editor.profile==assigned && editor.message.stringValue.contains("写入宏与键位"),"key-only write must refuse an unwritten macro binding without opening USB")
+    precondition(!editor.busy && editor.profile==assigned && editor.message.stringValue.contains("宏绑定改动暂缓"),"key-only write must refuse an unwritten macro binding without opening USB")
     editor.macroText.string="A 按下 0\nA 松开 75";editor.stageMacro()
     precondition(editor.profile!.macros[0].steps.last!.delayMilliseconds==75)
     precondition(editor.profile!.macroBindings?[102]=="测试宏")

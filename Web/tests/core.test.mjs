@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {clone,equal,encodeBank,decodeBank,validateMacro,fromHardware,resolveMacros,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
-import {validatePlan,applyConfiguration,sameSnapshot} from '../assets/writer.js';
+import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
+import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.3.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
 class FakeDevice extends EventTarget{
@@ -18,7 +19,7 @@ class FakeDevice extends EventTarget{
       if(cmd===6)assert.equal(b[7],0x55);this.s[target].splice(o,n,...b.slice(8,8+n));
       if(this.failWrite===this.writeCount){r[7]=255;this.failWrite=null;}
     }
-    if(this.drop)return;
+    if(this.drop||(this.dropAfterWrite&&cmd===9))return;
     if(this.corrupt)r[1]^=1;
     // DataView includes a nonzero byteOffset, as a browser is allowed to supply.
     const buf=new Uint8Array(100);buf.set(r.slice(1),13);const e=new Event('inputreport');Object.assign(e,{reportId:4,data:new DataView(buf.buffer,13,63),device:this});queueMicrotask(()=>this.dispatchEvent(e));
@@ -70,14 +71,14 @@ test('malformed reply and disconnect abort active request',async()=>{
   const {hid,device}=await transport();device.corrupt=true;await assert.rejects(hid.read(8,378),/校验/);assert.equal(hid.dead,true);
   const next=await transport();next.device.drop=true;const pending=next.hid.read(8,378);queueMicrotask(()=>next.hid.disconnected({device:next.device}));await assert.rejects(pending,/断开/);
 });
-test('quarantined high-level entry never reads, saves or writes',async()=>{
+test('non-key high-level entry never reads, saves or writes',async()=>{
   const base=demoSnapshot(),wanted=clone(base);wanted.colors.splice(42,3,22,33,44);wanted.parameters[1]=8;
   const unexpected=async()=>{throw new Error('UNEXPECTED IO');};
-  await assert.rejects(applyConfiguration({snapshot:unexpected,exchange:unexpected},wanted,base,{gate:{check:unexpected},backup:unexpected}),/写入已停用/);
+  await assert.rejects(applyConfiguration({snapshot:unexpected,exchange:unexpected},wanted,base,{gate:{check:unexpected},backup:unexpected}),/仅允许键位写入/);
 });
-test('all device mutation and unknown commands are blocked before sendReport',async()=>{
+test('unscoped device mutations and unknown commands are blocked before sendReport',async()=>{
   const {hid,device}=await transport();
-  for(const cmd of [1,2,6,7,9,11,13,21,0xff])await assert.rejects(hid.exchange(packet(cmd,0,3,[32,0,4])),/写入已停用/);
+  for(const cmd of [1,2,6,7,9,11,13,21,0xff])await assert.rejects(hid.exchange(packet(cmd,0,3,[32,0,4])),/写入暂缓/);
   assert.equal(device.requests.length,0);assert.equal(device.writeCount,0);assert.equal(hid.dead,false);
   assert.ok(sameSnapshot(await hid.snapshot(),device.s));assert.equal(device.writeCount,0);await hid.close();
 });
@@ -121,4 +122,52 @@ test('local log records request, reply, duration and timeout without retries',as
 });
 test('malformed raw reply remains in the diagnostic log',async()=>{
   const stored=new Map(),{hid,device}=await transport(undefined,{log:async entry=>stored.set(entry.id,entry)});device.corrupt=true;await assert.rejects(hid.read(3,34));await hid.logTasks;const entry=[...stored.values()][0];assert.equal(entry.status,'error');assert.match(entry.error,/校验/);assert.equal(entry.reply.length,64);assert.notDeepEqual(entry.reply.slice(1,3),entry.request.slice(1,3));
+});
+
+test('key plan isolates drafts and exact packet scope preserves internal and hidden slots',()=>{
+  const base=demoSnapshot(),draft=clone(base);draft.keymap.splice(306,3,32,13,6);draft.parameters[1]=8;draft.colors[0]=22;draft.macroData[0]=123;
+  const wanted=makeKeymapPlan(draft,base);assert.deepEqual(wanted.keymap,draft.keymap);
+  for(const k of ['parameters','colors','macroData'])assert.deepEqual(wanted[k],base[k]);
+  const auth=new KeymapWriteAuthorization(base,wanted.keymap);assert.deepEqual(auth.changedSlots,[102]);
+  for(const map of [base.keymap,wanted.keymap])for(let o=0;o<378;o+=54)assert.doesNotThrow(()=>auth.validate(packet(9,o,54,map.slice(o,o+54))));
+  const forged=packet(9,270,54,wanted.keymap.slice(270,324));forged[38]^=1;assert.throws(()=>auth.validate(forged));
+  assert.throws(()=>auth.validate(packet(9,306,3,[32,13,6])));assert.throws(()=>auth.validate(packet(11,0,54,base.colors.slice(0,54))));
+  for(const slot of [6,71,125]){const b=clone(base);b.keymap.splice(slot*3,3,32,0,4);assert.throws(()=>makeKeymapPlan(b,base));}
+  const macro=clone(base);macro.keymap.splice(306,3,0x70,0,0);assert.throws(()=>makeKeymapPlan(macro,base),/宏绑定/);
+  const oldMacro=clone(base);oldMacro.keymap.splice(306,3,0x70,0,0);assert.throws(()=>new KeymapWriteAuthorization(oldMacro,base.keymap),/宏绑定/);
+  for(const usage of [1,2,3,224,255]){const bad=clone(base);bad.keymap.splice(306,3,32,0,usage);assert.throws(()=>makeKeymapPlan(bad,base));}
+  const exposed=auth.expected;exposed.keymap[306]=0;assert.deepEqual(auth.expected.keymap,wanted.keymap);
+  const otherFW=clone(draft);otherFW.deviceInfo[6]=25;assert.throws(()=>makeKeymapPlan(otherFW,base));
+});
+test('authorized key transaction writes only 09, verifies full readback and revokes permission',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.keymap.splice(306,3,32,13,6);
+  const {hid,device}=await transport(base);let backed=null,checks=0;
+  const after=await applyConfiguration(hid,wanted,base,{gate:{async check(){checks++;}},backup:async s=>{backed=clone(s);}});
+  assert.ok(sameSnapshot(after,wanted));assert.ok(sameSnapshot(backed,base));assert.equal(device.writeCount,7);assert.ok(checks>=15);
+  assert.ok(device.requests.filter(b=>![3,5,8,10,20].includes(b[3])).every(b=>b[3]===9));
+  await assert.rejects(hid.exchange(packet(9,0,54,base.keymap.slice(0,54))),/写入暂缓/);await hid.close();
+});
+test('stale baseline, failed backup and missing release gate prevent all key writes',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.keymap.splice(306,3,32,13,6);
+  const {hid,device}=await transport(base),stale=clone(base);stale.keymap[0]^=1;
+  await assert.rejects(applyConfiguration(hid,wanted,stale,{gate,backup:async()=>{}}),/已经变化/);assert.equal(device.writeCount,0);
+  await assert.rejects(applyConfiguration(hid,wanted,base,{gate,backup:async()=>{throw new Error('backup failed');}}),/backup failed/);assert.equal(device.writeCount,0);
+  await assert.rejects(applyConfiguration(hid,wanted,base,{backup:async()=>{}}),/释放检查/);assert.equal(device.writeCount,0);await hid.close();
+});
+test('key write timeout preserves backup and stops without blind retries or rollback',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.keymap.splice(306,3,32,13,6);const {hid,device}=await transport(base,{timeout:25});device.dropAfterWrite=true;let backups=0;
+  await assert.rejects(applyConfiguration(hid,wanted,base,{gate,backup:async()=>{backups++;}}),/重新连接并读取/);
+  assert.equal(backups,1);assert.equal(device.writeCount,1);assert.equal(hid.dead,true);
+});
+test('readback failure on a live session checks scope, restores original and verifies',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.keymap.splice(306,3,32,13,6);const {hid,device}=await transport(base);device.wrongReadback=true;
+  await assert.rejects(applyConfiguration(hid,wanted,base,{gate,backup:async()=>{}}),/已恢复写入前/);
+  assert.equal(device.writeCount,14);assert.ok(sameSnapshot(device.s,base));assert.equal(hid.dead,false);await hid.close();
+});
+test('pressed keys and log persistence failure block a pending key packet before send',async()=>{
+  const base=demoSnapshot(),wanted=clone(base);wanted.keymap.splice(306,3,32,13,6);const {hid,device}=await transport(base);let checks=0;
+  await assert.rejects(applyConfiguration(hid,wanted,base,{gate:{async check(){if(++checks===3)throw new Error('held key');}},backup:async()=>{}}),/未发送键位写包/);
+  assert.equal(device.writeCount,0);await hid.close();
+  const next=await transport(base,{log:async entry=>{if(entry.command===9)throw new Error('disk failed');}});
+  await assert.rejects(applyConfiguration(next.hid,wanted,base,{gate,backup:async()=>{}}),/日志保存失败/);assert.equal(next.device.writeCount,0);await next.hid.close();
 });
