@@ -102,6 +102,7 @@ func runHardwareTests() {
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
     runMacroPlaybackTests()
+    runMacroExecutionEvidenceTests()
     runScopedKeymapTests()
     var calculatorBaseline=hardware;calculatorBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let calculatorAuthorization=try! CalculatorKeyTestAuthorization(baseline:calculatorBaseline)
@@ -655,4 +656,51 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     rejected{_ = try WindowsProfile.integer(1.5,"test",range:0...255)}
     rejected{_ = try WindowsProfile.integer("256","test",range:0...255)}
     print("PASS: Windows model/layout validation; logical-to-physical keys and colors, ActionInfo references and balanced single-run macro conversion; hidden/unknown preservation, no-baseline rejection and atomic invalid import (synthetic fixtures, no hardware I/O)")
+}
+
+
+private func runMacroExecutionEvidenceTests(){
+    func fails(_ block:()throws->Void){do{try block();preconditionFailure("expected execution rejection")}catch{}}
+    let macro=KeyboardMacro(name:"A + mouse",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:true,delayMilliseconds:20,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:50,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:0)])
+    func cycle(_ evidence:inout MacroExecutionEvidence,_ start:Int){for (index,step) in macro.steps.enumerated(){try! evidence.observe(.init(usage:step.usage,pressed:step.pressed,milliseconds:start+index*10,kind:step.kind))}}
+    for count in [1,2,3,255]{
+        var evidence=try! MacroExecutionEvidence(macro:macro,playback:MacroPlayback(count:count),source:.simulation,startedMilliseconds:0)
+        precondition(try! evidence.assessment(milliseconds:100000).status=="waitingOutput")
+        for index in 0..<count{cycle(&evidence,index*100)}
+        let last=(count-1)*100+30
+        precondition(try! evidence.assessment(milliseconds:last+269).status=="waitingQuiet")
+        let passed=try! evidence.assessment(milliseconds:last+270);precondition(passed.passed && passed.completedCycles==count && passed.observedEvents==4*count && passed.held.isEmpty)
+        try! evidence.observe(.init(usage:4,pressed:true,milliseconds:last+300));precondition(try! evidence.assessment(milliseconds:last+1000).failure=="extraEvent")
+    }
+    for mode:MacroPlayback.Mode in [.held,.toggle]{
+        var evidence=try! MacroExecutionEvidence(macro:macro,playback:MacroPlayback(mode:mode),source:.hid,startedMilliseconds:0)
+        cycle(&evidence,0);cycle(&evidence,100)
+        precondition(try! evidence.assessment(milliseconds:1000).status=="waitingStop")
+        try! evidence.observe(.init(usage:4,pressed:true,milliseconds:200))
+        try! evidence.requestStop(milliseconds:210,source:.userAcknowledged)
+        precondition(try! evidence.assessment(milliseconds:1000).status=="waitingRelease")
+        try! evidence.observe(.init(usage:4,pressed:false,milliseconds:220))
+        let passed=try! evidence.assessment(milliseconds:490);precondition(passed.passed && passed.completedCycles==2 && passed.eventsAfterStop==1 && passed.stopSource == .userAcknowledged)
+        try! evidence.observe(.init(usage:4,pressed:true,milliseconds:500));precondition(try! evidence.assessment(milliseconds:1000).failure=="pressAfterStop")
+    }
+    var wrong=try! MacroExecutionEvidence(macro:macro,playback:.once,source:.simulation,startedMilliseconds:0)
+    try! wrong.observe(.init(usage:5,pressed:true,milliseconds:1));precondition(try! wrong.assessment(milliseconds:100000).status=="failed")
+    var clock=try! MacroExecutionEvidence(macro:macro,playback:.once,source:.simulation,startedMilliseconds:100)
+    fails{try clock.observe(.init(usage:4,pressed:true,milliseconds:99))};cycle(&clock,100)
+    precondition(try! clock.assessment(milliseconds:100000).failure=="invalidObservation")
+    var duplicate=try! MacroExecutionEvidence(macro:macro,playback:.once,source:.simulation,startedMilliseconds:0)
+    try! duplicate.observe(.init(usage:4,pressed:true,milliseconds:1));try! duplicate.observe(.init(usage:4,pressed:true,milliseconds:2))
+    precondition(try! duplicate.assessment(milliseconds:10000).failure=="unbalancedObservation")
+    var invalidStop=try! MacroExecutionEvidence(macro:macro,playback:.once,source:.simulation,startedMilliseconds:0)
+    fails{try invalidStop.requestStop(milliseconds:1,source:.simulation)};precondition(try! invalidStop.assessment(milliseconds:1000).failure=="invalidStopMarker")
+    for interruption:MacroExecutionEvidence.Interruption in [.observerDisconnected,.focusLost,.loggingFailed,.cancelled,.reportRejected]{
+        var interrupted=try! MacroExecutionEvidence(macro:macro,playback:.once,source:.simulation,startedMilliseconds:0)
+        cycle(&interrupted,0);precondition(try! interrupted.assessment(milliseconds:300).passed)
+        interrupted.invalidate(interruption);precondition(try! interrupted.assessment(milliseconds:1000).failure==interruption.rawValue)
+    }
+    var overflow=try! MacroExecutionEvidence(macro:macro,playback:MacroPlayback(mode:.toggle),source:.simulation,startedMilliseconds:0)
+    for index in 0..<65537{let step=macro.steps[index % macro.steps.count];try! overflow.observe(.init(usage:step.usage,pressed:step.pressed,milliseconds:index,kind:step.kind))}
+    try! overflow.requestStop(milliseconds:70000,source:.simulation)
+    precondition(overflow.observations.count==65536 && (try! overflow.assessment(milliseconds:71000)).failure=="captureOverflow")
+    print("PASS: passive macro execution evidence checks exact counts, keyboard/mouse identity, two unbounded cycles, explicit stop, final releases and quiet observation; rejects extra/mismatched events, clock regression and invalid stop (no hardware I/O)")
 }

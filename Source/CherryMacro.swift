@@ -132,3 +132,130 @@ struct MacroRecorder {
     }
     mutating func cancel(){active=false;steps=[];held=[]}
 }
+
+// Passive execution evidence. It observes no devices, synthesizes no input,
+// and grants no write permission. Timing is diagnostic until firmware semantics
+// are measured; an elapsed delay alone can never produce a passing result.
+struct MacroExecutionEvidence {
+    enum Source:String,Codable {case hid,focusedBrowser,simulation}
+    enum StopSource:String,Codable {case physicalTriggerObserved,userAcknowledged,simulation}
+    enum Interruption:String,Codable {case observerDisconnected,focusLost,loggingFailed,cancelled,reportRejected}
+    struct Observation:Codable,Equatable {
+        var usage:UInt8
+        var pressed:Bool
+        var milliseconds:Int
+        var kind:KeyboardMacro.Step.Kind? = nil
+        var identity:String{"\(kind == .mouse ? "mouse":"key"):\(usage)"}
+    }
+    struct Assessment:Codable,Equatable {
+        let status:String
+        let passed:Bool
+        let source:Source
+        let stopSource:StopSource?
+        let scope:String
+        let completedCycles:Int
+        let matchedEvents:Int
+        let observedEvents:Int
+        let eventsAfterStop:Int
+        let held:[String]
+        let quietMilliseconds:Int
+        let requiredQuietMilliseconds:Int
+        let failure:String?
+    }
+    let macro:KeyboardMacro
+    let playback:MacroPlayback
+    let source:Source
+    let requiredQuietMilliseconds:Int
+    private(set) var observations:[Observation]=[]
+    private var held=Set<String>()
+    private var lastMilliseconds:Int
+    private var matchedEvents=0,observedEvents=0,eventsAfterStop=0
+    private var stopMilliseconds:Int?,stopSource:StopSource?
+    private var failure:String?
+    init(macro:KeyboardMacro,playback:MacroPlayback,source:Source,startedMilliseconds:Int)throws {
+        try macro.validate();try playback.validate()
+        guard startedMilliseconds>=0 else{throw HardwareError(message:"执行观察时钟无效。")}
+        self.macro=macro;self.playback=playback;self.source=source;lastMilliseconds=startedMilliseconds
+        requiredQuietMilliseconds=max(200,macro.steps.reduce(0){$0+$1.delayMilliseconds}+200)
+    }
+    private mutating func fail(_ reason:String){if failure==nil{failure=reason}}
+    mutating func invalidate(_ reason:Interruption){fail(reason.rawValue)}
+    mutating func observe(_ event:Observation)throws {
+        guard event.milliseconds>=lastMilliseconds,(event.kind == .mouse ? [UInt8(1),2,4,8,16].contains(event.usage):(4...231).contains(event.usage)) else {
+            fail("invalidObservation");throw HardwareError(message:"执行观察事件或时钟无效。")
+        }
+        lastMilliseconds=event.milliseconds;observedEvents+=1
+        if observations.count<65536{observations.append(event)}else{fail("captureOverflow")}
+        let wasHeld=held.contains(event.identity)
+        if event.pressed ? wasHeld:!wasHeld{fail("unbalancedObservation")}
+        if stopMilliseconds != nil{eventsAfterStop+=1;if event.pressed{fail("pressAfterStop")}}
+        if failure==nil {
+            let expected=macro.steps[matchedEvents % macro.steps.count]
+            let matches=expected.usage==event.usage && expected.kind==event.kind && expected.pressed==event.pressed
+            let beyondCount=playback.mode == .count && matchedEvents>=macro.steps.count*playback.count
+            if beyondCount{fail("extraEvent")}
+            else if matches{matchedEvents+=1}
+            else if stopMilliseconds==nil{fail("unexpectedEvent")}
+            // After a stop marker, a release of an actually held key is allowed
+            // even when firmware aborts mid-cycle rather than finishing it.
+        }
+        if event.pressed{held.insert(event.identity)}else{held.remove(event.identity)}
+    }
+    mutating func requestStop(milliseconds:Int,source:StopSource)throws {
+        guard playback.mode != .count,stopMilliseconds==nil,milliseconds>=lastMilliseconds else {
+            fail("invalidStopMarker");throw HardwareError(message:"停止标记无效或重复。")
+        }
+        stopMilliseconds=milliseconds;stopSource=source;lastMilliseconds=milliseconds
+    }
+    func assessment(milliseconds:Int)throws -> Assessment {
+        guard milliseconds>=lastMilliseconds else{throw HardwareError(message:"评估时钟早于最后观察。")}
+        let cycles=matchedEvents/macro.steps.count,quiet=milliseconds-lastMilliseconds
+        let complete=playback.mode == .count ? matchedEvents==macro.steps.count*playback.count:cycles>=2
+        let status:String
+        if failure != nil{status="failed"}
+        else if !complete{status="waitingOutput"}
+        else if playback.mode != .count && stopMilliseconds==nil{status="waitingStop"}
+        else if !held.isEmpty{status="waitingRelease"}
+        else if quiet<requiredQuietMilliseconds{status="waitingQuiet"}
+        else{status="passed"}
+        return Assessment(status:status,passed:status=="passed",source:source,stopSource:stopSource,
+            scope:"observed events only; no hardware write or power-cycle proof",completedCycles:cycles,
+            matchedEvents:matchedEvents,observedEvents:observedEvents,eventsAfterStop:eventsAfterStop,
+            held:held.sorted(),quietMilliseconds:quiet,requiredQuietMilliseconds:requiredQuietMilliseconds,failure:failure)
+    }
+}
+
+struct MacroExecutionLog:Codable {
+    struct Stop:Codable {let milliseconds:Int;let source:MacroExecutionEvidence.StopSource}
+    let format:String
+    let version:Int
+    let macro:KeyboardMacro
+    let playback:MacroPlayback
+    let source:MacroExecutionEvidence.Source
+    let startedMilliseconds:Int
+    let events:[MacroExecutionEvidence.Observation]
+    let stop:Stop?
+    let assessedMilliseconds:Int
+    let interruptions:[MacroExecutionEvidence.Interruption]?
+    func replay()throws -> MacroExecutionEvidence.Assessment {
+        guard format=="CherryMacMacroExecution",version==1,events.count<=65536 else{throw HardwareError(message:"宏执行日志格式或长度无效。")}
+        var evidence=try MacroExecutionEvidence(macro:macro,playback:playback,source:source,startedMilliseconds:startedMilliseconds)
+        guard (interruptions?.count ?? 0)<=16 else{throw HardwareError(message:"执行日志中断标记过多。")}
+        for interruption in interruptions ?? []{evidence.invalidate(interruption)}
+        var marked=false
+        for event in events {
+            if let stop,!marked,stop.milliseconds<=event.milliseconds{try evidence.requestStop(milliseconds:stop.milliseconds,source:stop.source);marked=true}
+            try evidence.observe(event)
+        }
+        if let stop,!marked{try evidence.requestStop(milliseconds:stop.milliseconds,source:stop.source)}
+        return try evidence.assessment(milliseconds:assessedMilliseconds)
+    }
+}
+
+
+struct MacroExecutionReport:Encodable {
+    let format="CherryMacMacroExecutionAssessment"
+    let version=1
+    let inputSHA256:String
+    let assessment:MacroExecutionEvidence.Assessment
+}

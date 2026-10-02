@@ -182,3 +182,61 @@ export function finiteMacroDurationMilliseconds(keymap,macros){
   }
   return longest;
 }
+
+// Passive evidence only. Callers must identify the actual observation source;
+// this class does not turn a replay or an acknowledgement into hardware proof.
+export class MacroExecutionEvidence {
+  #macro;#playback;#source;#requiredQuiet;#observations=[];#held=new Set();#last;
+  #matched=0;#observed=0;#afterStop=0;#stop=null;#stopSource=null;#failure=null;
+  constructor({macro,playback,source,startedMilliseconds}){
+    validateMacro(macro);validatePlayback(playback);
+    requireThat(['hid','focusedBrowser','simulation'].includes(source)&&Number.isSafeInteger(startedMilliseconds)&&startedMilliseconds>=0,'执行观察来源或时钟无效。');
+    this.#macro=clone(macro);this.#playback=clone(playback);this.#source=source;this.#last=startedMilliseconds;
+    this.#requiredQuiet=Math.max(200,macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0)+200);
+  }
+  get observations(){return clone(this.#observations);}
+  #fail(reason){this.#failure??=reason;}
+  invalidate(reason){
+    if(!['observerDisconnected','focusLost','loggingFailed','cancelled','reportRejected'].includes(reason)){this.#fail('invalidInterruptionMarker');throw new Error('执行观察中断标记无效。');}
+    this.#fail(reason);
+  }
+  observe(event){
+    const mouse=event?.kind==='mouse';
+    if(!(Number.isSafeInteger(event?.milliseconds)&&event.milliseconds>=this.#last&&typeof event.pressed==='boolean'&&(event.kind==null||mouse)&&Number.isInteger(event.usage)&&(mouse?[1,2,4,8,16].includes(event.usage):event.usage>=4&&event.usage<=231))){this.#fail('invalidObservation');throw new Error('执行观察事件或时钟无效。');}
+    const identity=`${mouse?'mouse':'key'}:${event.usage}`;this.#last=event.milliseconds;this.#observed++;
+    if(this.#observations.length<65536)this.#observations.push(clone(event));else this.#fail('captureOverflow');
+    if(event.pressed?this.#held.has(identity):!this.#held.has(identity))this.#fail('unbalancedObservation');
+    if(this.#stop!==null){this.#afterStop++;if(event.pressed)this.#fail('pressAfterStop');}
+    if(this.#failure===null){
+      const expected=this.#macro.steps[this.#matched%this.#macro.steps.length];
+      const matches=expected.usage===event.usage&&(expected.kind??null)===(event.kind??null)&&expected.pressed===event.pressed;
+      const beyondCount=this.#playback.mode==='count'&&this.#matched>=this.#macro.steps.length*this.#playback.count;
+      if(beyondCount)this.#fail('extraEvent');else if(matches)this.#matched++;else if(this.#stop===null)this.#fail('unexpectedEvent');
+    }
+    if(event.pressed)this.#held.add(identity);else this.#held.delete(identity);
+  }
+  requestStop({milliseconds,source}){
+    if(!(this.#playback.mode!=='count'&&this.#stop===null&&Number.isSafeInteger(milliseconds)&&milliseconds>=this.#last&&['physicalTriggerObserved','userAcknowledged','simulation'].includes(source))){this.#fail('invalidStopMarker');throw new Error('停止标记无效或重复。');}
+    this.#stop=milliseconds;this.#stopSource=source;this.#last=milliseconds;
+  }
+  assessment(milliseconds){
+    requireThat(Number.isSafeInteger(milliseconds)&&milliseconds>=this.#last,'评估时钟早于最后观察。');
+    const cycles=Math.floor(this.#matched/this.#macro.steps.length),quiet=milliseconds-this.#last;
+    const complete=this.#playback.mode==='count'?this.#matched===this.#macro.steps.length*this.#playback.count:cycles>=2;
+    const status=this.#failure!==null?'failed':!complete?'waitingOutput':this.#playback.mode!=='count'&&this.#stop===null?'waitingStop':this.#held.size?'waitingRelease':quiet<this.#requiredQuiet?'waitingQuiet':'passed';
+    return {status,passed:status==='passed',source:this.#source,...(this.#stopSource!==null?{stopSource:this.#stopSource}:{}),scope:'observed events only; no hardware write or power-cycle proof',completedCycles:cycles,matchedEvents:this.#matched,observedEvents:this.#observed,eventsAfterStop:this.#afterStop,held:[...this.#held].sort(),quietMilliseconds:quiet,requiredQuietMilliseconds:this.#requiredQuiet,...(this.#failure!==null?{failure:this.#failure}:{})};
+  }
+}
+
+export function replayMacroExecutionLog(log){
+  requireThat(log?.format==='CherryMacMacroExecution'&&log.version===1&&Array.isArray(log.events)&&log.events.length<=65536,'宏执行日志格式或长度无效。');
+  const evidence=new MacroExecutionEvidence(log);let marked=false;
+  requireThat(log.interruptions==null||(Array.isArray(log.interruptions)&&log.interruptions.length<=16),'执行日志中断标记无效。');
+  for(const interruption of log.interruptions??[])evidence.invalidate(interruption);
+  for(const event of log.events){
+    if(log.stop!=null&&!marked&&log.stop.milliseconds<=event.milliseconds){evidence.requestStop(log.stop);marked=true;}
+    evidence.observe(event);
+  }
+  if(log.stop!=null&&!marked)evidence.requestStop(log.stop);
+  return evidence.assessment(log.assessedMilliseconds);
+}

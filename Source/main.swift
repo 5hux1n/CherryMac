@@ -1,6 +1,7 @@
 import Cocoa
 import IOKit.hid
 import ApplicationServices
+import CryptoKit
 
 struct KeySpec {
     let id: String
@@ -1169,6 +1170,19 @@ if CommandLine.arguments.contains("--self-test") {
     let diagnostics: [String: Any] = ["inputMonitoringGranted": input == kIOHIDAccessTypeGranted, "accessibilityGranted": access, "deviceOpenResult": result, "devices": names, "calculatorAvailable": NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.calculator") != nil]
     if let data = try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys]), let string = String(data: data, encoding: .utf8) { print(string) }
     IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+} else if let output=CommandLine.arguments.firstIndex(of:"--analyze-macro-execution"),CommandLine.arguments.count>output+1{
+    do{
+        guard let input=CommandLine.arguments.firstIndex(of:"--execution-log"),CommandLine.arguments.count>input+1 else{throw HardwareError(message:"需要 --execution-log 宏执行日志.json。")}
+        let source=URL(fileURLWithPath:CommandLine.arguments[input+1]),destination=URL(fileURLWithPath:CommandLine.arguments[output+1])
+        guard source.resolvingSymlinksInPath().standardizedFileURL != destination.resolvingSymlinksInPath().standardizedFileURL else{throw HardwareError(message:"评估结果不能覆盖原执行日志。")}
+        let size=(try FileManager.default.attributesOfItem(atPath:source.path)[.size] as? NSNumber)?.intValue ?? Int.max
+        guard size<=8_000_000 else{throw HardwareError(message:"执行日志过大。")}
+        let data=try Data(contentsOf:source);guard data.count<=8_000_000 else{throw HardwareError(message:"执行日志过大。")}
+        let assessment=try JSONDecoder().decode(MacroExecutionLog.self,from:data).replay()
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        let report=MacroExecutionReport(inputSHA256:SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined(),assessment:assessment)
+        try encoder.encode(report).write(to:destination,options:.atomic);print("观察日志评估：\(assessment.status)。仅重放已有事件，未连接或写入键盘。")
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let output=CommandLine.arguments.firstIndex(of:"--convert-windows-profile"),CommandLine.arguments.count>output+1{
     do{
         guard let input=CommandLine.arguments.firstIndex(of:"--profile"),let baseline=CommandLine.arguments.firstIndex(of:"--baseline"),CommandLine.arguments.count>input+1,CommandLine.arguments.count>baseline+1 else{throw HardwareError(message:"需要 --profile Windows.json 和 --baseline CherryMac.json。")}

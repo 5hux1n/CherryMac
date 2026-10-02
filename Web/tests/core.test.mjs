@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -323,4 +323,44 @@ test('Web macro preflight blocks real closed transport, stale baseline, failed b
     const session=new SimulatedMacroSession(before);if(kind==='stale')session.state.parameters[0]^=1;else if(kind==='held')session.heldAt=2;else session[kind]=true;
     await assert.rejects(applyMacroConfiguration(session,target,before,session.options()));assert.equal(session.packets.length,0);assert.equal(session.operationId,'previous');assert.equal(session.authorization,undefined);
   }
+});
+
+test('macro execution evidence needs exact observed output, release and a subsequent quiet window',()=>{
+  const m={name:'keyboard + mouse',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,kind:'mouse',pressed:true,delayMilliseconds:20},{usage:4,kind:'mouse',pressed:false,delayMilliseconds:50},{usage:4,pressed:false,delayMilliseconds:0}]};
+  const cycle=(e,start)=>m.steps.forEach((step,i)=>e.observe({usage:step.usage,pressed:step.pressed,milliseconds:start+i*10,...(step.kind?{kind:step.kind}:{})}));
+  for(const count of [1,2,3,255]){
+    const e=new MacroExecutionEvidence({macro:m,playback:{mode:'count',count},source:'simulation',startedMilliseconds:0});
+    assert.equal(e.assessment(100000).status,'waitingOutput');for(let i=0;i<count;i++)cycle(e,i*100);
+    const last=(count-1)*100+30;assert.equal(e.assessment(last+269).status,'waitingQuiet');
+    const passed=e.assessment(last+270);assert.equal(passed.passed,true);assert.equal(passed.completedCycles,count);assert.equal(passed.observedEvents,4*count);assert.deepEqual(passed.held,[]);
+    const copy=e.observations;copy[0].usage=100;assert.equal(e.observations[0].usage,4);
+    e.observe({usage:4,pressed:true,milliseconds:last+300});assert.equal(e.assessment(last+1000).failure,'extraEvent');
+  }
+  for(const mode of ['held','toggle']){
+    const input=clone(m),e=new MacroExecutionEvidence({macro:input,playback:{mode,count:1},source:'hid',startedMilliseconds:0});input.steps[0].usage=5;
+    cycle(e,0);cycle(e,100);assert.equal(e.assessment(1000).status,'waitingStop');
+    e.observe({usage:4,pressed:true,milliseconds:200});e.requestStop({milliseconds:210,source:'userAcknowledged'});
+    assert.equal(e.assessment(1000).status,'waitingRelease');e.observe({usage:4,pressed:false,milliseconds:220});
+    const result=e.assessment(490);assert.equal(result.passed,true);assert.equal(result.completedCycles,2);assert.equal(result.eventsAfterStop,1);assert.equal(result.stopSource,'userAcknowledged');
+    e.observe({usage:4,pressed:true,milliseconds:500});assert.equal(e.assessment(1000).failure,'pressAfterStop');
+  }
+});
+test('macro execution failures stay latched and stop cleanup cannot hide unrelated releases',()=>{
+  const make=(mode='count')=>new MacroExecutionEvidence({macro,playback:{mode,count:1},source:'focusedBrowser',startedMilliseconds:100});
+  const invalid=make();assert.throws(()=>invalid.observe({usage:4,pressed:true,milliseconds:99}));macro.steps.forEach((s,i)=>invalid.observe({...s,milliseconds:100+i*10}));assert.equal(invalid.assessment(10000).failure,'invalidObservation');
+  const repeated=make();repeated.observe({usage:4,pressed:true,milliseconds:100});repeated.observe({usage:4,pressed:true,milliseconds:101});assert.equal(repeated.assessment(10000).failure,'unbalancedObservation');
+  const incorrect=make();incorrect.observe({usage:6,pressed:true,milliseconds:100});assert.equal(incorrect.assessment(10000).failure,'unexpectedEvent');
+  const orphan=make('toggle');orphan.requestStop({milliseconds:100,source:'simulation'});orphan.observe({usage:4,pressed:false,milliseconds:110});assert.equal(orphan.assessment(1000).failure,'unbalancedObservation');
+  const stop=make();assert.throws(()=>stop.requestStop({milliseconds:100,source:'simulation'}));assert.equal(stop.assessment(10000).failure,'invalidStopMarker');
+  assert.throws(()=>make().assessment(99));assert.throws(()=>new MacroExecutionEvidence({macro,source:'simulation',startedMilliseconds:0}));
+  assert.throws(()=>replayMacroExecutionLog({format:'wrong',version:1,events:[]}));
+  for(const reason of ['observerDisconnected','focusLost','loggingFailed','cancelled','reportRejected']){const e=make();macro.steps.forEach((s,i)=>e.observe({...s,milliseconds:100+i*10}));assert.equal(e.assessment(1000).passed,true);e.invalidate(reason);assert.equal(e.assessment(10000).failure,reason);}
+  const invalidReason=make();assert.throws(()=>invalidReason.invalidate('unknown'));assert.equal(invalidReason.assessment(1000).status,'failed');
+});
+
+test('execution capture capacity refuses to report success after dropping observations',()=>{
+  const e=new MacroExecutionEvidence({macro,playback:{mode:'toggle',count:1},source:'simulation',startedMilliseconds:0});
+  for(let i=0;i<65537;i++)e.observe({...macro.steps[i%macro.steps.length],milliseconds:i});
+  e.requestStop({milliseconds:70000,source:'simulation'});const result=e.assessment(71000);
+  assert.equal(e.observations.length,65536);assert.equal(result.observedEvents,65537);assert.equal(result.failure,'captureOverflow');assert.equal(result.passed,false);
 });
