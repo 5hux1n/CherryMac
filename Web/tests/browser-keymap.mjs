@@ -54,6 +54,13 @@ assert.deepEqual(edited.macros[0].recordingDelay,fixedProfile.macros[0].recordin
 assert.deepEqual(edited.macros[0].steps,fixedProfile.macros[0].steps);
 assert.deepEqual(edited.snapshot.macroData,fixedProfile.snapshot.macroData);
 assert.equal(edited.macroBindings['102'],'固定选项保留');
+// Create and edit a mouse event through the visible macro form, without HID.
+await page.locator('#tab-macros').click();await page.locator('#macro-list').selectOption('');
+await page.locator('#macro-name').fill('鼠标中键测试');await page.locator('#macro-key').selectOption('mouse:4');await page.locator('#add-pair').click();await page.locator('#save-macro').click();
+await page.locator('#tab-profiles').click();const mouseDownload=page.waitForEvent('download');await page.locator('#export').click();
+await (await mouseDownload).saveAs(join(artifacts,'mouse-edited.json'));
+const mouseProfile=JSON.parse(await readFile(join(artifacts,'mouse-edited.json'),'utf8'));
+assert.deepEqual(mouseProfile.macros.find(m=>m.name==='鼠标中键测试').steps,[{kind:'mouse',usage:4,pressed:true,delayMilliseconds:0},{kind:'mouse',usage:4,pressed:false,delayMilliseconds:30}]);
 // Install a simulated WebHID device. This never requests actual hardware access.
 await page.evaluate(()=>{
   class Fake extends EventTarget{
@@ -84,6 +91,6 @@ const backups=await page.evaluate(async()=>{const m=await import('/assets/storag
 // Invalid import leaves draft unchanged and does not issue a hardware write.
 await page.locator('#tab-profiles').click();await page.locator('#file').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"format":"other"}')});await page.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);
 await page.locator('#show-backups').click();await page.locator('.backup-row').first().waitFor();assert.ok(await page.locator('.backup-row').count()>=1);
-await page.locator('#tab-device').click();const downloadPromise=page.waitForEvent('download');await page.locator('#diagnostics').click();const diagnostic=await downloadPromise;await diagnostic.saveAs(join(artifacts,'diagnostics.json'));const logs=await page.evaluate(async()=>{const m=await import('/assets/logs.js?v=0.4.0');return await m.listLogs();});assert.ok(logs.length>0);assert.ok(logs.filter(e=>e.kind!=='phase').every(e=>e.status==='ok'&&e.reply.length===64&&e.request.length===64&&e.durationMs>=0));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);assert.deepEqual(errors,[]);
+await page.locator('#tab-device').click();const downloadPromise=page.waitForEvent('download');await page.locator('#diagnostics').click();const diagnostic=await downloadPromise;await diagnostic.saveAs(join(artifacts,'diagnostics.json'));const logs=await page.evaluate(async()=>{const m=await import('/assets/logs.js?v=0.5.0');return await m.listLogs();});assert.ok(logs.length>0);assert.ok(logs.filter(e=>e.kind!=='phase').every(e=>e.status==='ok'&&e.reply.length===64&&e.request.length===64&&e.durationMs>=0));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);assert.deepEqual(errors,[]);
 console.log(JSON.stringify({artifacts,ui:'pass',keys:109,squareKeys:true,mobileOverflow:false,macroPlayback:'count/held/toggle exports verified; no macro HID writes',simulatedKeyWrite:'pass; seven key packets only',backups,errors}));
 }finally{await browser.close();}

@@ -80,6 +80,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         keys.append(("仅修饰键",0))
         return keys
     }()
+    let mouseMacroKeys:[(String,UInt8)] = [("鼠标左键",1),("鼠标右键",2),("鼠标中键",4),("鼠标后退",8),("鼠标前进",16)]
     var shortcutKeys:[(String,UInt8)] {hidKeys.filter{$0.1<224}}
     init() {
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1152,height:860),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
@@ -136,7 +137,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
         macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 0\nA 松开 50";macros.addSubview(macroScroll)
         place(label("添加按键"),593,12,110,24,in:macros)
-        macroKey.addItems(withTitles:hidKeys.filter{$0.1 != 0}.map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
+        macroKey.addItems(withTitles:(hidKeys.filter{$0.1 != 0}+mouseMacroKeys).map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
         place(label("间隔（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
         place(button("添加按下与松开",#selector(appendMacroKey)),593,99,282,30,in:macros)
         place(button("保存宏",#selector(stageMacro)),593,144,282,30,in:macros)
@@ -347,10 +348,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let steps=try lines.map{line -> KeyboardMacro.Step in
                 let parts=line.split(whereSeparator:{$0.isWhitespace});guard parts.count>=3,let delay=Int(parts.last!),["按下","松开","down","up"].contains(String(parts[parts.count-2]))else{throw HardwareError(message:"宏格式错误：\(line)")}
                 let name=parts.dropLast(2).joined(separator:" ")
+                let mouse=self.mouseMacroKeys.first(where:{$0.0==name})
                 let usage:UInt8?
-                if name.hasPrefix("HID:"){usage=UInt8(name.dropFirst(4))}else{usage=self.hidKeys.first(where:{$0.0.caseInsensitiveCompare(name) == .orderedSame})?.1}
+                if let mouse{usage=mouse.1}else if name.hasPrefix("HID:"){usage=UInt8(name.dropFirst(4))}else{usage=self.hidKeys.first(where:{$0.0.caseInsensitiveCompare(name) == .orderedSame})?.1}
                 guard let usage else{throw HardwareError(message:"无法识别宏按键：\(name)")}
-                return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay)}
+                return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay,kind:mouse != nil ? .mouse:nil)}
             let selectedIndex=macroPicker.indexOfSelectedItem-1
             let existing=p.macros.first(where:{$0.name==macroName.stringValue})
             let preference=existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil)
@@ -364,7 +366,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func chooseMacro(){
         guard macroPicker.indexOfSelectedItem>0,let profile else{macroName.stringValue="新宏";macroText.string="";return}
         let macro=profile.macros[macroPicker.indexOfSelectedItem-1];macroName.stringValue=macro.name
-        macroText.string=macro.steps.map{step in "\(hidKeys.first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+        macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
     }
     @objc func appendMacroKey(){
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}

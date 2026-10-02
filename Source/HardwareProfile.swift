@@ -9,6 +9,8 @@ struct KeyboardMacro: Codable, Equatable {
         var usage: UInt8
         var pressed: Bool
         var delayMilliseconds: Int
+        enum Kind:String,Codable {case mouse}
+        var kind:Kind? = nil
     }
     var name: String
     var steps: [Step]
@@ -18,13 +20,14 @@ struct KeyboardMacro: Codable, Equatable {
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 80,
               !steps.isEmpty, steps.count <= 256 else { throw HardwareError(message: "宏名称或步骤数量无效。") }
-        var held = Set<UInt8>()
+        var held = Set<Int>()
         for step in steps {
-            guard (4...231).contains(step.usage), (0...60000).contains(step.delayMilliseconds) else { throw HardwareError(message: "宏按键或延迟超出范围。") }
+            guard (step.kind == .mouse ? [UInt8(1),2,4,8,16].contains(step.usage):(4...231).contains(step.usage)), (0...60000).contains(step.delayMilliseconds) else { throw HardwareError(message: "宏按键或延迟超出范围。") }
+            let identity=Int(step.usage)+(step.kind == .mouse ? 256:0)
             if step.pressed {
-                guard held.insert(step.usage).inserted else { throw HardwareError(message: "宏中同一个键重复按下，缺少释放步骤。") }
+                guard held.insert(identity).inserted else { throw HardwareError(message: "宏中同一个键重复按下，缺少释放步骤。") }
             } else {
-                guard held.remove(step.usage) != nil else { throw HardwareError(message: "宏中存在未按下的释放步骤。") }
+                guard held.remove(identity) != nil else { throw HardwareError(message: "宏中存在未按下的释放步骤。") }
             }
         }
         guard held.isEmpty else { throw HardwareError(message: "宏结束时必须释放全部按键。") }

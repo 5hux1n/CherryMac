@@ -6,7 +6,7 @@
 
 **当前是按键写入测试版，完整复刻仍在推进。** USB 有线模式下开放独立键位写入、自动备份和读回核对；灯效与宏可以编辑、导出，实体写入暂缓。客户端已在计算器键位实测普通键、组合键、媒体输出、禁用与还原；计算器组合键另有用户确认断电后的保留证据。网页版也已实测普通键写入与还原。其他键位、更多网页键型和无线使用仍在验收。旧网页灯效故障根因尚未确认。
 
-[下载 Mac 0.10.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.10.0) · [下载 PHP 网页版 0.4.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.4.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
+[下载 Mac 0.11.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.11.0) · [下载 PHP 网页版 0.5.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.5.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
 
 ![CherryMac 按键配置界面](docs/USB键盘配置预览.png)
 
@@ -29,7 +29,7 @@ Fn、CHERRY 内部键与隐藏位置保留原功能。当前禁止新增、移�
 | --- | --- |
 | 按键功能 | 点选按键、编辑功能、独立写入键位表 |
 | 灯效 | 编辑内置模式、亮度与速度；单键或区域配色、渐变与熄灭，暂不写入 |
-| 宏 | 编辑按下、松开与延迟；指定次数、按住持续或再次按键停止，暂不写入 |
+| 宏 | 编辑键盘及五个鼠标按钮的按下、松开与延迟；指定次数、按住持续或再次按键停止，暂不写入 |
 | 配置与备份 | 导入／导出 JSON、查看备份、恢复按键或撤销草稿 |
 | 设备与诊断 | 查看状态、打开操作日志或导出排查资料；客户端提供 Mac 端适配设置 |
 

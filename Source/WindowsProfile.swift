@@ -94,11 +94,12 @@ enum WindowsProfile {
                             let button=try integer(event["Button"],"宏 Button",range:0...255)
                             let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
                             let usage:UInt8
-                            if type==10,button>=4,button<224{usage=UInt8(button)}
+                            if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
+                            else if type==10,button>=4,button<224{usage=UInt8(button)}
                             else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
-                            else{throw HardwareError(message:"Windows 宏仅支持键盘按键；鼠标与滚动事件暂不支持。")}
+                            else{throw HardwareError(message:"Windows 宏包含尚未支持的滚动或其他事件。")}
                             guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
-                            return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay)
+                            return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
                         }
                         let originalName=actions[actionIndex]["ActionName"] as? String ?? "导入宏"
                         var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}

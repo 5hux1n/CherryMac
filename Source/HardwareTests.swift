@@ -22,6 +22,17 @@ func runHardwareTests() {
     precondition(CherryMatrix.special["calculator"]==102 && CherryMatrix.usageSlots[71]==90 && CherryMatrix.usageSlots[82]==94)
     let valid=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])
     try! valid.validate()
+    let mouse=KeyboardMacro(name:"Middle + A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:true,delayMilliseconds:20,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:50,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:0)])
+    let mouseGolden:[UInt8]=[0,0,0x8A,4,20,0,0x81,4,50,0,1,4,0,0,10,4]
+    precondition(try! CherryMacroCodec.encodeEvents(mouse)==mouseGolden)
+    precondition(try! CherryMacroCodec.decodeEvents(mouseGolden,name:mouse.name)==mouse)
+    fails{try KeyboardMacro(name:"bad mouse",steps:[.init(usage:3,pressed:true,delayMilliseconds:0,kind:.mouse),.init(usage:3,pressed:false,delayMilliseconds:0,kind:.mouse)]).validate()}
+    fails{try KeyboardMacro(name:"cross release",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:0,kind:.mouse)]).validate()}
+    for button:UInt8 in [1,2,4,8,16]{
+        let m=KeyboardMacro(name:"button",steps:[.init(usage:button,pressed:true,delayMilliseconds:0,kind:.mouse),.init(usage:button,pressed:false,delayMilliseconds:50,kind:.mouse)])
+        precondition(try! CherryMacroCodec.decodeEvents(CherryMacroCodec.encodeEvents(m),name:m.name)==m)
+    }
+
     fails{try KeyboardMacro(name:"stuck",steps:[.init(usage:4,pressed:true,delayMilliseconds:0)]).validate()}
     fails{try KeyboardMacro(name:"unbalanced",steps:[.init(usage:4,pressed:false,delayMilliseconds:0)]).validate()}
     fails{try KeyboardMacro(name:"delay",steps:[.init(usage:4,pressed:true,delayMilliseconds:-1)]).validate()}
@@ -435,6 +446,12 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     editor.deleteMacro()
     precondition(editor.profile!.macros.isEmpty && Array(editor.profile!.snapshot.keymap[306..<309])==[0x20,0,0])
     editor.discardDraft();precondition(editor.profile!.snapshot==original && editor.profile!.macros.isEmpty)
+    editor.macroPicker.selectItem(at:0);editor.chooseMacro();editor.macroName.stringValue="鼠标中键"
+    editor.macroKey.selectItem(withTitle:"鼠标中键");editor.appendMacroKey();editor.stageMacro()
+    precondition(editor.profile!.macros[0].steps.allSatisfy{$0.kind == .mouse && $0.usage==4})
+    editor.chooseMacro();precondition(editor.macroText.string.contains("鼠标中键 按下"))
+    let mouseSaved=editor.profile;editor.macroText.string="A 按下 0\n鼠标中键 松开 50";editor.stageMacro()
+    precondition(editor.profile==mouseSaved,"mouse release must not release a keyboard key")
     print("PASS: hardware editor staging isolates baseline, selection reloads assignments, mode preservation, named-key macro editing and invalid-macro preservation (no hardware I/O)")
 }
 

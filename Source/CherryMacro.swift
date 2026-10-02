@@ -19,8 +19,8 @@ enum CherryMacroCodec {
     static func encodeEvents(_ macro:KeyboardMacro) throws -> [UInt8] {
         try macro.validate()
         return macro.steps.flatMap{step -> [UInt8] in
-            let modifier=(224...231).contains(step.usage)
-            let kind:UInt8=modifier ? 9:10
+            let modifier=step.kind == nil && (224...231).contains(step.usage)
+            let kind:UInt8=step.kind == .mouse ? 1:(modifier ? 9:10)
             let code:UInt8=modifier ? UInt8(1 << Int(step.usage-224)):step.usage
             return [UInt8(step.delayMilliseconds & 255),UInt8(step.delayMilliseconds >> 8),kind | (step.pressed ? 0x80:0),code]
         }
@@ -29,12 +29,14 @@ enum CherryMacroCodec {
         guard !bytes.isEmpty,bytes.count % 4==0,bytes.count<=1024 else{throw HardwareError(message:"硬件宏事件长度无效。")}
         let steps=try stride(from:0,to:bytes.count,by:4).map{index -> KeyboardMacro.Step in
             let kind=bytes[index+2] & 0x7F;let code=bytes[index+3];let usage:UInt8
-            if kind==10 {
+            if kind==1 {
+                guard [UInt8(1),2,4,8,16].contains(code)else{throw HardwareError(message:"鼠标宏按钮编码无效。")};usage=code
+            }else if kind==10 {
                 guard code<224 else{throw HardwareError(message:"普通键宏包含无效修饰键编码。")};usage=code
             }else if kind==9 {
                 guard code.nonzeroBitCount==1 else{throw HardwareError(message:"修饰键宏编码必须只有一个位。")};usage=224+UInt8(code.trailingZeroBitCount)
             }else{throw HardwareError(message:"硬件宏包含尚未支持的事件类型 \(kind)。原始备份仍保留。")}
-            return .init(usage:usage,pressed:bytes[index+2] & 0x80 != 0,delayMilliseconds:Int(bytes[index]) | Int(bytes[index+1])<<8)
+            return .init(usage:usage,pressed:bytes[index+2] & 0x80 != 0,delayMilliseconds:Int(bytes[index]) | Int(bytes[index+1])<<8,kind:kind==1 ? .mouse:nil)
         }
         let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();return macro
     }

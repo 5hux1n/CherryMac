@@ -4,7 +4,7 @@ import {keys,demoSnapshot} from '../assets/layout.js';
 import {clone,equal,encodeBank,decodeBank,validateMacro,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
-import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.4.0';
+import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.5.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
 class FakeDevice extends EventTarget{
@@ -213,4 +213,13 @@ test('Windows fixed-interval preference preserves actual event delays and profil
   }
   assert.throws(()=>validateMacro({...macro,recordingDelay:{fixed:1,milliseconds:777}}));
   assert.deepEqual(baseline,before);
+});
+
+test('official mouse macro bytes distinguish middle button from keyboard A',()=>{
+  const mixed={name:'Middle + A',steps:[{usage:4,pressed:true,delayMilliseconds:0},{kind:'mouse',usage:4,pressed:true,delayMilliseconds:20},{kind:'mouse',usage:4,pressed:false,delayMilliseconds:50},{usage:4,pressed:false,delayMilliseconds:0}]};
+  const bank=encodeBank([mixed]);assert.deepEqual(bank.slice(22,38),[0,0,138,4,20,0,129,4,50,0,1,4,0,0,10,4]);
+  assert.deepEqual(decodeBank(bank)[0].steps,mixed.steps);
+  for(const usage of [1,2,4,8,16]){const m={name:'mouse',steps:[{kind:'mouse',usage,pressed:true,delayMilliseconds:0},{kind:'mouse',usage,pressed:false,delayMilliseconds:50}]};assert.deepEqual(decodeBank(encodeBank([m]))[0].steps,m.steps);}
+  assert.throws(()=>validateMacro({name:'cross',steps:[mixed.steps[0],mixed.steps[2]]}));
+  assert.throws(()=>validateMacro({name:'bad',steps:[{kind:'mouse',usage:3,pressed:true,delayMilliseconds:0}]}));
 });

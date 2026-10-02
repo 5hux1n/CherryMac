@@ -1,5 +1,5 @@
-import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.4.0';
-import {keys,modes} from './layout.js?v=0.4.0';
+import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.5.0';
+import {keys,modes} from './layout.js?v=0.5.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
@@ -16,9 +16,10 @@ export function validateMacro(m){
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
-    requireThat(Number.isInteger(s.usage)&&s.usage>=4&&s.usage<=231&&typeof s.pressed==='boolean'&&Number.isInteger(s.delayMilliseconds)&&s.delayMilliseconds>=0&&s.delayMilliseconds<=60000,'宏按键或延迟超出范围。');
-    requireThat(s.pressed?!held.has(s.usage):held.has(s.usage),'宏的按下与松开必须一一对应。');
-    if(s.pressed)held.add(s.usage);else held.delete(s.usage);
+    const mouse=s.kind==='mouse';requireThat(s.kind==null||mouse,'宏事件类型尚未支持。');const identity=`${mouse?'mouse':'key'}:${s.usage}`;
+    requireThat(Number.isInteger(s.usage)&&(mouse?[1,2,4,8,16].includes(s.usage):s.usage>=4&&s.usage<=231)&&typeof s.pressed==='boolean'&&Number.isInteger(s.delayMilliseconds)&&s.delayMilliseconds>=0&&s.delayMilliseconds<=60000,'宏按键或延迟超出范围。');
+    requireThat(s.pressed?!held.has(identity):held.has(identity),'宏的按下与松开必须一一对应。');
+    if(s.pressed)held.add(identity);else held.delete(identity);
   }
   requireThat(held.size===0,'宏结束时必须释放全部按键。');
 }
@@ -30,8 +31,8 @@ export function encodeBank(macros){
   const word=(o,v)=>{bank[o]=v&255;bank[o+1]=v>>8;};bank[0]=0xaa;bank[1]=0x55;word(2,total);word(4,macros.length);
   let cursor=16+macros.length*2;
   macros.forEach((m,i)=>{word(16+i*2,cursor);word(cursor,m.steps.length);m.steps.forEach((s,j)=>{
-    const modifier=s.usage>=224;
-    bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
+    const modifier=s.kind!=='mouse'&&s.usage>=224;
+    bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
   });cursor+=4+m.steps.length*4;});return bank;
 }
 export function decodeBank(bank){
@@ -44,10 +45,11 @@ export function decodeBank(bank){
     const n=word(start),end=start+4+n*4;requireThat(n>0&&n<=256&&end<=length,'宏事件越界。');
     const m={name:`硬件宏 ${i+1}`,steps:[]};
     for(let o=start+4;o<end;o+=4){const kind=bank[o+2]&127,code=bank[o+3];let usage;
-      if(kind===10&&code<224)usage=code;
+      if(kind===1&&[1,2,4,8,16].includes(code))usage=code;
+      else if(kind===10&&code<224)usage=code;
       else if(kind===9&&code>0&&(code&(code-1))===0)usage=224+Math.log2(code);
       else throw new Error('宏包含尚未支持的事件，原始数据仍保留。');
-      m.steps.push({usage,pressed:!!(bank[o+2]&128),delayMilliseconds:word(o)});
+      m.steps.push({usage,pressed:!!(bank[o+2]&128),delayMilliseconds:word(o),...(kind===1?{kind:'mouse'}:{})});
     }
     validateMacro(m);macros.push(m);cursor=end;
   }return macros;
@@ -120,9 +122,10 @@ export function importWindows(root,baseline){
           const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
           requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
           const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
-            if(type===10&&button>=4&&button<224)usage=button;
+            if(type===1&&[1,2,4,8,16].includes(button))usage=button;
+            else if(type===10&&button>=4&&button<224)usage=button;
             else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
-            else throw new Error('鼠标和滚动宏尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000)};});
+            else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
           const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
           const macro={name,steps,recordingDelay};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
         }const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
