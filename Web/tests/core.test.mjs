@@ -90,6 +90,24 @@ test('malformed or out-of-range queries never reach sendReport',async()=>{
 test('internal keys, hidden colors and unknown system parameters cannot be changed',()=>{
   const base=demoSnapshot();for(const mutate of [s=>s.keymap[18]=32,s=>s.colors[125*3]=1,s=>s.parameters[9]=1]){const target=clone(base);mutate(target);assert.throws(()=>validatePlan(target,base));}
 });
+test('new lighting parameters cannot resend an unknown option from the old mode',()=>{
+  const base=demoSnapshot();base.parameters[1]=23;base.parameters[5]=255;
+  const target=clone(base);target.parameters[1]=8;target.colors.splice(42,3,231,193,193);
+  assert.throws(()=>validatePlan(target,base),/选项未知/);
+  target.parameters[5]=0;assert.doesNotThrow(()=>validatePlan(target,base));
+  const colorsOnly=clone(base);colorsOnly.colors.splice(42,3,231,193,193);
+  assert.doesNotThrow(()=>validatePlan(colorsOnly,base)); // No parameter resend.
+  base.parameters[4]=255;target.parameters[4]=255;assert.throws(()=>validatePlan(target,base),/选项未知/);
+});
+test('page gate observes a fresh 200ms for every packet and rejects a tap during the wait',async()=>{
+  const win=new EventTarget(),doc=new EventTarget();doc.hasFocus=()=>true;doc.visibilityState='visible';const g=new PageReleaseGate(win,doc);
+  g.acknowledge({detail:1});
+  for(let i=0;i<3;i++){const start=performance.now();await g.check();assert.ok(performance.now()-start>=200);}
+  const checking=g.check();
+  setTimeout(()=>{for(const type of ['keydown','keyup']){const e=new Event(type);Object.assign(e,{code:'KeyA'});win.dispatchEvent(e);}},20);
+  await assert.rejects(checking,/状态变化/);
+  await assert.rejects(g.check(),/重新确认/);
+});
 test('page gate requires mouse acknowledgement, waits for key release, disarms on blur',async()=>{
   const win=new EventTarget(),doc=new EventTarget();doc.hasFocus=()=>true;doc.visibilityState='visible';const g=new PageReleaseGate(win,doc);
   await assert.rejects(g.check());assert.throws(()=>g.acknowledge({detail:0}));assert.throws(()=>g.acknowledge({detail:1,ctrlKey:true}));g.acknowledge({detail:1});

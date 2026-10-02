@@ -58,3 +58,12 @@ node tests/replay-diagnostics.mjs CherryMac-diagnostics.json
 ```
 
 该脚本没有设备访问或发送操作。它只能分析实际记录，不会重现未记录的物理故障。
+
+在完整 Git 仓库中，还可执行旧版代码的离线复现。脚本从固定历史提交取出原实现，仅实例化内存模拟设备；无参数使用合成配置，也可传入自己的排查文件和 Windows 恢复 JSON：
+
+```sh
+node tests/reproduce-legacy.mjs
+node tests/reproduce-legacy.mjs CherryMac-diagnostics.json Windows-profile.json
+```
+
+它会验证旧版快速连续发包、未知参数随模式重发，以及注入回复丢失／损坏后的中断与部分配置；再检查新参数校验、逐包等待和当前写入入口零操作。输出明确标注注入故障，不能据此认定真实键盘曾发生同样的通信错误，也不模拟灯光或系统识别。无需用实体键盘重复旧版操作。

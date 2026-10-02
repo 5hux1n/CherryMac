@@ -67,18 +67,25 @@ export class CherryHID{
 // Browser events only cover this focused page. They cannot prove system-wide
 // keyboard idleness. The explicit physical-release acknowledgement is required.
 export class PageReleaseGate{
-  constructor(win=window,doc=document){this.win=win;this.doc=doc;this.held=new Set();this.armed=false;this.lastKey=0;
-    this.down=e=>{this.held.add(e.code);this.lastKey=performance.now();};
-    this.up=e=>{this.held.delete(e.code);this.lastKey=performance.now();};
-    this.blur=()=>{this.armed=false;};win.addEventListener('keydown',this.down,true);win.addEventListener('keyup',this.up,true);win.addEventListener('blur',this.blur);doc.addEventListener('visibilitychange',this.blur);
+  constructor(win=window,doc=document){this.win=win;this.doc=doc;this.held=new Set();this.armed=false;this.lastKey=0;this.activity=0;
+    this.down=e=>{this.held.add(e.code);this.lastKey=performance.now();this.activity++;};
+    this.up=e=>{this.held.delete(e.code);this.lastKey=performance.now();this.activity++;};
+    this.blur=()=>{this.armed=false;this.activity++;};win.addEventListener('keydown',this.down,true);win.addEventListener('keyup',this.up,true);win.addEventListener('blur',this.blur);doc.addEventListener('visibilitychange',this.blur);
   }
   acknowledge(event){requireThat(event.detail>0,'请松开全部键，用鼠标点击确认。');requireThat(this.doc.hasFocus()&&this.doc.visibilityState==='visible','请保持页面在前台。');
     requireThat(!(event.ctrlKey||event.altKey||event.metaKey||event.shiftKey),'请松开 Ctrl、Alt、Win 和 Shift。');
     // A deliberate physical acknowledgement resets events missed while unfocused.
-    this.held.clear();this.armed=true;this.lastKey=performance.now();
+    this.held.clear();this.armed=true;this.lastKey=performance.now();this.activity++;
   }
   async check(){requireThat(this.armed&&this.doc.hasFocus()&&this.doc.visibilityState==='visible','页面离开了前台，已停止写入。请松开全部键后重新确认。');
-    requireThat(this.held.size===0,'检测到按键仍按住，已停止写入。');const elapsed=performance.now()-this.lastKey;if(elapsed<200)await sleep(200-elapsed);
-    requireThat(this.armed&&this.doc.hasFocus()&&this.doc.visibilityState==='visible'&&this.held.size===0,'写入期间请保持页面在前台，并松开全部按键。');
+    requireThat(this.held.size===0,'检测到按键仍按住，已停止写入。');
+    const activity=this.activity,start=performance.now();
+    // A new continuous observation period for EVERY check. Never borrow the
+    // wait before an earlier command; even a down/up tap invalidates this one.
+    do{await sleep(Math.max(1,200-(performance.now()-start)));
+      const valid=this.activity===activity&&this.armed&&this.doc.hasFocus()&&this.doc.visibilityState==='visible'&&this.held.size===0;
+      if(!valid)this.armed=false;
+      requireThat(valid,'等待期间检测到按键或页面状态变化，已停止写入，请重新确认。');
+    }while(performance.now()-start<200);
   }
 }

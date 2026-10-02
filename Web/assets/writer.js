@@ -12,7 +12,9 @@ export function validatePlan(wanted,before){
   requireThat(wanted.parameters[0]===before.parameters[0]&&equal(wanted.parameters.slice(9),before.parameters.slice(9)),'配置改变了未知系统参数。');
   if(!equal(wanted.parameters,before.parameters)){
     requireThat(modes.some(([v])=>v===wanted.parameters[1])&&wanted.parameters[2]<=4&&wanted.parameters[3]<=4,'灯效模式、亮度或速度无效。');
-    for(const i of [4,5])requireThat(wanted.parameters[i]===before.parameters[i]||wanted.parameters[i]<=1,'方向或颜色选项无效。');
+    // The parameter command resends the whole first nine bytes. An unknown
+    // value cannot be declared safe merely because it matched the old mode.
+    for(const i of [4,5])requireThat(wanted.parameters[i]<=1,'灯效方向或颜色选项未知；请显式选择已支持的值，不能随新参数重新发送。');
   }
   const visible=new Set(editableSlots);visible.add(6);visible.add(71);
   for(let i=0;i<126;i++){
