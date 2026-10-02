@@ -67,9 +67,9 @@ export async function applyConfiguration(hid,wanted,before,{gate,backup,progress
 // This generic transaction is exercised with a scoped simulated transport.
 // Normal CherryHID construction exposes no macro permission. The explicit
 // research transport exercises framing and recovery before product acceptance.
-export async function applyMacroConfiguration(hid,target,before,{gate,backup,waitForCompletion,progress=()=>{}}={}){
+export async function applyMacroConfiguration(hid,target,before,{gate,backup,waitForCompletion,confirmStopped,progress=()=>{}}={}){
   requireThat(typeof hid?.withMacroAuthorization==='function','宏传输尚未开放，未读取或写入键盘。');
-  const authorization=new MacroWriteAuthorization(before,target),wanted=authorization.expected,original=authorization.before,disabled=authorization.disabled;
+  const authorization=new MacroWriteAuthorization(before,target,{allowUnbounded:typeof confirmStopped==='function'}),wanted=authorization.expected,original=authorization.before,disabled=authorization.disabled;
   requireThat(gate&&typeof gate.check==='function'&&typeof backup==='function'&&typeof waitForCompletion==='function','缺少松键、备份或宏结束检查，停止写入。');
   if(sameSnapshot(original,wanted))return clone(original);
   const id=crypto.randomUUID(),previousOperationId=hid.operationId;hid.operationId=id;
@@ -77,6 +77,12 @@ export async function applyMacroConfiguration(hid,target,before,{gate,backup,wai
   try{
     await phase('核对宏写入前配置');requireThat(sameSnapshot(await hid.snapshot(),original),'键盘配置已经变化，请重新读取后写入。');
     await backup(clone(original));await phase('宏写入前备份已保存',{baseline:original,target:wanted,beforeDurationMilliseconds:authorization.beforeDurationMilliseconds,targetDurationMilliseconds:authorization.targetDurationMilliseconds});await gate.check();
+    if(authorization.beforeCompletion.repeatingBindings.length){
+      await phase('等待实体宏停止');
+      await confirmStopped({phase:'beforeWrite',configurations:[clone(original)],requirements:[authorization.beforeCompletion]});
+      await gate.check();await hid.flushLogs();
+      requireThat(sameSnapshot(await hid.snapshot(),original),'停止期间配置发生变化，未发送写包。');
+    }
     return await hid.withMacroAuthorization(authorization,gate,async()=>{
       let attempted=false;
       const send=async packet=>{authorization.validate(packet);await gate.check();await hid.flushLogs();attempted=true;await hid.exchange(packet);};
@@ -96,6 +102,12 @@ export async function applyMacroConfiguration(hid,target,before,{gate,backup,wai
         if(hid.dead)throw new Error(`${reason} 已停止发送；命令可能已执行。备份已保存，请重新连接并读取后恢复。`);
         try{
           await gate.check();await phase('核对宏可恢复范围');authorization.validateRecovery(await hid.snapshot());
+          if(authorization.beforeCompletion.repeatingBindings.length||authorization.targetCompletion.repeatingBindings.length){
+            requireThat(typeof confirmStopped==='function','缺少持续宏停止流程，保留备份并停止恢复。');
+            await phase('等待实体宏停止后恢复');
+            await confirmStopped({phase:'recovery',configurations:[clone(original),clone(wanted)],requirements:[authorization.beforeCompletion,authorization.targetCompletion]});
+            await gate.check();await hid.flushLogs();authorization.validateRecovery(await hid.snapshot());
+          }
           await phase('禁用新旧宏触发键');await keys(disabled.keymap);
           await drain(Math.max(authorization.beforeDurationMilliseconds,authorization.targetDurationMilliseconds));
           await phase('恢复原宏区与绑定');await bank(original.macroData);await keys(original.keymap);

@@ -412,6 +412,30 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
         var unbounded=desired;unbounded.keymap.replaceSubrange(306..<309,with:try! CherryMacroCodec.binding(0,playback:MacroPlayback(mode:mode)))
         _=rejected{_ = try MacroWriteAuthorization(baseline:unbounded,target:desired)}
         _=rejected{_ = try MacroWriteAuthorization(baseline:desired,target:unbounded)}
+        let stopped=SimulatedCherry(unbounded);var stopPhases:[MacroStopRequest.Phase]=[]
+        let actual=try! stopped.writeMacroConfiguration(desired,baseline:unbounded,confirmStopped:{request in
+            precondition(stopped.packets.isEmpty,"original trigger must remain available before physical stop")
+            precondition(request.requirements[0].repeatingBindings.count==1)
+            precondition(request.requirements[0].repeatingBindings[0].playback.mode==mode)
+            stopPhases.append(request.phase)
+        })
+        precondition(actual==desired && stopPhases==[.beforeWrite])
+        let refused=SimulatedCherry(unbounded)
+        _=rejected{_ = try refused.writeMacroConfiguration(desired,baseline:unbounded,confirmStopped:{_ in throw HardwareError(message:"stop not confirmed")})}
+        precondition(refused.packets.isEmpty,"stop refusal must precede all writes")
+        let recovery=SimulatedCherry(original);recovery.failSendAt=1;var recoveredStop=false
+        _=rejected{_ = try recovery.writeMacroConfiguration(unbounded,baseline:original,confirmStopped:{request in
+            precondition(request.phase == .recovery && recovery.packets.count==1)
+            precondition(request.requirements[1].repeatingBindings[0].playback.mode==mode)
+            recoveredStop=true
+        })}
+        precondition(recoveredStop && recovery.state==original)
+        let blockedRecovery=SimulatedCherry(original);blockedRecovery.failSendAt=1
+        _=rejected{_ = try blockedRecovery.writeMacroConfiguration(unbounded,baseline:original,confirmStopped:{_ in throw HardwareError(message:"stop refused during recovery")})}
+        precondition(blockedRecovery.packets.count==1,"never send recovery packets before stopping unbounded outputs")
+        let changedDuringStop=SimulatedCherry(unbounded)
+        _=rejected{_ = try changedDuringStop.writeMacroConfiguration(desired,baseline:unbounded,confirmStopped:{_ in changedDuringStop.state.parameters[9]^=1})}
+        precondition(changedDuringStop.packets.isEmpty)
     }
     var unsupported=desired;unsupported.keymap[306]=0x71
     let unknown=SimulatedCherry(unsupported)
@@ -424,7 +448,7 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
     let dangling=SimulatedCherry(original)
     _=rejected{_ = try dangling.writeKeymap(desired.keymap,baseline:original)}
     precondition(dangling.packets.isEmpty && dangling.saved.isEmpty)
-    print("PASS: finite repeat budgets and binding-only disable/drain; macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
+    print("PASS: explicit unbounded stop before disabling and recovery, stop refusal/configuration-change no-write; finite repeat budgets and binding-only disable/drain; macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
 }
 
 private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {

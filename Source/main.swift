@@ -1142,7 +1142,11 @@ func runSelfTests() {
 let app = NSApplication.shared
 #if CHERRY_MACRO_TEST
 if CommandLine.arguments.contains("--macro-observer-self-test"){
-    MacroObserverTestController().runOfflineTests();exit(0)
+    MacroObserverTestController().runOfflineTests()
+    do{try MacroPhysicalStopController.runOfflineTests()}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)};exit(0)
+}
+if let i=CommandLine.arguments.firstIndex(of:"--macro-stop-window-preview"),CommandLine.arguments.count>i+1{
+    do{try MacroPhysicalStopController.preview(URL(fileURLWithPath:CommandLine.arguments[i+1]));exit(0)}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
 if CommandLine.arguments.contains("--macro-output-observer"){
     let tester=MacroObserverTestController();app.delegate=tester;app.run();exit(0)

@@ -409,3 +409,36 @@ test('macro writer runs through framed research HID with header last and full-ba
   for(let i=1;i<outgoing.length;i++)assert.ok(new Date(outgoing[i].at)-new Date(outgoing[i-1].at)>=1400,'packets must be throttled');
   await assert.rejects(hid.exchange(writes[0]));assert.equal(device.writeCount,9);await hid.close();
 });
+
+test('held/toggle transaction stops before disabling and refuses missing or failed stop providers',async()=>{
+  const original=demoSnapshot(),finite=clone(original);finite.macroData=encodeBank([macro]);finite.keymap.splice(306,3,...macroBinding(0));
+  for(const mode of ['held','toggle']){
+    const looping=clone(finite);looping.keymap.splice(306,3,...macroBinding(0,{mode,count:1}));
+    const missing=new SimulatedMacroSession(looping);
+    await assert.rejects(applyMacroConfiguration(missing,finite,looping,missing.options()),/明确停止流程/);assert.equal(missing.packets.length,0);assert.equal(missing.saved.length,0);
+    const session=new SimulatedMacroSession(looping),stops=[];
+    await applyMacroConfiguration(session,finite,looping,{...session.options(),confirmStopped:async request=>{
+      assert.equal(session.packets.length,0,'original toggle trigger must stay available until stopped');assert.equal(request.phase,'beforeWrite');
+      assert.equal(request.requirements[0].repeatingBindings[0].playback.mode,mode);stops.push(request.phase);
+      request.configurations[0].keymap.fill(255);request.requirements[0].repeatingBindings.length=0;
+    }});
+    assert.deepEqual(stops,['beforeWrite']);assert.ok(sameSnapshot(session.state,finite));
+    const refused=new SimulatedMacroSession(looping);
+    await assert.rejects(applyMacroConfiguration(refused,finite,looping,{...refused.options(),confirmStopped:async()=>{throw new Error('stop not confirmed');}}),/stop not confirmed/);assert.equal(refused.packets.length,0);
+    const changed=new SimulatedMacroSession(looping);
+    await assert.rejects(applyMacroConfiguration(changed,finite,looping,{...changed.options(),confirmStopped:async()=>{changed.state.parameters[9]^=1;}}),/停止期间配置发生变化/);assert.equal(changed.packets.length,0);
+  }
+});
+test('held/toggle failure requires stopping new and old candidates before any recovery writes',async()=>{
+  const original=demoSnapshot();
+  for(const mode of ['held','toggle'])for(const refuse of [false,true]){
+    const looping=clone(original);looping.macroData=encodeBank([macro]);looping.keymap.splice(306,3,...macroBinding(0,{mode,count:1}));
+    const session=new SimulatedMacroSession(original);session.failAt=1;let stops=0;
+    await assert.rejects(applyMacroConfiguration(session,looping,original,{...session.options(),confirmStopped:async request=>{
+      stops++;assert.equal(request.phase,'recovery');assert.equal(session.packets.length,1);assert.equal(request.configurations.length,2);assert.equal(request.requirements[1].repeatingBindings[0].playback.mode,mode);
+      if(refuse)throw new Error('not stopped');
+    }}),refuse?/自动恢复未完成/:/已恢复原宏与绑定/);
+    assert.equal(stops,1);if(refuse)assert.equal(session.packets.length,1);else assert.ok(sameSnapshot(session.state,original));
+    assert.equal(session.authorization,undefined);
+  }
+});

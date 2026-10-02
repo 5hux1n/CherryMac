@@ -89,23 +89,28 @@ struct MacroWriteAuthorization {
     let changedOffsets:[Int]
     let beforeDurationMilliseconds:Int
     let targetDurationMilliseconds:Int
+    let beforeCompletion:MacroCompletionRequirements
+    let targetCompletion:MacroCompletionRequirements
     private let allowedPackets:Set<[UInt8]>
-    init(baseline:HardwareSnapshot,target:HardwareSnapshot) throws {
+    init(baseline:HardwareSnapshot,target:HardwareSnapshot,allowUnbounded:Bool=false) throws {
         try baseline.validate();try target.validate()
         guard baseline.deviceInfo[6]==24,baseline.colors != nil,
               let original=baseline.macroData,let wanted=target.macroData,
               baseline.deviceInfo==target.deviceInfo,baseline.parameters==target.parameters,
               baseline.colors==target.colors else{throw HardwareError(message:"宏操作必须使用当前完整配置，并保留设备参数与灯效。")}
         let oldMacros=try CherryMacroCodec.decode(original),newMacros=try CherryMacroCodec.decode(wanted)
-        beforeDurationMilliseconds=try CherryMacroCodec.finiteDurationMilliseconds(keymap:baseline.keymap,macros:oldMacros)
-        targetDurationMilliseconds=try CherryMacroCodec.finiteDurationMilliseconds(keymap:target.keymap,macros:newMacros)
+        beforeCompletion=try CherryMacroCodec.completionRequirements(keymap:baseline.keymap,macros:oldMacros)
+        targetCompletion=try CherryMacroCodec.completionRequirements(keymap:target.keymap,macros:newMacros)
+        guard allowUnbounded || (beforeCompletion.repeatingBindings.isEmpty && targetCompletion.repeatingBindings.isEmpty) else{throw HardwareError(message:"持续与开关宏需要明确停止流程，暂不能使用默认写入。")}
+        beforeDurationMilliseconds=beforeCompletion.finiteDurationMilliseconds
+        targetDurationMilliseconds=targetCompletion.finiteDurationMilliseconds
         var safe=baseline
         for slot in 0..<126 {
             let range=slot*3..<slot*3+3,old=Array(baseline.keymap[range]),next=Array(target.keymap[range])
             let wasMacro=[UInt8(0x70),0x71].contains(old[0]),isMacro=[UInt8(0x70),0x71].contains(next[0])
             for (record,count) in [(old,oldMacros.count),(next,newMacros.count)] where [UInt8(0x70),0x71].contains(record[0]) {
                 let playback=try CherryMacroCodec.playback(record,macroCount:count)
-                guard playback.mode == .count else{throw HardwareError(message:"持续与开关宏的停止流程尚未完成，暂不能写入。")}
+                try playback.validate()
             }
             if wasMacro || isMacro {
                 guard KeymapWriteAuthorization.editableSlots.contains(slot) else{throw HardwareError(message:"内部与隐藏位置的宏绑定不能改写。")}

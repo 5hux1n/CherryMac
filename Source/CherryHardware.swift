@@ -126,8 +126,8 @@ extension CherryHardwareAccess {
 }
 
 extension CherryHardwareAccess {
-    func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot,operationLog:HardwareOperationLog? = nil) throws -> HardwareSnapshot {
-        let authorization=try MacroWriteAuthorization(baseline:baseline,target:expected)
+    func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot,operationLog:HardwareOperationLog? = nil,confirmStopped:((MacroStopRequest)throws->Void)? = nil) throws -> HardwareSnapshot {
+        let authorization=try MacroWriteAuthorization(baseline:baseline,target:expected,allowUnbounded:confirmStopped != nil)
         guard let wanted=expected.macroData,let original=baseline.macroData else{throw HardwareError(message:"请重新读取包含宏数据的完整配置。")}
         let oldSlots=(0..<126).filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
         let before=try completeSnapshot()
@@ -146,6 +146,16 @@ extension CherryHardwareAccess {
         }
         let disabled=authorization.disabled.keymap
         let drain=authorization.beforeDurationMilliseconds
+        // Stop before disabling: a toggle macro may need its original trigger
+        // to remain available. Do not infer cancellation from disabled keys.
+        if !authorization.beforeCompletion.repeatingBindings.isEmpty {
+            let request=MacroStopRequest(phase:.beforeWrite,configurations:[before],requirements:[authorization.beforeCompletion])
+            operationLog?.record("phase","waiting-for-physical-macro-stop")
+            guard let confirmStopped else{throw HardwareError(message:"缺少持续宏停止流程，未发送写包。")}
+            try confirmStopped(request);try waitUntilKeysReleased();try operationLog?.requireHealthy()
+            let stopped=try completeSnapshot()
+            guard stopped.deviceInfo==before.deviceInfo,stopped.keymap==before.keymap,stopped.macroData==before.macroData,stopped.parameters==before.parameters,stopped.colors==before.colors else{throw HardwareError(message:"停止期间配置发生变化，未发送写包。")}
+        }
         do {
             if !oldSlots.isEmpty {
                 operationLog?.record("phase","disabling-old-triggers")
@@ -170,6 +180,13 @@ extension CherryHardwareAccess {
                 // Disable both old and newly introduced triggers before
                 // restoring the original macro bank, then restore key bindings.
                 try authorization.validateRecovery(completeSnapshot())
+                if !authorization.beforeCompletion.repeatingBindings.isEmpty || !authorization.targetCompletion.repeatingBindings.isEmpty {
+                    operationLog?.record("phase","waiting-for-physical-macro-stop-before-recovery")
+                    guard let confirmStopped else{throw HardwareError(message:"缺少持续宏停止流程，保留备份并停止恢复。")}
+                    try confirmStopped(.init(phase:.recovery,configurations:[before,expected],requirements:[authorization.beforeCompletion,authorization.targetCompletion]))
+                    try waitUntilKeysReleased()
+                    try authorization.validateRecovery(completeSnapshot())
+                }
                 try keys(authorization.disabled.keymap)
                 let newDuration=authorization.targetDurationMilliseconds
                 try waitForMacroCompletion(seconds:Double(max(drain,newDuration))/1000)
@@ -227,13 +244,13 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #if CHERRY_MACRO_TEST
     private var macroAuthorization:MacroWriteAuthorization?
-    func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog)throws->HardwareSnapshot {
+    func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
         guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
-        let authorization=try MacroWriteAuthorization(baseline:baseline,target:target)
+        let authorization=try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:confirmStopped != nil)
         try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
         defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
         log.record("scope","macro bank and macro bindings only");log.record("before",try HardwareProfile(snapshot:baseline).encoded().base64EncodedString());log.record("target",try HardwareProfile(snapshot:target).encoded().base64EncodedString());log.record("phase","preflight")
-        do{let result=try writeMacroConfiguration(target,baseline:baseline,operationLog:log);log.record("phase","complete");try log.requireHealthy();return result}
+        do{let result=try writeMacroConfiguration(target,baseline:baseline,operationLog:log,confirmStopped:confirmStopped);log.record("phase","complete");try log.requireHealthy();return result}
         catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
     }
     #endif

@@ -75,16 +75,22 @@ enum CherryMacroCodec {
     }
     // Nominal event-delay budget after all trigger bindings have been disabled.
     // Actual execution timing and stop behavior still require hardware testing.
-    static func finiteDurationMilliseconds(keymap:[UInt8],macros:[KeyboardMacro]) throws -> Int {
+    static func completionRequirements(keymap:[UInt8],macros:[KeyboardMacro])throws->MacroCompletionRequirements {
         guard keymap.count==378 else{throw HardwareError(message:"宏键位表长度无效。")}
-        var longest=0
+        var result=MacroCompletionRequirements()
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(keymap[slot*3]) {
             let record=Array(keymap[slot*3..<slot*3+3]),mode=try playback(record,macroCount:macros.count)
-            guard mode.mode == .count else{throw HardwareError(message:"持续与开关宏需要先确认停止，不能使用有限等待流程。")}
             let macro=macros[Int(record[1])];try macro.validate()
-            longest=max(longest,macro.steps.reduce(0){$0+$1.delayMilliseconds}*mode.count)
+            let cycle=macro.steps.reduce(0){$0+$1.delayMilliseconds}
+            if mode.mode == .count{result.finiteDurationMilliseconds=max(result.finiteDurationMilliseconds,cycle*mode.count)}
+            else{result.repeatingBindings.append(.init(slot:slot,macro:macro,playback:mode,quietMilliseconds:cycle+200))}
         }
-        return longest
+        return result
+    }
+    static func finiteDurationMilliseconds(keymap:[UInt8],macros:[KeyboardMacro]) throws -> Int {
+        let result=try completionRequirements(keymap:keymap,macros:macros)
+        guard result.repeatingBindings.isEmpty else{throw HardwareError(message:"持续与开关宏需要先确认停止，不能使用有限等待流程。")}
+        return result.finiteDurationMilliseconds
     }
     static func binding(_ index:Int,playback:MacroPlayback = .once) throws -> [UInt8] {
         guard (0..<32).contains(index)else{throw HardwareError(message:"宏索引无效。")}
@@ -282,4 +288,24 @@ struct MacroHIDObservationAdapter {
         if pressed{held.insert(identity)}else{held.remove(identity)}
         return .init(usage:code,pressed:pressed,milliseconds:milliseconds,kind:mouse ? .mouse:nil)
     }
+}
+
+
+// Requirements describe what the stop provider must handle. A nominal budget
+// never substitutes for explicit stopping of an unbounded binding.
+struct MacroCompletionRequirements:Codable {
+    struct RepeatingBinding:Codable {
+        let slot:Int
+        let macro:KeyboardMacro
+        let playback:MacroPlayback
+        let quietMilliseconds:Int
+    }
+    var finiteDurationMilliseconds=0
+    var repeatingBindings:[RepeatingBinding]=[]
+}
+struct MacroStopRequest:Codable {
+    enum Phase:String,Codable{case beforeWrite,recovery}
+    let phase:Phase
+    let configurations:[HardwareSnapshot]
+    let requirements:[MacroCompletionRequirements]
 }

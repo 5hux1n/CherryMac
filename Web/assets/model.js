@@ -173,14 +173,21 @@ export class MacroRecorder{
 }
 
 // Nominal event-delay budget, not a claim about measured firmware timing.
-export function finiteMacroDurationMilliseconds(keymap,macros){
-  requireThat(bytes(keymap,378)&&Array.isArray(macros),'宏键位表或宏库无效。');let longest=0;
+export function macroCompletionRequirements(keymap,macros){
+  requireThat(bytes(keymap,378)&&Array.isArray(macros),'宏键位表或宏库无效。');
+  const result={finiteDurationMilliseconds:0,repeatingBindings:[]};
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(keymap[slot*3])){
-    const record=keymap.slice(slot*3,slot*3+3),mode=decodeMacroBinding(record,macros.length);
-    requireThat(mode.mode==='count','持续与开关宏需要先确认停止，不能使用有限等待流程。');
-    const macro=macros[record[1]];validateMacro(macro);longest=Math.max(longest,macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0)*mode.count);
+    const record=keymap.slice(slot*3,slot*3+3),playback=decodeMacroBinding(record,macros.length),macro=macros[record[1]];validateMacro(macro);
+    const cycle=macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0);
+    if(playback.mode==='count')result.finiteDurationMilliseconds=Math.max(result.finiteDurationMilliseconds,cycle*playback.count);
+    else result.repeatingBindings.push({slot,macro:clone(macro),playback,quietMilliseconds:cycle+200});
   }
-  return longest;
+  return result;
+}
+export function finiteMacroDurationMilliseconds(keymap,macros){
+  const result=macroCompletionRequirements(keymap,macros);
+  requireThat(result.repeatingBindings.length===0,'持续与开关宏需要先确认停止，不能使用有限等待流程。');
+  return result.finiteDurationMilliseconds;
 }
 
 // Passive evidence only. Callers must identify the actual observation source;
