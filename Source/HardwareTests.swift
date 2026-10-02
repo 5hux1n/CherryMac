@@ -67,6 +67,25 @@ func runHardwareTests() {
     fails{try calculatorAuthorization.validate(calculatorCorrupt)}
     var other=calculatorBaseline;other.keymap[306]=0x70;fails{_ = try CalculatorKeyTestAuthorization(baseline:other)}
     print("PASS: isolated calculator test allows exact original/target keymap only; rejects unrelated keys, lighting, macros, partial blocks and malformed packets; release build stays read-only")
+    precondition(CalculatorKeyRetention.compare(calculatorAuthorization.expected,authorization:calculatorAuthorization) == .retained,"reconnected target retained")
+    precondition(CalculatorKeyRetention.compare(calculatorAuthorization.before,authorization:calculatorAuthorization) == .reverted,"reconnected original reverted")
+    var unexpectedMap=calculatorAuthorization.expected;unexpectedMap.keymap[3] ^= 1
+    precondition(CalculatorKeyRetention.compare(unexpectedMap,authorization:calculatorAuthorization) == .unexpected,"unrelated reconnect change rejected")
+    var changedInfo=calculatorAuthorization.expected;changedInfo.deviceInfo[6]=25
+    precondition(CalculatorKeyRetention.compare(changedInfo,authorization:calculatorAuthorization) == .unexpected,"different firmware rejected")
+    var cycle=CalculatorPowerCycleEvidence(originalRegistryID:123)
+    precondition(!cycle.confirmPowerOff(at:1),"cannot confirm battery off before USB removal")
+    precondition(!cycle.reconnected(at:2,registryID:456),"cannot reconnect without removal")
+    cycle.disconnected(at:10)
+    precondition(!cycle.reconnected(at:11,registryID:123),"old USB instance is not a reconnect")
+    precondition(cycle.confirmPowerOff(at:12),"explicit power-off confirmation after removal")
+    precondition(cycle.reconnected(at:27,registryID:456) && cycle.hasConfirmedPowerCycle,"new USB instance after 15 confirmed-off seconds")
+    precondition(!cycle.confirmPowerOff(at:28),"cannot confirm power-off after reconnect")
+    var unplugOnly=CalculatorPowerCycleEvidence(originalRegistryID:123);unplugOnly.disconnected(at:10)
+    precondition(unplugOnly.reconnected(at:99,registryID:456) && !unplugOnly.hasConfirmedPowerCycle,"USB unplug alone is not battery power-off")
+    var tooShort=CalculatorPowerCycleEvidence(originalRegistryID:123);tooShort.disconnected(at:10);_ = tooShort.confirmPowerOff(at:11);_ = tooShort.reconnected(at:25,registryID:456)
+    precondition(!tooShort.hasConfirmedPowerCycle,"short confirmed-off duration is not accepted")
+    print("PASS: reconnect compares target/original without rewriting; power-cycle evidence requires USB removal, new instance and explicit battery-off confirmation for at least 15 seconds")
     for command:UInt8 in [1,2,6,7,9,0x0B,0x0D,0x15,0xFF]{fails{try HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(command,offset:0,length:3,data:[32,0,4]))}}
     try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(5,offset:0,length:56))
     try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(0x14,offset:3024,length:47))

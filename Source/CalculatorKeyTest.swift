@@ -27,3 +27,39 @@ struct CalculatorKeyTestAuthorization {
         throw HardwareError(message:"数据与已备份的原表或仅修改计算器键的目标表不符，停止写入。")
     }
 }
+
+enum CalculatorKeyRetention:String {
+    case retained, reverted, unexpected
+    static func compare(_ current:HardwareSnapshot,authorization:CalculatorKeyTestAuthorization)->Self {
+        let original=authorization.before,expected=authorization.expected
+        guard current.deviceInfo==original.deviceInfo,current.parameters==original.parameters,
+              current.colors==original.colors,current.macroData==original.macroData else{return .unexpected}
+        if current.keymap==expected.keymap{return .retained}
+        if current.keymap==original.keymap{return .reverted}
+        return .unexpected
+    }
+}
+
+// USB removal is observable; battery power-off requires the user's explicit confirmation.
+struct CalculatorPowerCycleEvidence {
+    let originalRegistryID:UInt64
+    private(set) var disconnectedAt:Double?
+    private(set) var powerOffConfirmedAt:Double?
+    private(set) var reconnectedAt:Double?
+    private(set) var reconnectedRegistryID:UInt64?
+    mutating func disconnected(at:Double){if disconnectedAt==nil{disconnectedAt=at}}
+    mutating func confirmPowerOff(at:Double)->Bool {
+        guard let removed=disconnectedAt,at>=removed,reconnectedAt==nil else{return false}
+        if powerOffConfirmedAt==nil{powerOffConfirmedAt=at}
+        return true
+    }
+    mutating func reconnected(at:Double,registryID:UInt64)->Bool {
+        guard let removed=disconnectedAt,at>removed,registryID != originalRegistryID,reconnectedAt==nil else{return false}
+        reconnectedAt=at;reconnectedRegistryID=registryID;return true
+    }
+    var confirmedOffInterval:Double? {
+        guard let off=powerOffConfirmedAt,let on=reconnectedAt else{return nil}
+        return on-off
+    }
+    var hasConfirmedPowerCycle:Bool{(confirmedOffInterval ?? -1)>=15}
+}
