@@ -1,7 +1,7 @@
 // Offline only. This script never opens a device or invokes a HID API.
 import {readFileSync} from 'node:fs';
 import {validateReply} from '../assets/hid.js';
-import {assertReadOnlyRequest,KeymapWriteAuthorization} from '../assets/safety.js?v=0.3.0';
+import {assertReadOnlyRequest,KeymapWriteAuthorization} from '../assets/safety.js?v=0.4.0';
 import {bytes,validateSnapshot} from '../assets/model.js';
 const filename=process.argv[2];
 if(!filename){console.error('用法：node tests/replay-diagnostics.mjs CherryMac-diagnostics.json');process.exit(1);}

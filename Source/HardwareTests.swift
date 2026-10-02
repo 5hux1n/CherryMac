@@ -50,6 +50,7 @@ func runHardwareTests() {
     runWindowsProfileTests(snapshot)
     runLightingTests(snapshot)
     runHardwareEditorTests(snapshot)
+    runMacroPlaybackTests()
     runScopedKeymapTests()
     var calculatorBaseline=hardware;calculatorBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let calculatorAuthorization=try! CalculatorKeyTestAuthorization(baseline:calculatorBaseline)
@@ -172,6 +173,35 @@ private final class SimulatedCherry: CherryHardwareAccess {
         try CherryPacket.validate(packet,request:packet)
         return packet
     }
+}
+
+private func runMacroPlaybackTests(){
+    func rejected(_ body:() throws->Void){do{try body();preconditionFailure("expected playback rejection")}catch{}}
+    let macro=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])
+    let modes:[MacroPlayback]=[.once,.init(mode:.count,count:2),.init(mode:.count,count:255),.init(mode:.held,count:1),.init(mode:.toggle,count:1)]
+    let wire:[[UInt8]]=[[0x70,0,0],[0x71,0,2],[0x71,0,255],[0x70,0,1],[0x70,0,2]]
+    for (playback,expected) in zip(modes,wire){
+        precondition(try! CherryMacroCodec.binding(0,playback:playback)==expected)
+        var s=HardwareSnapshot.demo();s.macroData=try! CherryMacroCodec.encode([macro]);s.keymap.replaceSubrange(306..<309,with:expected)
+        let decoded=try! HardwareProfile.fromHardware(s)
+        precondition(decoded.macroModes?[102]==playback && (try! decoded.resolvedMacros()).keymap==s.keymap)
+        precondition(try! HardwareProfile.decode(decoded.encoded())==decoded)
+        rejected{_ = try KeymapWriteAuthorization(baseline:HardwareSnapshot.demo(),keymap:s.keymap)}
+    }
+    for bad in [[UInt8(0x70),0,3],[0x71,0,0],[0x71,0,1],[0x70,1,0]]{rejected{_ = try CherryMacroCodec.playback(bad,macroCount:1)}}
+    for value in [0,256]{rejected{_ = try CherryMacroCodec.binding(0,playback:.init(mode:.count,count:value))}}
+    rejected{_ = try CherryMacroCodec.binding(0,playback:.init(mode:.held,count:2))}
+    var legacy=HardwareProfile(snapshot:HardwareSnapshot.demo(),macros:[macro],macroBindings:[102:"A"])
+    legacy.snapshot.keymap.replaceSubrange(306..<309,with:[0x70,0,0])
+    precondition(Array((try! legacy.resolvedMacros()).keymap[306..<309])==[0x70,0,0])
+    let editor=HardwareWindowController();editor.profile=try! HardwareProfile.fromHardware(HardwareSnapshot.demo())
+    editor.macroName.stringValue="A";editor.macroText.string="A 按下 0\nA 松开 50";editor.stageMacro()
+    editor.macroPlayback.selectItem(at:0);editor.macroRepeat.stringValue="3";editor.assignMacro()
+    precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x71,0,3])
+    editor.loadSelectedAssignment();precondition(editor.macroRepeat.stringValue=="3")
+    editor.macroPlayback.selectItem(at:2);editor.assignMacro();precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x70,0,2])
+    editor.actionPicker.selectItem(at:3);editor.stageKey();precondition(editor.profile!.macroModes?[102]==nil)
+    print("PASS: official count/held/toggle macro bindings, legacy single-run compatibility, per-key preservation, editor staging and invalid-mode rejection (offline only; macro writes remain paused)")
 }
 
 private func runScopedKeymapTests(){

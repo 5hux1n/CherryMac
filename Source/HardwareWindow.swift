@@ -53,6 +53,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let macroPicker = NSPopUpButton()
     let macroKey = NSPopUpButton()
     let macroDelay = NSTextField(string:"50")
+    let macroPlayback=NSPopUpButton()
+    let macroRepeat=NSTextField(string:"1")
     let queue = DispatchQueue(label:"local.cherrymac.hardware")
     var keyButtons:[KeyButton] = []
     var tabButtons:[NSButton]=[]
@@ -139,7 +141,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("添加按下与松开",#selector(appendMacroKey)),593,99,282,30,in:macros)
         place(button("保存宏",#selector(stageMacro)),593,144,282,30,in:macros)
         place(button("分配到选中的键",#selector(assignMacro)),593,189,282,30,in:macros)
-        place(label("执行一次。实体触发、循环与鼠标宏仍在验证。",11),593,233,282,44,in:macros)
+        macroPlayback.addItems(withTitles:["指定执行次数","按住持续","再次按键停止"]);macroPlayback.target=self;macroPlayback.action=#selector(playbackChanged);controls.append(macroPlayback)
+        place(label("执行方式"),8,262,95,24,in:macros);place(macroPlayback,116,258,170,28,in:macros)
+        place(label("次数"),306,262,55,24,in:macros);controls.append(macroRepeat);place(macroRepeat,370,258,80,28,in:macros)
+        place(label("仅编辑与导出；宏实体写入暂缓。",11),593,233,282,44,in:macros)
         let files=tabs.tabViewItems[3].view!
         place(label("配置文件",20,.semibold),8,12,850,30,in:files)
         place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
@@ -187,6 +192,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     func loadSelectedAssignment(){
         guard let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),let profile else{return}
+        if let name=profile.macroBindings?[slot],macroPicker.itemTitles.contains(name){macroPicker.selectItem(withTitle:name);chooseMacro()}
+        let playback=profile.macroModes?[slot] ?? .once
+        macroPlayback.selectItem(at:playback.mode == .count ? 0:playback.mode == .held ? 1:2);macroRepeat.stringValue=String(playback.count);playbackChanged()
         let bytes=Array(profile.snapshot.keymap[slot*3..<slot*3+3])
         let presets:[[UInt8]]=[[0x20,13,6],[0x20,10,33],[0x20,8,21],[0x30,182,0],[0x30,205,0],[0x30,181,0],[0x20,0,0]]
         if let preset=presets.firstIndex(of:bytes){actionPicker.selectItem(at:preset+2)}else{
@@ -200,6 +208,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         actionChanged()
     }
     func update(){
+        playbackChanged()
         writeButtons.forEach{$0.isEnabled=false}
         if !busy,let baseline,let profile,profile.snapshot.deviceInfo==baseline.deviceInfo,let plan=try? KeymapWriteAuthorization(baseline:baseline,keymap:profile.snapshot.keymap){writeButtons.first?.isEnabled = !plan.changedSlots.isEmpty;writeButtons.first?.toolTip="仅写键位表；灯效与宏区保留。"}
         for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
@@ -212,7 +221,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard let key=keyboardLayout().first(where:{$0.id==selected})else{return}
         selectedLabel.stringValue=key.label
         if let slot=CherryMatrix.slot(key),let p=profile{
-            recordLabel.stringValue="当前配置："+(p.macroBindings?[slot].map{"宏 · \($0)"} ?? CherryMatrix.describe(Array(p.snapshot.keymap[slot*3..<slot*3+3])))
+            recordLabel.stringValue="当前配置："+(p.macroBindings?[slot].map{"宏 · \($0) · \((p.macroModes?[slot] ?? .once).label)"} ?? CherryMatrix.describe(Array(p.snapshot.keymap[slot*3..<slot*3+3])))
         }else{recordLabel.stringValue="读取键盘后可查看此键配置"}
     }
     func loadLighting(){
@@ -329,7 +338,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         case 8:record=[0x20,0,0]
         default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,shortcutKeys[max(0,keyPicker.indexOfSelectedItem)].1]
         }
-        p.macroBindings?.removeValue(forKey:slot)
+        p.macroBindings?.removeValue(forKey:slot);p.macroModes?.removeValue(forKey:slot)
         p.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);profile=p;message.stringValue="已编辑 \(key.label)：\(CherryMatrix.describe(record))。尚未写入键盘。";update()
     }
     @objc func stageMacro(){
@@ -345,7 +354,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let macro=KeyboardMacro(name:macroName.stringValue,steps:steps);try macro.validate()
             if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
-            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前硬件写入停用。";update()
+            profile=p;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
         }catch{message.stringValue=error.localizedDescription}
     }
     func refreshMacroPicker(selected:String?=nil){macroPicker.removeAllItems();macroPicker.addItem(withTitle:"新建宏");macroPicker.addItems(withTitles:profile?.macros.map{$0.name} ?? []);if let selected{macroPicker.selectItem(withTitle:selected)}}
@@ -358,9 +367,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
         macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 0\n\(key) 松开 \(delay)"
     }
+    @objc func playbackChanged(){macroRepeat.isEnabled = !busy && macroPlayback.indexOfSelectedItem==0}
     @objc func assignMacro(){
         do{guard var p=profile,macroPicker.indexOfSelectedItem>0,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key)else{throw HardwareError(message:"请先保存并选择一个宏，再点选键盘按键。")}
-            let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.assignMacro(named:name,to:slot);profile=p;loadSelectedAssignment();update();message.stringValue="已把「\(name)」分配到 \(key.label)，尚未写入键盘。"
+            let mode:[MacroPlayback.Mode]=[.count,.held,.toggle]
+            guard let count=macroPlayback.indexOfSelectedItem==0 ? Int(macroRepeat.stringValue):1 else{throw HardwareError(message:"请输入宏执行次数。")}
+            let playback=MacroPlayback(mode:mode[max(0,macroPlayback.indexOfSelectedItem)],count:count)
+            let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.assignMacro(named:name,to:slot,playback:playback);profile=p;loadSelectedAssignment();update();message.stringValue="已把「\(name)」分配到 \(key.label)，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}

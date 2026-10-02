@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,encodeBank,decodeBank,validateMacro,fromHardware,resolveMacros,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,encodeBank,decodeBank,validateMacro,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan} from '../assets/writer.js';
-import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.3.0';
+import {KeymapWriteAuthorization} from '../assets/safety.js?v=0.4.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
 class FakeDevice extends EventTarget{
@@ -170,4 +170,27 @@ test('pressed keys and log persistence failure block a pending key packet before
   assert.equal(device.writeCount,0);await hid.close();
   const next=await transport(base,{log:async entry=>{if(entry.command===9)throw new Error('disk failed');}});
   await assert.rejects(applyConfiguration(next.hid,wanted,base,{gate,backup:async()=>{}}),/日志保存失败/);assert.equal(next.device.writeCount,0);await next.hid.close();
+});
+
+test('official macro playback preserves count/held/toggle through banks and legacy profiles',()=>{
+  const modes=[{mode:'count',count:1},{mode:'count',count:2},{mode:'count',count:255},{mode:'held',count:1},{mode:'toggle',count:1}];
+  const records=[[0x70,0,0],[0x71,0,2],[0x71,0,255],[0x70,0,1],[0x70,0,2]];
+  for(let i=0;i<modes.length;i++){
+    assert.deepEqual(macroBinding(0,modes[i]),records[i]);assert.deepEqual(decodeMacroBinding(records[i],1),modes[i]);
+    const p=fromHardware(demoSnapshot());p.macros=[macro];p.macroBindings[102]=macro.name;p.macroModes[102]=modes[i];p.snapshot=resolveMacros(p);
+    const decoded=fromHardware(p.snapshot);assert.deepEqual(decoded.macroModes[102],modes[i]);assert.deepEqual(resolveMacros(decoded).keymap,p.snapshot.keymap);assert.deepEqual(parseProfile(JSON.stringify(p)),p);
+    assert.throws(()=>makeKeymapPlan(p.snapshot,demoSnapshot()),/宏绑定/);
+  }
+  for(const b of [[0x70,0,3],[0x71,0,0],[0x71,0,1],[0x70,1,0]])assert.throws(()=>decodeMacroBinding(b,1));
+  for(const value of [0,256])assert.throws(()=>macroBinding(0,{mode:'count',count:value}));
+  assert.throws(()=>macroBinding(0,{mode:'held',count:2}));
+  const legacy=fromHardware(demoSnapshot());legacy.macros=[macro];legacy.macroBindings[102]=macro.name;delete legacy.macroModes;legacy.snapshot=resolveMacros(legacy);assert.deepEqual(legacy.snapshot.keymap.slice(306,309),[0x70,0,0]);
+});
+test('Windows macro playback imports all supported bindings without changing the baseline',()=>{
+  for(const [mode,count,record] of [[0,1,[0x70,0,0]],[0,3,[0x71,0,3]],[1,0,[0x70,0,1]],[2,0,[0x70,0,2]]]){
+    const root=windowsFixture(),base=demoSnapshot(),old=clone(base);root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+    root.ActionInfo=[{ActionType:2,ActionName:'A',ActionContent:{ActionMacroType:mode,ActionMacroLoopValue:count,ActionMacroEvents:[{Type:10,Button:4,Action:'down',Delay:0},{Type:10,Button:4,Action:'up',Delay:50}]}}];
+    const p=importWindows(root,base);assert.deepEqual(p.snapshot.keymap.slice(306,309),record);assert.deepEqual(base,old);
+    root.ActionInfo[0].ActionContent.ActionMacroType=3;assert.throws(()=>importWindows(root,base));assert.deepEqual(base,old);
+  }
 });

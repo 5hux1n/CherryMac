@@ -1,5 +1,5 @@
-import {clone,equal,requireThat,bytes,validateSnapshot} from './model.js?v=0.3.0';
-import {keys} from './layout.js?v=0.3.0';
+import {clone,equal,requireThat,bytes,validateSnapshot} from './model.js?v=0.4.0';
+import {keys} from './layout.js?v=0.4.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
 // Key writes need an immutable authorization for this exact baseline/target.

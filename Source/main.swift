@@ -1139,6 +1139,14 @@ func runSelfTests() {
 }
 
 let app = NSApplication.shared
+#if CHERRY_PRODUCT_TEST
+if CommandLine.arguments.contains("--product-flow-self-test"){
+    ProductKeymapTestController().runOfflineTests();exit(0)
+}
+if CommandLine.arguments.contains("--product-key-test"){
+    let tester=ProductKeymapTestController();app.delegate=tester;app.run();exit(0)
+}
+#endif
 #if CHERRY_CALCULATOR_TEST
 if CommandLine.arguments.contains("--calculator-key-test"){
     let tester=CalculatorHardwareTestController();app.delegate=tester;app.run();exit(0)

@@ -1,6 +1,6 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const artifacts=process.env.CHERRY_TEST_ARTIFACTS??await mkdtemp(join(tmpdir(),'CherryMacWebUI-'));
@@ -22,7 +22,22 @@ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.i
 await page.screenshot({path:join(artifacts,'mobile.png'),fullPage:false});
 await page.setViewportSize({width:1440,height:1120});
 await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:join(artifacts,'dark.png'),fullPage:true});await page.emulateMedia({colorScheme:'light'});
-await page.locator('#tab-macros').click();await page.locator('#macro-name').fill('测试宏');await page.locator('#add-pair').click();await page.locator('#save-macro').click();await page.locator('#assign-macro').click();assert.match(await page.locator('#status').textContent(),/已将/);
+await page.locator('#tab-macros').click();await page.locator('[data-id="calculator"]').click();await page.locator('#macro-name').fill('测试宏');await page.locator('#add-pair').click();await page.locator('#save-macro').click();await page.locator('#assign-macro').click();assert.match(await page.locator('#status').textContent(),/已将/);
+// Verify the visible playback controls and exported wire mapping, with no HID.
+for(const [mode,count,record] of [['count',3,[0x71,0,3]],['held',1,[0x70,0,1]],['toggle',1,[0x70,0,2]]]){
+  await page.locator('#macro-playback').selectOption(mode);
+  assert.equal(await page.locator('#macro-repeat').isDisabled(),mode!=='count');
+  if(mode==='count')await page.locator('#macro-repeat').fill(String(count));
+  await page.locator('#assign-macro').click();assert.match(await page.locator('#status').textContent(),/已将/);
+  await page.locator('[data-id="key4"]').click();await page.locator('[data-id="calculator"]').click();
+  assert.equal(await page.locator('#macro-playback').inputValue(),mode);assert.equal(await page.locator('#macro-repeat').inputValue(),String(count));
+  assert.equal(await page.locator('#macro-list').inputValue(),'测试宏');
+  await page.locator('#tab-profiles').click();const waiting=page.waitForEvent('download');await page.locator('#export').click();
+  const exported=await waiting,filename=join(artifacts,`playback-${mode}.json`);await exported.saveAs(filename);
+  const profile=JSON.parse(await readFile(filename,'utf8'));assert.deepEqual(profile.snapshot.keymap.slice(306,309),record);assert.deepEqual(profile.macroModes['102'],{mode,count});
+  await page.locator('#tab-macros').click();
+}
+await page.screenshot({path:join(artifacts,'macro-playback.png'),fullPage:true});
 // Install a simulated WebHID device. This never requests actual hardware access.
 await page.evaluate(()=>{
   class Fake extends EventTarget{
@@ -53,6 +68,6 @@ const backups=await page.evaluate(async()=>{const m=await import('/assets/storag
 // Invalid import leaves draft unchanged and does not issue a hardware write.
 await page.locator('#tab-profiles').click();await page.locator('#file').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"format":"other"}')});await page.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);
 await page.locator('#show-backups').click();await page.locator('.backup-row').first().waitFor();assert.ok(await page.locator('.backup-row').count()>=1);
-await page.locator('#tab-device').click();const downloadPromise=page.waitForEvent('download');await page.locator('#diagnostics').click();const diagnostic=await downloadPromise;await diagnostic.saveAs(join(artifacts,'diagnostics.json'));const logs=await page.evaluate(async()=>{const m=await import('/assets/logs.js?v=0.3.0');return await m.listLogs();});assert.ok(logs.length>0);assert.ok(logs.filter(e=>e.kind!=='phase').every(e=>e.status==='ok'&&e.reply.length===64&&e.request.length===64&&e.durationMs>=0));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);assert.deepEqual(errors,[]);
-console.log(JSON.stringify({artifacts,ui:'pass',keys:109,squareKeys:true,mobileOverflow:false,simulatedKeyWrite:'pass; seven key packets only',backups,errors}));
+await page.locator('#tab-device').click();const downloadPromise=page.waitForEvent('download');await page.locator('#diagnostics').click();const diagnostic=await downloadPromise;await diagnostic.saveAs(join(artifacts,'diagnostics.json'));const logs=await page.evaluate(async()=>{const m=await import('/assets/logs.js?v=0.4.0');return await m.listLogs();});assert.ok(logs.length>0);assert.ok(logs.filter(e=>e.kind!=='phase').every(e=>e.status==='ok'&&e.reply.length===64&&e.request.length===64&&e.durationMs>=0));assert.equal(await page.evaluate(()=>fakeDevice.writes),7);assert.deepEqual(errors,[]);
+console.log(JSON.stringify({artifacts,ui:'pass',keys:109,squareKeys:true,mobileOverflow:false,macroPlayback:'count/held/toggle exports verified; no macro HID writes',simulatedKeyWrite:'pass; seven key packets only',backups,errors}));
 }finally{await browser.close();}

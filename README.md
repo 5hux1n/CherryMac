@@ -6,7 +6,7 @@
 
 **当前是按键写入测试版，完整复刻仍在推进。** USB 有线模式下开放独立键位写入、自动备份和读回核对；灯效与宏可以编辑、导出，实体写入暂缓。计算器键已有实体输出和用户确认断电后的保留证据；其他键位、无线使用及两端新界面的实机验收仍在继续。旧网页灯效故障根因尚未确认。
 
-[下载 Mac 0.9.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.9.0) · [下载 PHP 网页版 0.3.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.3.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
+[下载 Mac 0.10.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.10.0) · [下载 PHP 网页版 0.4.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.4.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
 
 ![CherryMac 按键配置界面](docs/USB键盘配置预览.png)
 
@@ -29,7 +29,7 @@ Fn、CHERRY 内部键与隐藏位置保留原功能。当前禁止新增、移�
 | --- | --- |
 | 按键功能 | 点选按键、编辑功能、独立写入键位表 |
 | 灯效 | 编辑内置模式、亮度与速度；单键或区域配色、渐变与熄灭，暂不写入 |
-| 宏 | 编辑按下、松开与延迟，保存一次执行的键盘宏，暂不写入 |
+| 宏 | 编辑按下、松开与延迟；指定次数、按住持续或再次按键停止，暂不写入 |
 | 配置与备份 | 导入／导出 JSON、查看备份、恢复按键或撤销草稿 |
 | 设备与诊断 | 查看状态、打开操作日志或导出排查资料；客户端提供 Mac 端适配设置 |
 
@@ -71,6 +71,8 @@ php -S 127.0.0.1:8768 -t .
 
 客户端需 Xcode 命令行工具，运行 `bash Source/build.sh` 会先离线自测，再生成 `.app` 和 ZIP。网页核心自测运行 `node --test Web/tests/core.test.mjs`；仅开发测试需要 Node。可选浏览器测试 `Web/tests/browser-keymap.mjs` 需要 Playwright，使用模拟 WebHID，不连接实体键盘。
 
-本版通过客户端离线自测、24 项网页核心测试及 Chrome 完整操作测试；新界面的实际硬件流程仍需验收，不能把模拟成功当作完整移植完成。[本版审查与验证](docs/按键写入版验证.md) · [完整移植验收目标](docs/移植验收目标.md) · [灯效异常调查](docs/网页版灯效异常排查.md)
+新增宏执行方式已通过两端官方 JSON 转换一致性检查。[宏执行模式移植与限制](docs/宏执行模式移植.md)
+
+本版通过客户端离线自测、26 项网页核心测试及 Chrome 完整操作测试；新界面的实际硬件流程仍需验收，不能把模拟成功当作完整移植完成。[本版审查与验证](docs/按键写入版验证.md) · [完整移植验收目标](docs/移植验收目标.md) · [灯效异常调查](docs/网页版灯效异常排查.md)
 
 本项目与 CHERRY 官方没有关联。仓库不包含 Windows 安装程序、官方图形资源或用户原始配置和日志。

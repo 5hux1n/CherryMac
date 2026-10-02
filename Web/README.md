@@ -1,4 +1,4 @@
-# CherryMac 网页版 0.3.0：按键写入测试版
+# CherryMac 网页版 0.4.0：按键写入测试版
 
 为 CHERRY MX 3.0S 宝可梦无线键盘提供点选设置、USB 键位写入、备份和自动日志。无需构建，部署只需要 PHP。**完整移植尚未完成；灯效与宏实体写入暂缓。** 旧版 0.1.0 曾发生灯效故障，请关闭旧页面，不再用旧版写入。
 
@@ -12,7 +12,7 @@ php -S 127.0.0.1:8768 -t .
 
 用 Chrome 或 Edge 打开 <http://localhost:8768/>。也可双击 `start.command`；终端按 Control+C 停止服务。
 
-上传 `index.php` 与整个 `assets` 到 HTTPS 的 PHP 网站可直接运行，不需要 Composer、npm、构建或服务器数据库。PHP 内置服务用于本机。已验证 PHP 8.5 输出与 JavaScript MIME 类型。模块带 0.3.0 版本标记；旧页面不会自动更新，需关闭后重新打开。
+上传 `index.php` 与整个 `assets` 到 HTTPS 的 PHP 网站可直接运行，不需要 Composer、npm、构建或服务器数据库。PHP 内置服务用于本机。已验证 PHP 8.5 输出与 JavaScript MIME 类型。模块带 0.4.0 版本标记；旧页面不会自动更新，需关闭后重新打开。
 
 ## 设置按键
 
@@ -27,7 +27,7 @@ php -S 127.0.0.1:8768 -t .
 
 ## 功能菜单
 
-按键功能、灯效、宏、配置与备份、设备与诊断各占一个页面。灯效分为内置模式和逐键配色；RGB 与强度按需展开。灯效和宏可编辑、导出，当前不能写入实体键盘。逐键配色为静态，不支持逐键独立动画。
+按键功能、灯效、宏、配置与备份、设备与诊断各占一个页面。灯效分为内置模式和逐键配色；RGB 与强度按需展开。宏执行方式可设为指定次数（1–255）、按住持续或再次按键停止，并可导入相应的 Windows 键盘宏。灯效和宏可编辑、导出，当前不能写入实体键盘。逐键配色为静态，不支持逐键独立动画。
 
 ## 恢复按键与日志
 
@@ -41,7 +41,7 @@ php -S 127.0.0.1:8768 -t .
 
 ## 验证与调查状态
 
-24 项网页核心测试和 Chrome 完整操作测试已通过，设备均为模拟 WebHID。界面测试覆盖导航、正方形键帽、深色、窄屏、按键写入、灯效草稿保留、备份与日志导出。计算器键已有原生受限程序的实际 USB 与用户确认断电保留结果，**网页新写入流程尚需实机验收**。[本版验证](https://github.com/5hux1n/CherryMac/blob/main/docs/按键写入版验证.md)
+26 项网页核心测试和 Chrome 完整操作测试已通过，设备均为模拟 WebHID。界面测试覆盖导航、正方形键帽、深色、窄屏、按键写入、灯效草稿保留、备份与日志导出。计算器键已有原生受限程序的实际 USB 与用户确认断电保留结果，**网页新写入流程尚需实机验收**。[本版验证](https://github.com/5hux1n/CherryMac/blob/main/docs/按键写入版验证.md)
 
 旧版灯效故障根因仍未确认。离线复现可重现快速连续发包、未知参数重发及注入通信错误后的部分配置，不能模拟真实熄灯或系统识别异常。[调查记录](https://github.com/5hux1n/CherryMac/blob/main/docs/网页版灯效异常排查.md)
 
@@ -54,8 +54,11 @@ node --test tests/core.test.mjs
 php -l index.php
 node tests/replay-diagnostics.mjs CherryMac-diagnostics.json
 node tests/reproduce-legacy.mjs
+node tests/native-profile-parity.mjs
 ```
 
 回放脚本只分析已有记录；旧版复现脚本从固定历史提交载入实现，操作内存模拟设备。可附排查 JSON 和 Windows 恢复 JSON，不访问真实硬件。输出明确区分注入故障、物理故障未复现及当前非键位写入零操作。
 
 可选安装开发用 Playwright 后运行 `node tests/browser-keymap.mjs`；默认使用本机 Chrome 和 `http://127.0.0.1:8768/`，可通过 `CHERRY_CHROME`、`CHERRY_TEST_URL` 与 `CHERRY_TEST_ARTIFACTS` 调整。输出截图与模拟诊断文件，不请求实体设备。
+
+原生／网页配置一致性测试需先在 Mac 构建客户端，可将二进制路径作为参数传入。它只调用文件转换入口，不访问键盘。

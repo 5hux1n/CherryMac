@@ -1,7 +1,7 @@
 import Foundation
 
 // A test build may send only the canonical baseline/target keymap blocks.
-// The normal App and Web release remain read-only.
+// This research authorization is separate from the scoped product key writer.
 struct CalculatorKeyTestAuthorization {
     static let slot=102
     static let target:[UInt8]=[0x20,0x0D,0x06] // left Control + Option + Command + C

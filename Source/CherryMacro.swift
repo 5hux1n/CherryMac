@@ -3,6 +3,17 @@ import Foundation
 // Derived independently from the supplied CHERRY Utility's serializer.
 // Report 14 reads up to 54 bytes; the final capacity byte is rejected by this
 // firmware. None of these pure codec functions communicates with the device.
+struct MacroPlayback: Codable, Equatable {
+    enum Mode: String, Codable {case count, held, toggle}
+    var mode:Mode = .count
+    var count:Int = 1
+    static let once=MacroPlayback()
+    func validate() throws {
+        guard (1...255).contains(count),mode == .count || count == 1 else{throw HardwareError(message:"宏执行次数须为 1–255；持续与开关模式不使用次数。")}
+    }
+    var label:String{mode == .held ? "按住持续":mode == .toggle ? "再次按键停止":"执行 \(count) 次"}
+}
+
 enum CherryMacroCodec {
     static let accessibleSize=3071
     static func encodeEvents(_ macro:KeyboardMacro) throws -> [UInt8] {
@@ -60,8 +71,16 @@ enum CherryMacroCodec {
         }
         return macros
     }
-    static func binding(_ index:Int) throws -> [UInt8] {
+    static func binding(_ index:Int,playback:MacroPlayback = .once) throws -> [UInt8] {
         guard (0..<32).contains(index)else{throw HardwareError(message:"宏索引无效。")}
-        return [0x70,UInt8(index),0] // One execution; repeat/toggle modes omitted.
+        try playback.validate()
+        if playback.mode == .count{return playback.count==1 ? [0x70,UInt8(index),0]:[0x71,UInt8(index),UInt8(playback.count)]}
+        return [0x70,UInt8(index),playback.mode == .held ? 1:2]
+    }
+    static func playback(_ record:[UInt8],macroCount:Int) throws -> MacroPlayback {
+        guard record.count==3,Int(record[1])<macroCount else{throw HardwareError(message:"宏绑定引用无效。")}
+        if record[0]==0x70,record[2]<=2{return MacroPlayback(mode:[.count,.held,.toggle][Int(record[2])],count:1)}
+        if record[0]==0x71,record[2]>=2{return MacroPlayback(mode:.count,count:Int(record[2]))}
+        throw HardwareError(message:"未知宏执行方式，原始数据保留。")
     }
 }

@@ -1,5 +1,5 @@
-import {requireThat,validateSnapshot} from './model.js?v=0.3.0';
-import {assertReadOnlyRequest,KeymapWriteAuthorization} from './safety.js?v=0.3.0';
+import {requireThat,validateSnapshot} from './model.js?v=0.4.0';
+import {assertReadOnlyRequest,KeymapWriteAuthorization} from './safety.js?v=0.4.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
 export function packet(command,offset,length,data=[],flag=0){

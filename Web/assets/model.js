@@ -1,5 +1,5 @@
-import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.3.0';
-import {keys,modes} from './layout.js?v=0.3.0';
+import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.4.0';
+import {keys,modes} from './layout.js?v=0.4.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
@@ -51,24 +51,38 @@ export function decodeBank(bank){
     validateMacro(m);macros.push(m);cursor=end;
   }return macros;
 }
+export function validatePlayback(p){
+  requireThat(p&&['count','held','toggle'].includes(p.mode)&&Number.isInteger(p.count)&&p.count>=1&&p.count<=255&&(p.mode==='count'||p.count===1),'宏执行次数须为 1–255；持续与开关模式不使用次数。');
+}
+export function macroBinding(index,p={mode:'count',count:1}){
+  requireThat(Number.isInteger(index)&&index>=0&&index<32,'宏索引无效。');validatePlayback(p);
+  return p.mode==='count'?(p.count===1?[0x70,index,0]:[0x71,index,p.count]):[0x70,index,p.mode==='held'?1:2];
+}
+export function decodeMacroBinding(b,count){
+  requireThat(bytes(b,3)&&b[1]<count,'宏绑定引用无效。');
+  if(b[0]===0x70&&b[2]<=2)return {mode:['count','held','toggle'][b[2]],count:1};
+  if(b[0]===0x71&&b[2]>=2)return {mode:'count',count:b[2]};
+  throw new Error('未知宏执行方式，原始数据保留。');
+}
 export function fromHardware(snapshot){
   validateSnapshot(snapshot);const p={format:'CherryMacProfile',version:1,snapshot:clone(snapshot),macros:[]};
   if(!snapshot.macroData)return p;
-  p.macros=decodeBank(snapshot.macroData);p.macroBindings={};
+  p.macros=decodeBank(snapshot.macroData);p.macroBindings={};p.macroModes={};
   for(let slot=0;slot<126;slot++){const b=snapshot.keymap.slice(slot*3,slot*3+3);if([0x70,0x71].includes(b[0])){
-    requireThat(b[0]===0x70&&b[2]===0&&b[1]<p.macros.length&&!([6,71].includes(slot)),'循环宏或内部绑定尚未支持，原始数据仍保留。');p.macroBindings[slot]=p.macros[b[1]].name;
+    requireThat(![6,71].includes(slot),'宏不能绑定到内部键。');p.macroModes[slot]=decodeMacroBinding(b,p.macros.length);p.macroBindings[slot]=p.macros[b[1]].name;
   }}return p;
 }
 export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);
   requireThat(new Set(p.macros.map(m=>m.name)).size===p.macros.length,'宏名称不能重复。');
+  if(p.macroModes!=null){requireThat(typeof p.macroModes==='object'&&!Array.isArray(p.macroModes),'宏执行方式结构无效。');for(const [slot,playback] of Object.entries(p.macroModes)){requireThat(Object.hasOwn(p.macroBindings??{},slot),'宏执行方式缺少对应绑定。');validatePlayback(playback);}}
   if(p.macroBindings!=null){requireThat(typeof p.macroBindings==='object'&&!Array.isArray(p.macroBindings),'宏绑定结构无效。');
     for(const [slot,name] of Object.entries(p.macroBindings))requireThat(/^(0|[1-9]\d*)$/.test(slot)&&Number(slot)<126&&![6,71].includes(Number(slot))&&p.macros.some(m=>m.name===name),'宏绑定无效。');}
 }
 export function resolveMacros(p){
   validateProfile(p);requireThat(p.macroBindings!=null,'未知宏不能覆盖，请重新读取键盘。');const s=clone(p.snapshot);
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(s.keymap[slot*3]))requireThat(Object.hasOwn(p.macroBindings,slot),'宏记录缺少绑定。');
-  s.macroData=encodeBank(p.macros);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,0x70,p.macros.findIndex(m=>m.name===name),0);return s;
+  s.macroData=encodeBank(p.macros);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes?.[slot]));return s;
 }
 export function parseProfile(text,baseline){
   requireThat(new TextEncoder().encode(text).length<=1_000_000,'配置文件超过 1 MB。');const data=JSON.parse(text);
@@ -90,6 +104,7 @@ export function importWindows(root,baseline){
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
   const p=fromHardware(baseline),old=clone(p.macroBindings),actions=root.ActionInfo??[],imported=new Map(),physical=new Set(WINDOWS_DEFAULTS.map(physicalSlot));
   p.macroBindings=Object.fromEntries(Object.entries(old).filter(([slot])=>!physical.has(Number(slot))));
+  p.macroModes=Object.fromEntries(Object.entries(p.macroModes??{}).filter(([slot])=>!physical.has(Number(slot))));
   const record=v=>{v=winInt(v,'按键动作',0,0xffffff);const b=[v>>16,(v>>8)&255,v&255];requireThat([0x20,0x30].includes(b[0]),'不支持此 Windows 按键动作。');return b;};
   root.KeyList.forEach((k,i)=>{
     const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot===undefined||[6,71].includes(slot))return;
@@ -101,7 +116,7 @@ export function importWindows(root,baseline){
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         if(!imported.has(index)){
-          requireThat(winInt(c.ActionMacroType,'宏模式',0,2)===0&&winInt(c.ActionMacroLoopValue??1,'重复次数',1,255)===1&&winInt(c.ActionMacroFixTimeIsSelected??0,'固定延迟',0,1)===0,'仅支持单次、逐步延迟的键盘宏。');
+          requireThat(winInt(c.ActionMacroFixTimeIsSelected??0,'固定延迟',0,1)===0,'固定间隔宏尚需核对，请保留逐步延迟。');
           requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
           const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
             if(type===10&&button>=4&&button<224)usage=button;
@@ -109,7 +124,7 @@ export function importWindows(root,baseline){
             else throw new Error('鼠标和滚动宏尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000)};});
           const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
           const macro={name,steps};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
-        }const name=imported.get(index);p.macroBindings[slot]=name;b=[0x70,p.macros.findIndex(m=>m.name===name),0];
+        }const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
       }else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });

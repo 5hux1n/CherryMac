@@ -69,6 +69,7 @@ enum WindowsProfile {
         let physicalSlots=Set(defaults.compactMap{physicalSlot($0)})
         // Replace the imported physical bindings while preserving any raw hidden data.
         result.macroBindings=oldBindings.filter{!physicalSlots.contains($0.key)}
+        result.macroModes=(result.macroModes ?? [:]).filter{!physicalSlots.contains($0.key)}
         var importedMacros:[Int:String]=[:];var keyCount=0;var colorCount=0;var ignored=0
         for (index,key) in keys.enumerated(){
             guard let slot=physicalSlot(defaults[index])else{ignored+=1;continue}
@@ -85,11 +86,8 @@ enum WindowsProfile {
                 case 1:bytes=try record(integer(content["ActionKey"],"ActionKey",range:0...0xFFFFFF))
                 case 2:
                     if importedMacros[actionIndex]==nil {
-                        let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
-                        let repeats=try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255)
                         let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
                         guard fixed==0 else{throw HardwareError(message:"Windows 固定间隔宏暂不支持导入，请改为逐步延迟。")}
-                        guard mode==0,repeats==1 else{throw HardwareError(message:"Windows 循环／切换宏暂不支持导入，请改为执行一次。")}
                         guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
                         let steps=try events.map{event->KeyboardMacro.Step in
                             let type=try integer(event["Type"],"宏 Type",range:0...127)
@@ -109,7 +107,11 @@ enum WindowsProfile {
                         let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();result.macros.append(macro);importedMacros[actionIndex]=name
                     }
                     let name=importedMacros[actionIndex]!;result.macroBindings![slot]=name
-                    bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!)
+                    let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
+                    let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
+                    let playback=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
+                    result.macroModes![slot]=playback
+                    bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!,playback:playback)
                 case 4:
                     let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
                     let media=mediaCodes[index];bytes=[0x30,UInt8(media&255),UInt8(media>>8)]
