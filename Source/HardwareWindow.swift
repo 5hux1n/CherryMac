@@ -179,7 +179,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(pageTitle,192,24,654,39);pageDescription.textColor = .secondaryLabelColor;place(pageDescription,192,68,665,23)
         place(button("读取键盘",#selector(readKeyboard)),997,30,126,32)
         connection.textColor = .secondaryLabelColor;place(connection,192,106,920,23)
+        #if CHERRY_MACRO_PRODUCT
+        place(label("宏预览：可独立写入按键或宏；灯效写入暂缓，完整成品验收尚未完成。",12),192,140,925,24)
+        #else
         place(label("按键可独立写入；灯效和宏可编辑、保存，实体写入暂缓。",12),192,140,925,24)
+        #endif
         board.frame.origin=NSPoint(x:225,y:178);root.addSubview(board)
         for spec in keyboardLayout(){let key=KeyButton(spec);key.hardwareConfigurable=true;if spec.id=="cherry"{key.title="CH"};key.target=self;key.action=#selector(selectKey(_:));board.addSubview(key);keyButtons.append(key)}
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;tabView=tabs;place(tabs,192,462,936,294)
