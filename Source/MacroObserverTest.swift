@@ -127,6 +127,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         stopButton.target=self;stopButton.action=#selector(acknowledgeStop);stopButton.frame=NSRect(x:176,y:24,width:325,height:32);stopButton.isEnabled=false;view.addSubview(stopButton)
         closeButton.target=self;closeButton.action=#selector(finish);closeButton.frame=NSRect(x:533,y:24,width:185,height:32);view.addSubview(closeButton)
         window.center();window.makeKeyAndOrderFront(nil);window.makeFirstResponder(view);NSApp.activate(ignoringOtherApps:true)
+        guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)==kIOHIDAccessTypeGranted else{invalidate(.observerDisconnected,"请先在系统设置的输入监控中允许 CherryMac，再重新打开测试；没有监听权限，不能检查实体输出。");return}
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in
             guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue()

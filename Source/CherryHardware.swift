@@ -284,12 +284,18 @@ final class CherryUSB: CherryHardwareAccess {
             owner.received.append(bytes)
             if owner.received.count > 32 { owner.received.removeFirst() }
         }, Unmanaged.passUnretained(self).toOpaque())
+        IOHIDDeviceRegisterRemovalCallback(device,{context,_,_ in
+            guard let context else{return}
+            let owner=Unmanaged<CherryUSB>.fromOpaque(context).takeUnretainedValue()
+            owner.transportDead=true;owner.keymapLog?.record("phase","disconnected")
+        },Unmanaged.passUnretained(self).toOpaque())
         IOHIDDeviceScheduleWithRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue)
     }
     deinit {
         if let device {
             IOHIDDeviceUnscheduleFromRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue)
             IOHIDDeviceRegisterInputReportCallback(device, buffer, 64, nil, nil)
+            IOHIDDeviceRegisterRemovalCallback(device,nil,nil)
             IOHIDDeviceClose(device, 0)
         }
         if let manager { IOHIDManagerClose(manager, 0) }
@@ -334,6 +340,7 @@ final class CherryUSB: CherryHardwareAccess {
         guard result == 0 else { transportDead=true;throw HardwareError(message: "USB 发送失败（\(result)）。") }
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
+            guard !transportDead else{throw HardwareError(message:"USB 已断开，命令可能已执行。停止发送，请重新连接并读取后恢复。")}
             if let index = received.firstIndex(where: { $0[3] == request[3] && (!([UInt8(3),5,6,7,8,9,0x0A,0x0B,0x14,0x15,0x1B].contains(request[3])) || $0[4..<7].elementsEqual(request[4..<7])) }) {
                 let reply = received.remove(at: index)
                 trace?("IN  " + reply.map { String(format: "%02x", $0) }.joined())
@@ -359,6 +366,17 @@ final class CherryUSB: CherryHardwareAccess {
     func snapshot(includeColors: Bool = false) throws -> HardwareSnapshot {
         let result = HardwareSnapshot(keymap: try read(8, count: 378), deviceInfo: try read(3, count: 34), parameters: try read(5, count: 56), colors: includeColors ? try read(0x0A, count: 378) : nil)
         try result.validate(); return result
+    }
+    func waitForMacroCompletion(seconds:TimeInterval)throws {
+        guard seconds.isFinite,seconds>=0 else{throw HardwareError(message:"宏等待时间无效。")}
+        let deadline=ProcessInfo.processInfo.systemUptime+seconds
+        while ProcessInfo.processInfo.systemUptime<deadline {
+            guard !transportDead else{throw HardwareError(message:"等待宏完成期间 USB 已断开，停止后续发送。")}
+            try keymapLog?.requireHealthy()
+            RunLoop.current.run(until:Date().addingTimeInterval(0.02))
+        }
+        guard !transportDead else{throw HardwareError(message:"USB 已断开，停止后续发送。")}
+        try waitUntilKeysReleased()
     }
     func waitUntilKeysReleased(timeout:TimeInterval = 5) throws {
         guard let device else {throw HardwareError(message:"USB 会话已关闭。")}

@@ -96,8 +96,9 @@ export class PageReleaseGate{
   constructor(win=window,doc=document){this.win=win;this.doc=doc;this.held=new Set();this.armed=false;this.lastKey=0;this.activity=0;
     this.down=e=>{this.held.add(e.code);this.lastKey=performance.now();this.activity++;};
     this.up=e=>{this.held.delete(e.code);this.lastKey=performance.now();this.activity++;};
-    this.blur=()=>{this.armed=false;this.activity++;};win.addEventListener('keydown',this.down,true);win.addEventListener('keyup',this.up,true);win.addEventListener('blur',this.blur);doc.addEventListener('visibilitychange',this.blur);
+    this.blur=()=>this.invalidate();win.addEventListener('keydown',this.down,true);win.addEventListener('keyup',this.up,true);win.addEventListener('blur',this.blur);doc.addEventListener('visibilitychange',this.blur);
   }
+  invalidate(){this.armed=false;this.activity++;}
   acknowledge(event){requireThat(event.detail>0,'请松开全部键，用鼠标点击确认。');requireThat(this.doc.hasFocus()&&this.doc.visibilityState==='visible','请保持页面在前台。');
     requireThat(!(event.ctrlKey||event.altKey||event.metaKey||event.shiftKey),'请松开 Ctrl、Alt、Win 和 Shift。');
     // A deliberate physical acknowledgement resets events missed while unfocused.

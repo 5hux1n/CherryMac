@@ -108,6 +108,7 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         if let owner{window.setFrameOrigin(NSPoint(x:owner.frame.midX-window.frame.width/2,y:owner.frame.midY-window.frame.height/2))}else{window.center()}
         window.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
         guard observe else{window.title="CherryMac · 停止宏窗口离线预览";status.stringValue="离线布局预览，未连接键盘，也不发送命令。";return}
+        guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)==kIOHIDAccessTypeGranted else{fail("请在系统设置的输入监控中允许 CherryMac，再重新打开；没有监听权限，不能确认停止。");return}
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in
             guard let context else{return};let owner=Unmanaged<MacroPhysicalStopController>.fromOpaque(context).takeUnretainedValue()

@@ -1,3 +1,5 @@
+import {waitForFiniteMacroCompletion,applyMacroWithStop} from '../assets/macro-session.js';
+import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
@@ -441,4 +443,61 @@ test('held/toggle failure requires stopping new and old candidates before any re
     assert.equal(stops,1);if(refuse)assert.equal(session.packets.length,1);else assert.ok(sameSnapshot(session.state,original));
     assert.equal(session.authorization,undefined);
   }
+});
+
+function stopRequest(mode='toggle'){
+  const before=demoSnapshot(),looping=clone(before);looping.macroData=encodeBank([macro]);looping.keymap.splice(306,3,...macroBinding(0,{mode,count:1}));
+  const plan=new MacroWriteAuthorization(looping,before,{allowUnbounded:true});
+  return {phase:'beforeWrite',configurations:[plan.before],requirements:[plan.beforeCompletion]};
+}
+test('stop observation separates quiet from held state and never acknowledges on elapsed time alone',()=>{
+  for(const mode of ['held','toggle']){
+    const request=stopRequest(mode),stop=new MacroStopObservation(request,0);assert.equal(stop.quietMilliseconds,270);
+    request.requirements[0].repeatingBindings.length=0;assert.equal(stop.record().request.requirements[0].repeatingBindings.length,1);
+    stop.observe({kind:'key',code:'KeyA',pressed:true,milliseconds:10});assert.equal(stop.assess(1000).canAcknowledge,false);assert.throws(()=>stop.acknowledge(1000));
+    stop.observe({kind:'key',code:'KeyA',pressed:false,milliseconds:1001});assert.equal(stop.assess(1270).canAcknowledge,false);assert.equal(stop.assess(1271).canAcknowledge,true);
+    assert.equal(stop.record().userConfirmedStopped,false);stop.acknowledge(1271);assert.equal(stop.record().userConfirmedStopped,true);
+    assert.throws(()=>stop.observe({kind:'mouse',code:'middle',pressed:true,milliseconds:1272}));assert.equal(stop.record().userConfirmedStopped,false);assert.equal(stop.assess(10000).canAcknowledge,false);
+  }
+});
+test('stop request cannot shorten the observation budget or substitute another configuration',()=>{
+  const shortened=stopRequest();shortened.requirements[0].repeatingBindings[0].quietMilliseconds=200;assert.throws(()=>new MacroStopObservation(shortened,0));
+  const wrong=stopRequest();wrong.configurations[0].keymap.splice(306,3,0x70,0,1);assert.throws(()=>new MacroStopObservation(wrong,0));
+  const extra=stopRequest();extra.configurations.push(clone(extra.configurations[0]));assert.throws(()=>new MacroStopObservation(extra,0));
+  const stop=new MacroStopObservation(stopRequest(),0);stop.assess(100);assert.throws(()=>stop.assess(99));assert.equal(stop.assess(1000).canAcknowledge,false);
+});
+test('stop capacity and interruption never allow silent passing or reuse of a confirmation',()=>{
+  const stop=new MacroStopObservation(stopRequest(),0);
+  for(let i=0;i<65536;i++)stop.observe({kind:'key',code:'KeyA',pressed:i%2===0,milliseconds:i});
+  assert.throws(()=>stop.observe({kind:'key',code:'KeyA',pressed:true,milliseconds:65536}));assert.equal(stop.assess(100000).canAcknowledge,false);
+  const cancelled=new MacroStopObservation(stopRequest(),0);cancelled.interrupt('focus lost');assert.equal(cancelled.assess(1000).canAcknowledge,false);assert.throws(()=>cancelled.acknowledge(1000));
+});
+
+test('finite browser wait chunks maximum repeats, detects cancellation/connection loss and checks release after the budget',async()=>{
+  let clock=0,pauses=[],checks=0;const doc={hasFocus:()=>true,visibilityState:'visible'},gate={armed:true,check:async()=>checks++};
+  const maximum=256*60000*255;
+  await waitForFiniteMacroCompletion(maximum,{doc,win:{},gate,now:()=>clock,pause:async ms=>{pauses.push(ms);clock=maximum;}});
+  assert.deepEqual(pauses,[100]);assert.equal(checks,1);
+  for(const fault of ['abort','disconnect','blur','gate','clock']){
+    clock=0;checks=0;const controller=new AbortController(),hid={dead:false},focus={value:true},g={armed:true,check:async()=>checks++};
+    await assert.rejects(waitForFiniteMacroCompletion(1000,{doc:{hasFocus:()=>focus.value,visibilityState:'visible'},win:{},gate:g,hid,signal:controller.signal,now:()=>clock,pause:async()=>{
+      if(fault==='abort')controller.abort();if(fault==='disconnect')hid.dead=true;if(fault==='blur')focus.value=false;if(fault==='gate')g.armed=false;clock=fault==='clock'?-1:100;
+    }}));assert.equal(checks,0);
+  }
+});
+test('integrated macro writer does not expose normal transport permissions or read before closed/aborted rejection',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([macro]);target.keymap.splice(306,3,...macroBinding(0));
+  const {hid,device}=await transport(before);const gate={acknowledge(){},invalidate(){},async check(){}};
+  await assert.rejects(applyMacroWithStop(hid,target,before,{gate,backup:async()=>{},win:{},doc:{}}),/宏传输尚未开放/);assert.equal(device.requests.length,0);await hid.close();
+  const research=await transport(before,{macroResearch:true}),controller=new AbortController();controller.abort();
+  await assert.rejects(applyMacroWithStop(research.hid,target,before,{gate,backup:async()=>{},signal:controller.signal,win:{},doc:{}}),/取消/);assert.equal(research.device.requests.length,0);await research.hid.close();
+});
+
+test('stop replay verifies final quiet evidence and rejects forged budgets, clocks and contradictory failure status',()=>{
+  const stop=new MacroStopObservation(stopRequest(),0);stop.observe({kind:'key',code:'KeyA',pressed:true,milliseconds:10});stop.observe({kind:'key',code:'KeyA',pressed:false,milliseconds:20});stop.acknowledge(290);stop.assess(600);
+  const record={...stop.record(),result:'complete',postAcknowledgementQuietMilliseconds:310};assert.equal(replayMacroStopRecord(record).status,'acknowledged');
+  for(const mutate of [r=>r.quietMilliseconds=200,r=>r.assessedMilliseconds=300,r=>r.postAcknowledgementQuietMilliseconds=100,r=>r.source='hid',r=>r.events[0].milliseconds=-1,r=>r.userConfirmedStopped=false]){const wrong=clone(record);mutate(wrong);assert.throws(()=>replayMacroStopRecord(wrong));}
+  const late=new MacroStopObservation(stopRequest(),0);late.acknowledge(270);assert.throws(()=>late.observe({kind:'key',code:'KeyB',pressed:true,milliseconds:300}));
+  const failed={...late.record(),result:'failed',postAcknowledgementQuietMilliseconds:null};assert.equal(replayMacroStopRecord(failed).status,'failed');
+  const forged=clone(failed);forged.failure='unrelated';assert.throws(()=>replayMacroStopRecord(forged));
 });
