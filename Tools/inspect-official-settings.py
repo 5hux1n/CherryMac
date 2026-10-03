@@ -77,6 +77,44 @@ def inspect_model_resources(skin):
             "limits": "Resource selection and fixed executable initialization only; not an observed runtime session"}
 
 
+def initialized_words(pe, start, end, destination):
+    """Decode only straight-line constant word stores; never execute x86 code.
+
+    Reject calls, jumps, unknown registers/instructions and writes outside the
+    eleven-word row. This is deliberately not a general-purpose emulator.
+    """
+    code = pe.at(start, end - start)
+    registers, words, cursor = {}, {}, 0
+    while cursor < len(code):
+        opcode = code[cursor]
+        if 0xB8 <= opcode <= 0xBA and cursor + 5 <= len(code):
+            registers[opcode - 0xB8] = struct.unpack_from("<I", code, cursor + 1)[0]
+            cursor += 5
+        elif code[cursor:cursor + 2] == b"\x33\xd2":
+            registers[2] = 0
+            cursor += 2
+        elif code[cursor:cursor + 2] == b"\x33\xc0":
+            registers[0] = 0
+            cursor += 2
+        else:
+            if code[cursor:cursor + 2] == b"\x66\xa3" and cursor + 6 <= len(code):
+                register, address, size = 0, struct.unpack_from("<I", code, cursor + 2)[0], 6
+            elif (code[cursor:cursor + 2] == b"\x66\x89" and cursor + 7 <= len(code)
+                  and code[cursor + 2] in (0x0D, 0x15)):
+                register = (code[cursor + 2] >> 3) & 7
+                address, size = struct.unpack_from("<I", code, cursor + 3)[0], 7
+            else:
+                raise ValueError("Unexpected interface initializer instruction")
+            offset = address - destination
+            if register not in registers or offset not in range(0, 22, 2) or offset in words:
+                raise ValueError("Unexpected interface initializer store")
+            words[offset] = registers[register] & 0xFFFF
+            cursor += size
+    if len(words) != 11:
+        raise ValueError("Incomplete interface initializer")
+    return [words[offset] for offset in range(0, 22, 2)]
+
+
 def inspect(path, skin=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -133,7 +171,7 @@ def inspect(path, skin=None):
         0x5033CE: "390c85c8c67600",   # match against reference dword triple
         0x5033EA: "390495ccc67600",
         0x503406: "39148dd0c67600",
-        0x503424: "8908",             # logical entry stores physical slot               # copies ninth byte of report
+        0x503424: "8908",             # logical entry stores physical slot
     }
     for address, encoded in model_checks.items():
         expected_bytes = bytes.fromhex(encoded)
@@ -153,8 +191,43 @@ def inspect(path, skin=None):
     logical_records = [list(logical_words[i:i + 3]) for i in range(0, 378, 3)]
     if len({tuple(row) for row in logical_records}) != 126 or logical_records[17] != [48, 146, 1]:
         raise ValueError("Unexpected logical matching table")
+    interface_rows = []
+    for start, end, destination, collection, secondary, ordinal, page, usage in [
+        (0x4120B1, 0x412128, 0x83B148, 4, 0, 0x81, 0xFF1C, 0x92),
+        (0x412147, 0x4121C1, 0x83B1E8, 3, 0xFF, 0x82, 0x0C, 1),
+        (0x4121E0, 0x41225A, 0x83B288, 5, 0xFE, 0x83, 0xFF1C, 0x92),
+    ]:
+        words = initialized_words(pe, start, end, destination)
+        if words != [0x046A, 0x01CE, 0, collection, 1, secondary, 0, page, usage, 1, ordinal]:
+            raise ValueError("Unexpected target interface registration")
+        interface_rows.append({"initializer": hex(start), "destination": hex(destination),
+                               "words": words, "interfaceNumber": words[2], "collectionNumber": words[3],
+                               "connectionSelector": words[4], "secondarySelector": words[5],
+                               "usagePage": words[7], "usage": words[8]})
+    interface_checks = {
+        0x485CDD: "6818eb7700",  # path parser: &mi_
+        0x485D2D: "6824eb7700",  # path parser: &col
+        0x496BE3: "e838f1feff",  # collection parser to enumeration row +6
+        0x496BF9: "e8d2f0feff",  # interface parser to enumeration row +4
+        0x5447EC: "8d872c020000",  # HIDP_CAPS destination
+        0x5447F5: "ff156cba6e00",  # HidP_GetCaps import
+        0x496C74: "668b0dde358400",  # CAPS UsagePage -> row +0xe
+        0x496C82: "668b15dc358400",  # CAPS Usage -> row +0x10
+        0x4978BA: "668b8a90628300",  # registry +8 is connection selector
+        0x4978C1: "66894808",       # copied into enumeration row +8
+        0x4A05DB: "0fb75008",       # match selector, not Usage or Report ID
+        0x4A05EA: "6a01",           # connection kind argument
+        0x4A064D: "e8fea90600",     # raw connection entry
+        0x50C45E: "0fb782e4190000", # reads CAPS max input report length
+    }
+    for address, encoded in interface_checks.items():
+        expected_bytes = bytes.fromhex(encoded)
+        if pe.at(address, len(expected_bytes)) != expected_bytes:
+            raise ValueError("Unexpected interface selection instruction")
+    if wide_string(0x77EB18, 10) != "&mi_" or wide_string(0x77EB24, 10) != "&col":
+        raise ValueError("Unexpected HID path parser tokens")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 2,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 3,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -165,6 +238,11 @@ def inspect(path, skin=None):
         "modelFactory": {"xmlClass": "EevisionKeyboardDevice", "constructor": "0x4f6060", "vtable": "0x77f604", "model": 47, "vendorID": 0x046A, "productID": 0x01CE, "instructionChecks": len(model_checks)},
         "logicalMatchingTable": {"address": "0x76c6c8", "count": 126, "defaultKeymapReadCommand": 7, "rawSHA256": hashlib.sha256(logical_bytes).hexdigest(), "records": logical_records, "limits": "Requires actual factory keymap to map event values; not the JSON DefaultAssignment array"},
         "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "reportID": "not established"},
+        "registeredInterfaces": {"rows": interface_rows, "instructionChecks": len(interface_checks),
+                                 "rowOffsets": {"interfaceNumber": 4, "collectionNumber": 6,
+                                                "connectionSelector": 8, "secondarySelector": 10,
+                                                "usagePage": 14, "usage": 16},
+                                 "limits": "Windows path collection numbers and registry selectors are not report IDs. Both vendor rows have the same usage pair; nine-byte copying is not a report-length assertion."},
         "limits": "Static factory and reader paths only; does not prove actual interface or report ID, USB setting writes, text trigger execution or persistence",
     }
     if skin is not None:

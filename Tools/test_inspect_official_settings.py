@@ -74,6 +74,21 @@ class AuditTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 audit.inspect(path)
 
+    def test_initializer_rejects_unknown_code_and_invalid_stores(self):
+        destination = 0x830000
+        constant = b"\xb8\x6a\x04\0\0"
+        store = b"\x66\xa3" + struct.pack("<I", destination)
+        cases = [b"\xb8", b"\xe8\0\0\0\0", store,
+                 constant + b"\x66\xa3" + struct.pack("<I", destination + 22),
+                 constant + store + store, constant + store]
+        for code in cases:
+            with self.subTest(code=code.hex()):
+                data = bytearray(fixture())
+                data[0x300:0x300 + len(code)] = code
+                with self.assertRaises(ValueError):
+                    audit.initialized_words(audit.PE32(bytes(data)), 0x401100,
+                                            0x401100 + len(code), destination)
+
 
 if __name__ == "__main__":
     unittest.main()
