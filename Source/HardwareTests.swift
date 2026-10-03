@@ -374,6 +374,16 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
         _=rejected{_ = try reconnect.restoreMacroTransaction(plan)}
         precondition(reconnect.packets.count==(kind=="packet" ? 1:0))
     }
+    var libraryProfile=try! HardwareProfile.fromHardware(desired);let beforeCopy=libraryProfile
+    let copied=try! libraryProfile.duplicateMacro(named:libraryProfile.macros[0].name)
+    precondition(libraryProfile.macros.count==beforeCopy.macros.count+1 && libraryProfile.macroBindings==beforeCopy.macroBindings && libraryProfile.snapshot.keymap==beforeCopy.snapshot.keymap)
+    precondition(libraryProfile.macros.last!.steps==beforeCopy.macros[0].steps && copied != beforeCopy.macros[0].name)
+    let boundSlots=Set(libraryProfile.macroBindings!.keys);try! libraryProfile.clearMacros()
+    precondition(libraryProfile.macros.isEmpty && libraryProfile.macroBindings!.isEmpty)
+    for slot in 0..<126{precondition(Array(libraryProfile.snapshot.keymap[slot*3..<slot*3+3])==(boundSlots.contains(slot) ? [0x20,0,0]:Array(beforeCopy.snapshot.keymap[slot*3..<slot*3+3])))}
+    precondition(libraryProfile.snapshot.colors==beforeCopy.snapshot.colors)
+    var fullProfile=try! HardwareProfile.fromHardware(original);fullProfile.macros=(0..<32).map{KeyboardMacro(name:String($0),steps:a.steps)};fullProfile.snapshot=try! fullProfile.resolvedMacros();let fullSaved=fullProfile
+    _=rejected{_ = try fullProfile.duplicateMacro(named:"0")};precondition(fullProfile==fullSaved)
     let success=SimulatedCherry(original)
     precondition(try! success.writeMacroConfiguration(desired,baseline:original)==desired)
     precondition(success.saved==[original] && success.readCommands.contains(0x14))

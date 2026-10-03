@@ -107,6 +107,17 @@ struct HardwareProfile: Codable, Equatable {
         macros.removeAll{$0.name==name}
         if macroBindings != nil {snapshot=try resolvedMacros()}
     }
+    mutating func duplicateMacro(named name:String)throws->String {
+        guard macroBindings != nil,let original=macros.first(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
+        var draft=self;let stem=String(name.prefix(65));var next="\(stem) 副本",number=2
+        while draft.macros.contains(where:{$0.name==next}){next="\(stem) 副本 \(number)";number+=1}
+        var copied=original;copied.name=next;draft.macros.append(copied);draft.snapshot=try draft.resolvedMacros();self=draft;return next
+    }
+    mutating func clearMacros()throws {
+        guard macroBindings != nil else{throw HardwareError(message:"原硬件宏尚未解码，不能清空。")}
+        var draft=self;for name in macros.map({$0.name}){try draft.removeMacro(named:name)}
+        draft.snapshot=try draft.resolvedMacros();self=draft
+    }
     static func decode(_ data: Data) throws -> HardwareProfile {
         guard data.count <= 1_000_000 else { throw HardwareError(message: "配置文件过大。") }
         let decoder = JSONDecoder()

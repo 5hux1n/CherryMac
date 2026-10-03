@@ -247,3 +247,16 @@ export function replayMacroExecutionLog(log){
   if(log.stop!=null&&!marked)evidence.requestStop(log.stop);
   return evidence.assessment(log.assessedMilliseconds);
 }
+
+
+export function duplicateMacro(profile,name){
+  validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能复制。');
+  const p=clone(profile),original=p.macros.find(m=>m.name===name);requireThat(original,'请选择已保存的宏。');
+  const stem=[...name].slice(0,65).join('');let next=`${stem} 副本`,number=2;while(p.macros.some(m=>m.name===next))next=`${stem} 副本 ${number++}`;
+  const copied=clone(original);copied.name=next;p.macros.push(copied);p.snapshot=resolveMacros(p);return {profile:p,name:next};
+}
+export function clearMacros(profile){
+  validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能清空。');const p=clone(profile);
+  for(const slot of Object.keys(p.macroBindings))p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);
+  p.macros=[];p.macroBindings={};p.macroModes={};p.snapshot=resolveMacros(p);return p;
+}

@@ -4,7 +4,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -542,4 +542,14 @@ test('macro flow target appends without replacing existing macros or bindings an
   const full=clone(before);full.macroData=encodeBank(Array.from({length:32},(_,i)=>({...macro,name:String(i)})));assert.throws(()=>macroTestPlan(full));
   const changed=clone(before);changed.keymap[306]=32;assert.throws(()=>macroTestPlan(changed));
   const short=clone(before);short.keymap=[];assert.throws(()=>macroTestPlan(short));
+});
+
+
+test('macro duplicate is independent, keeps original binding and fails atomically at capacity; clear disables only bound keys',()=>{
+  const s=demoSnapshot();s.macroData=encodeBank([macro]);s.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:3}));const p=fromHardware(s),original=clone(p);
+  p.macros[0].recordingDelay={fixed:true,milliseconds:555};const copy=duplicateMacro(p,p.macros[0].name);assert.equal(copy.profile.macros.length,2);assert.deepEqual(copy.profile.macroBindings,p.macroBindings);assert.deepEqual(copy.profile.snapshot.keymap,p.snapshot.keymap);assert.deepEqual(copy.profile.macros[1].recordingDelay,{fixed:true,milliseconds:555});
+  copy.profile.macros[1].steps[0].delayMilliseconds=123;assert.notEqual(copy.profile.macros[1].steps[0].delayMilliseconds,p.macros[0].steps[0].delayMilliseconds);
+  const twice=duplicateMacro(copy.profile,p.macros[0].name);assert.notEqual(twice.name,copy.name);
+  const cleared=clearMacros(p);assert.equal(cleared.macros.length,0);assert.deepEqual(cleared.snapshot.keymap.slice(306,309),[32,0,0]);for(let slot=0;slot<126;slot++)if(slot!==102)assert.deepEqual(cleared.snapshot.keymap.slice(slot*3,slot*3+3),p.snapshot.keymap.slice(slot*3,slot*3+3));assert.deepEqual(cleared.snapshot.colors,p.snapshot.colors);assert.deepEqual(decodeBank(cleared.snapshot.macroData),[]);assert.equal(p.macros.length,1);
+  const full=clone(original);full.macros=Array.from({length:32},(_,i)=>({...clone(macro),name:String(i)}));full.macroBindings={};full.macroModes={};full.snapshot.keymap.splice(306,3,32,0,0);full.snapshot=resolveMacros(full);const saved=clone(full);assert.throws(()=>duplicateMacro(full,'0'));assert.deepEqual(full,saved);
 });
