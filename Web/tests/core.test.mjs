@@ -4,7 +4,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
@@ -638,4 +638,16 @@ test('macro duplicate is independent, keeps original binding and fails atomicall
   const twice=duplicateMacro(copy.profile,p.macros[0].name);assert.notEqual(twice.name,copy.name);
   const cleared=clearMacros(p);assert.equal(cleared.macros.length,0);assert.deepEqual(cleared.snapshot.keymap.slice(306,309),[32,0,0]);for(let slot=0;slot<126;slot++)if(slot!==102)assert.deepEqual(cleared.snapshot.keymap.slice(slot*3,slot*3+3),p.snapshot.keymap.slice(slot*3,slot*3+3));assert.deepEqual(cleared.snapshot.colors,p.snapshot.colors);assert.deepEqual(decodeBank(cleared.snapshot.macroData),[]);assert.equal(p.macros.length,1);
   const full=clone(original);full.macros=Array.from({length:32},(_,i)=>({...clone(macro),name:String(i)}));full.macroBindings={};full.macroModes={};full.snapshot.keymap.splice(306,3,32,0,0);full.snapshot=resolveMacros(full);const saved=clone(full);assert.throws(()=>duplicateMacro(full,'0'));assert.deepEqual(full,saved);
+});
+
+
+test('macro management unbinds independently, reindexes deletion and preserves failed drafts',()=>{
+  const p=fromHardware(demoSnapshot());p.snapshot.keymap.fill(0);p.macros=[clone(macro),{...clone(macro),name:'second'}];p.macroBindings={102:'AB',9:'AB',10:'second'};p.macroModes={102:{mode:'count',count:1},9:{mode:'count',count:3},10:{mode:'count',count:1}};p.snapshot=resolveMacros(p);
+  const before=clone(p),unbound=unassignMacro(p,102);
+  assert.deepEqual(p,before);assert.deepEqual(unbound.macros,p.macros);assert.deepEqual(unbound.snapshot.macroData,p.snapshot.macroData);
+  assert.equal(unbound.macroBindings[9],'AB');assert.deepEqual(unbound.macroModes[9],{mode:'count',count:3});assert.deepEqual(unbound.snapshot.keymap.slice(306,309),[0x20,0,0]);
+  const removed=removeMacro(unbound,'AB');assert.equal(removed.macros.length,1);assert.equal(removed.macroBindings[9],undefined);assert.equal(removed.macroModes[9],undefined);assert.deepEqual(removed.snapshot.keymap.slice(30,33),[0x70,0,0]);
+  const broken=clone(p);broken.snapshot.keymap.splice(33,3,0x70,0,0);const saved=clone(broken);
+  assert.throws(()=>removeMacro(broken,'AB'));assert.deepEqual(broken,saved);assert.throws(()=>unassignMacro(broken,102));assert.deepEqual(broken,saved);
+  assert.throws(()=>unassignMacro(p,11));assert.throws(()=>removeMacro(p,'missing'));assert.deepEqual(p,before);
 });

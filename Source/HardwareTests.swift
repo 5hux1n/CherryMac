@@ -561,7 +561,25 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
     print("PASS: hardware writes with current-map backup, stale baseline and failed-backup rejection; per-packet release checks; lost acknowledgement/readback failure rollback; held-key rollback blocked; lighting rollback preserves mappings (simulated firmware only)")
 }
 
-func runMacroEditorChecks(){var fixture=HardwareSnapshot.demo();fixture.keymap=Array(repeating:0,count:378);runHardwareEditorTests(fixture)}
+func runMacroEditorChecks(){var fixture=HardwareSnapshot.demo();fixture.keymap=Array(repeating:0,count:378);runHardwareEditorTests(fixture);runMacroManagementChecks(fixture)}
+
+private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
+    func rejected(_ body:()throws->Void){do{try body();preconditionFailure("expected macro management rejection")}catch{}}
+    let a=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:30),.init(usage:4,pressed:false,delayMilliseconds:0)])
+    var b=a;b.name="B"
+    var p=HardwareProfile(snapshot:fixture,macros:[a,b],macroBindings:[:])
+    try! p.assignMacro(named:"A",to:102);try! p.assignMacro(named:"A",to:9,playback:.init(count:3));try! p.assignMacro(named:"B",to:10)
+    let assigned=p;try! p.unassignMacro(from:102)
+    precondition(p.macros==assigned.macros && p.snapshot.macroData==assigned.snapshot.macroData && p.macroBindings?[9]=="A" && p.macroModes?[9]?.count==3)
+    precondition(Array(p.snapshot.keymap[306..<309])==[0x20,0,0])
+    try! p.removeMacro(named:"A");precondition(p.macros==[b] && p.macroBindings?[9]==nil && p.macroModes?[9]==nil)
+    precondition(Array(p.snapshot.keymap[30..<33])==[0x70,0,0],"deleting preceding macro must reindex other triggers")
+    var broken=assigned;broken.snapshot.keymap.replaceSubrange(33..<36,with:[0x70,0,0]);let before=broken
+    rejected{try broken.assignMacro(named:"B",to:102)};precondition(broken==before)
+    rejected{try broken.removeMacro(named:"A")};precondition(broken==before)
+    rejected{try broken.unassignMacro(from:102)};precondition(broken==before)
+    print("PASS: macro unbinding preserves library and other triggers; deletion reindexes; failed edits preserve original draft (file-only)")
+}
 
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let editor=HardwareWindowController()

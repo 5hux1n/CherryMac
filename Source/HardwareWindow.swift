@@ -221,7 +221,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("按住（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
         place(button("添加按下与松开",#selector(appendMacroKey)),593,99,282,30,in:macros)
         place(button("保存宏",#selector(stageMacro)),593,144,282,30,in:macros)
-        place(button("分配到选中的键",#selector(assignMacro)),593,189,282,30,in:macros)
+        place(button("分配到所选键",#selector(assignMacro)),593,189,139,30,in:macros)
+        place(button("解除所选键绑定",#selector(unassignMacro)),736,189,139,30,in:macros)
         macroPlayback.addItems(withTitles:["指定执行次数","按住持续","再次按键停止"]);macroPlayback.target=self;macroPlayback.action=#selector(playbackChanged);controls.append(macroPlayback)
         place(label("执行方式"),8,262,95,24,in:macros);place(macroPlayback,116,258,170,28,in:macros)
         place(label("次数"),306,262,55,24,in:macros);controls.append(macroRepeat);place(macroRepeat,370,258,80,28,in:macros)
@@ -645,6 +646,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func copyMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name,newName=try p.duplicateMacro(named:name);profile=p;refreshMacroPicker();macroPicker.selectItem(withTitle:newName);chooseMacro();update();message.stringValue="已复制宏；原绑定保留，副本尚未绑定或写入。"}catch{message.stringValue=error.localizedDescription}}
     @objc func clearMacros(){guard var p=profile else{return};do{try p.clearMacros();profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key) else{return};do{try p.unassignMacro(from:slot);profile=p;loadSelectedAssignment();update();message.stringValue="已解除 \(key.label) 的宏绑定并设为禁用；宏库保留，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func exportWindowsProfile(){
         guard !busy,let p=profile else{message.stringValue="请先读取或导入配置。";return}

@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {clone,equal,requireThat,duplicateMacro,clearMacros,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -37,7 +37,7 @@ function render(){
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
-  for(const id of ['save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot));
+  for(const id of ['save-macro','assign-macro','unassign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot))||(id==='unassign-macro'&&!profile.macroBindings?.[key.slot]);
   $('record-start').disabled=busy||!macroKnown||!!recorder;$('record-stop').disabled=!recorder;$('record-cancel').disabled=!recorder;
   if(recorder)recordControls(true);
   $('cancel-macro-operation').hidden=!macroAbort;$('cancel-macro-operation').disabled=!macroAbort||macroAbort.signal.aborted;
@@ -92,7 +92,8 @@ $('save-macro').onclick=()=>act(async()=>{const p=clone(profile),old=$('macro-li
 $('assign-macro').onclick=()=>act(()=>{const name=$('macro-list').value,key=keys.find(k=>k.id===selected);requireThat(name&&editableSlots.has(key.slot),'请选择已保存的宏和可配置按键。');const p=clone(profile);const playback={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(playback);p.macroBindings[key.slot]=name;p.macroModes??={};p.macroModes[key.slot]=playback;p.snapshot=resolveMacros(p);profile=p;status(`已将 ${name} 分配到 ${key.label}，尚未写入。`);});
 $('copy-macro').onclick=()=>act(()=>{const copy=duplicateMacro(profile,$('macro-list').value);profile=copy.profile;refreshMacros(copy.name);loadMacro();status('已复制宏；原绑定保留，副本尚未绑定或写入。');});
 $('clear-macros').onclick=()=>act(()=>{profile=clearMacros(profile);refreshMacros();loadMacro();loadPlayback();status('宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。');});
-$('delete-macro').onclick=()=>act(()=>{const name=$('macro-list').value;requireThat(name,'请选择要删除的宏。');const p=clone(profile);for(const [slot,binding] of Object.entries(p.macroBindings))if(binding===name){p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];}p.macros=p.macros.filter(m=>m.name!==name);p.snapshot=resolveMacros(p);profile=p;refreshMacros();loadMacro();status('已删除宏，原绑定键设为禁用，尚未写入。');});
+$('delete-macro').onclick=()=>act(()=>{profile=removeMacro(profile,$('macro-list').value);refreshMacros();loadMacro();status('已删除宏，原绑定键设为禁用，尚未写入。');});
+$('unassign-macro').onclick=()=>act(()=>{const key=keys.find(k=>k.id===selected);profile=unassignMacro(profile,key.slot);loadPlayback();status(`已解除 ${key.label} 的宏绑定并设为禁用；宏库保留，尚未写入。`);});
 $('connect').onclick=()=>operation(async()=>{status('请在浏览器弹窗中选择 CHERRY USB 键盘。');const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘，配置没有变化。');if(hid)await hid.close();baseline=null;hid=new CherryHID(devices[0],{macroProduct,log:saveLog,progress:message=>status(message+'…'),onDisconnect:error=>{status(error.message,true);render();}});await hid.open();await read();});
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
 $('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot)??safeProfile(snapshot);refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});

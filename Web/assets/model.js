@@ -356,6 +356,19 @@ export function duplicateMacro(profile,name){
   const stem=macroNameStem(name);let next=`${stem} 副本`,number=2;while(p.macros.some(m=>sameMacroName(m.name,next)))next=`${stem} 副本 ${number++}`;
   const copied=clone(original);copied.name=next;p.macros.push(copied);p.snapshot=resolveMacros(p);return {profile:p,name:next};
 }
+export function removeMacro(profile,name){
+  validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能删除。');
+  requireThat(profile.macros.some(m=>sameMacroName(m.name,name)),'请选择已保存的宏。');const p=clone(profile);
+  for(const [slot,binding] of Object.entries(p.macroBindings))if(sameMacroName(binding,name)){
+    p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
+  }
+  p.macros=p.macros.filter(m=>!sameMacroName(m.name,name));p.snapshot=resolveMacros(p);return p;
+}
+export function unassignMacro(profile,slot){
+  validateProfile(profile);requireThat(Object.hasOwn(profile.macroBindings??{},slot),'所选键没有宏绑定。');const p=clone(profile);
+  p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
+  p.snapshot=resolveMacros(p);return p;
+}
 export function clearMacros(profile){
   validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能清空。');const p=clone(profile);
   for(const slot of Object.keys(p.macroBindings))p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);

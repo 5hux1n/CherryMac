@@ -96,6 +96,10 @@ struct HardwareProfile: Codable, Equatable {
         return result
     }
     mutating func assignMacro(named name:String,to slot:Int,playback:MacroPlayback = .once) throws {
+        var draft=self;try draft.stageMacroAssignment(named:name,to:slot,playback:playback);self=draft
+    }
+    private mutating func stageMacroAssignment(named name:String,to slot:Int,playback:MacroPlayback) throws {
+        try validate()
         guard ![6,71].contains(slot),(0..<126).contains(slot),macros.contains(where:{$0.name==name}) else{throw HardwareError(message:"请选择可配置按键及已保存的宏。")}
         if macroBindings==nil {
             let oldMacros=try snapshot.macroData.map{try CherryMacroCodec.decode($0)} ?? []
@@ -108,12 +112,24 @@ struct HardwareProfile: Codable, Equatable {
         try playback.validate();macroBindings![slot]=name;if macroModes==nil{macroModes=[:]};macroModes![slot]=playback;snapshot=try resolvedMacros()
     }
     mutating func removeMacro(named name:String) throws {
+        guard macroBindings != nil,macros.contains(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
+        var draft=self;try draft.validate()
+        try draft.removeKnownMacro(named:name);self=draft
+    }
+    private mutating func removeKnownMacro(named name:String) throws {
         for (slot,binding) in macroBindings ?? [:] where binding==name {
             snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])
             macroBindings?.removeValue(forKey:slot);macroModes?.removeValue(forKey:slot)
         }
         macros.removeAll{$0.name==name}
         if macroBindings != nil {snapshot=try resolvedMacros()}
+    }
+    mutating func unassignMacro(from slot:Int)throws {
+        try validate()
+        guard macroBindings?[slot] != nil else{throw HardwareError(message:"所选键没有宏绑定。")}
+        var draft=self;draft.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])
+        draft.macroBindings?.removeValue(forKey:slot);draft.macroModes?.removeValue(forKey:slot)
+        draft.snapshot=try draft.resolvedMacros();self=draft
     }
     mutating func duplicateMacro(named name:String)throws->String {
         guard macroBindings != nil,let original=macros.first(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
