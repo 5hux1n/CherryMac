@@ -19,10 +19,11 @@ struct KeyboardMacro: Codable, Equatable {
     var preferredPlayback:MacroPlayback? = nil
     // Index into the retained official source document, independent of edit name.
     var windowsActionIndex:Int? = nil
+    static func nameStem(_ name:String)->String{name.precomposedStringWithCanonicalMapping.unicodeScalars.prefix(65).map{String($0)}.joined()}
     func validate() throws {
         try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 80,
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.precomposedStringWithCanonicalMapping.unicodeScalars.count <= 80,
               !steps.isEmpty, steps.count <= 256 else { throw HardwareError(message: "宏名称或步骤数量无效。") }
         var held = Set<Int>()
         for step in steps {
@@ -116,7 +117,7 @@ struct HardwareProfile: Codable, Equatable {
     }
     mutating func duplicateMacro(named name:String)throws->String {
         guard macroBindings != nil,let original=macros.first(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
-        var draft=self;let stem=String(name.prefix(65));var next="\(stem) 副本",number=2
+        var draft=self;let stem=KeyboardMacro.nameStem(name);var next="\(stem) 副本",number=2
         while draft.macros.contains(where:{$0.name==next}){next="\(stem) 副本 \(number)";number+=1}
         var copied=original;copied.name=next;draft.macros.append(copied);draft.snapshot=try draft.resolvedMacros();self=draft;return next
     }
@@ -128,10 +129,12 @@ struct HardwareProfile: Codable, Equatable {
     static func decode(_ data: Data) throws -> HardwareProfile {
         guard data.count <= 3_000_000 else { throw HardwareError(message: "配置文件超过 3 MB。") }
         let decoder = JSONDecoder()
-        let profile: HardwareProfile
+        var profile: HardwareProfile
         if let snapshot = try? decoder.decode(HardwareSnapshot.self, from: data) { profile = HardwareProfile(snapshot: snapshot) }
         else { profile = try decoder.decode(HardwareProfile.self, from: data) }
-        try profile.validate(); return profile
+        try profile.validate()
+        for (slot,name) in profile.macroBindings ?? [:]{profile.macroBindings?[slot]=profile.macros.first(where:{$0.name==name})!.name}
+        return profile
     }
     func encoded() throws -> Data {
         try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]

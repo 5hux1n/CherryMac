@@ -11,10 +11,13 @@ export function validateSnapshot(s,complete=false){
   requireThat((s.macroData==null&&!complete)||bytes(s.macroData,3071),'宏存储数据无效。');
   requireThat(Number.isFinite(s.createdAt),'备份日期无效。');
 }
+const macroNameKey=name=>typeof name==='string'?name.normalize('NFC'):null;
+const sameMacroName=(first,second)=>macroNameKey(first)===macroNameKey(second);
+const macroNameStem=name=>[...name.normalize('NFC')].slice(0,65).join('');
 export function validateMacro(m){
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
   if(m?.windowsActionIndex!=null)requireThat(Number.isInteger(m.windowsActionIndex)&&m.windowsActionIndex>=0,'宏来源动作索引无效。');
-  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
+  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
@@ -81,15 +84,15 @@ export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
   p.macros.forEach(m=>officialMacroSource(p,m));
-  requireThat(new Set(p.macros.map(m=>m.name)).size===p.macros.length,'宏名称不能重复。');
+  requireThat(new Set(p.macros.map(m=>macroNameKey(m.name))).size===p.macros.length,'宏名称不能重复。');
   if(p.macroModes!=null){requireThat(typeof p.macroModes==='object'&&!Array.isArray(p.macroModes),'宏执行方式结构无效。');for(const [slot,playback] of Object.entries(p.macroModes)){requireThat(Object.hasOwn(p.macroBindings??{},slot),'宏执行方式缺少对应绑定。');validatePlayback(playback);}}
   if(p.macroBindings!=null){requireThat(typeof p.macroBindings==='object'&&!Array.isArray(p.macroBindings),'宏绑定结构无效。');
-    for(const [slot,name] of Object.entries(p.macroBindings))requireThat(/^(0|[1-9]\d*)$/.test(slot)&&Number(slot)<126&&![6,71].includes(Number(slot))&&p.macros.some(m=>m.name===name),'宏绑定无效。');}
+    for(const [slot,name] of Object.entries(p.macroBindings))requireThat(/^(0|[1-9]\d*)$/.test(slot)&&Number(slot)<126&&![6,71].includes(Number(slot))&&p.macros.some(m=>sameMacroName(m.name,name)),'宏绑定无效。');}
 }
 export function resolveMacros(p){
   validateProfile(p);requireThat(p.macroBindings!=null,'未知宏不能覆盖，请重新读取键盘。');const s=clone(p.snapshot);
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(s.keymap[slot*3]))requireThat(Object.hasOwn(p.macroBindings,slot),'宏记录缺少绑定。');
-  s.macroData=encodeBank(p.macros);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes?.[slot]));return s;
+  s.macroData=encodeBank(p.macros);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
 }
 export function parseProfile(text,baseline){
   requireThat(new TextEncoder().encode(text).length<=3_000_000,'配置文件超过 3 MB。');const data=JSON.parse(text);
@@ -97,6 +100,7 @@ export function parseProfile(text,baseline){
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
   if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;return editable;}catch{}}
+  if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
 const winInt=(v,name,min,max)=>{if(typeof v==='string'&&/^-?\d+$/.test(v))v=Number(v);requireThat(Number.isInteger(v)&&v>=min&&v<=max,`Windows ${name} 数据无效。`);return v;};
@@ -163,11 +167,11 @@ export function exportWindowsKeysAndMacros(profile,template){
   const sources=profile.macros.map(m=>officialMacroSource(profile,m));
   const old=root.ActionInfo??[],actions=[],emitted=[],remap=new Map(),variants=new Map(),templates=new Map();
   old.forEach((a,i)=>{const type=winInt(a?.ActionType,'ActionType',0,4);if(type!==2){remap.set(i,actions.length);actions.push(a);}else{
-    requireThat(sources.some(s=>s&&canonicalJSON(s)===canonicalJSON(a))||profile.macros.some(m=>m.name===a.ActionName)||!hasOfficialMacroExtras(a),'旧宏包含无法关联到当前宏库的未知字段，不能无损导出。');
-    const list=templates.get(a.ActionName)??[];list.push(a);templates.set(a.ActionName,list);
+    requireThat(sources.some(s=>s&&canonicalJSON(s)===canonicalJSON(a))||profile.macros.some(m=>sameMacroName(m.name,a.ActionName))||!hasOfficialMacroExtras(a),'旧宏包含无法关联到当前宏库的未知字段，不能无损导出。');
+    const list=templates.get(macroNameKey(a.ActionName))??[];list.push(a);templates.set(macroNameKey(a.ActionName),list);
   }});
   const add=(index,playback)=>{validatePlayback(playback);const identity=`${index}:${playback.mode}:${playback.count}`;
-    if(!variants.has(identity)){const macro=profile.macros[index],next=officialMacroAction(macro,playback),candidates=sources[index]&&old.some(a=>canonicalJSON(a)===canonicalJSON(sources[index]))?[sources[index]]:templates.get(macro.name)??[],merged=candidates.map(a=>mergeOfficialMacro(a,next));
+    if(!variants.has(identity)){const macro=profile.macros[index],next=officialMacroAction(macro,playback),candidates=sources[index]&&old.some(a=>canonicalJSON(a)===canonicalJSON(sources[index]))?[sources[index]]:templates.get(macroNameKey(macro.name))??[],merged=candidates.map(a=>mergeOfficialMacro(a,next));
       requireThat(merged.every(a=>canonicalJSON(a)===canonicalJSON(merged[0])),'同名官方宏的附加字段不同，无法确定导出对应关系。');
       variants.set(identity,actions.length);actions.push(merged[0]??next);emitted.push(macro);}return variants.get(identity);};
   // Emit every library item, including unbound macros; a shared binding reuses
@@ -207,7 +211,7 @@ export function importWindows(root,baseline){
       else if(type===10&&button>=4&&button<224)usage=button;
       else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
       else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
-    const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
+    const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?macroNameStem(a.ActionName):'导入宏';let name=stem,j=1;while(p.macros.some(m=>sameMacroName(m.name,name)))name=`${stem} (${j++})`;
     const mode=winInt(c.ActionMacroType,'宏模式',0,2),preferredPlayback={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};
     const macro={name,steps,recordingDelay,preferredPlayback,windowsActionIndex:index};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
 
@@ -222,7 +226,7 @@ export function importWindows(root,baseline){
       if(type===1)b=record(c.ActionKey);
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
-        importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
+        importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
       }else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
@@ -348,8 +352,8 @@ export function replayMacroExecutionLog(log){
 
 export function duplicateMacro(profile,name){
   validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能复制。');
-  const p=clone(profile),original=p.macros.find(m=>m.name===name);requireThat(original,'请选择已保存的宏。');
-  const stem=[...name].slice(0,65).join('');let next=`${stem} 副本`,number=2;while(p.macros.some(m=>m.name===next))next=`${stem} 副本 ${number++}`;
+  const p=clone(profile),original=p.macros.find(m=>sameMacroName(m.name,name));requireThat(original,'请选择已保存的宏。');
+  const stem=macroNameStem(name);let next=`${stem} 副本`,number=2;while(p.macros.some(m=>sameMacroName(m.name,next)))next=`${stem} 副本 ${number++}`;
   const copied=clone(original);copied.name=next;p.macros.push(copied);p.snapshot=resolveMacros(p);return {profile:p,name:next};
 }
 export function clearMacros(profile){

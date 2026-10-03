@@ -210,7 +210,7 @@ enum WindowsProfile {
                 return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
             }
             let originalName=actions[index]["ActionName"] as? String ?? "导入宏"
-            var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
+            var name=KeyboardMacro.nameStem(originalName);if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
             let stem=name;var suffix=1
             while result.macros.contains(where:{$0.name==name}){name="\(stem) (\(suffix))";suffix+=1}
             let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
