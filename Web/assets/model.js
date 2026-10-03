@@ -116,16 +116,43 @@ export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'coun
       return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};})
   }};
 }
+function canonicalJSON(value){
+  const sorted=x=>Array.isArray(x)?x.map(sorted):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])])):x;
+  return JSON.stringify(sorted(value));
+}
+function mergeOfficialMacro(original,next){
+  const content=original.ActionContent;
+  requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
+  const result={...clone(original),...next,ActionContent:{...clone(content),...next.ActionContent}};
+  const known=['Type','Button','Action','Delay'];
+  content.ActionMacroEvents.forEach((event,i)=>{
+    requireThat(event&&typeof event==='object'&&!Array.isArray(event),'官方宏事件模板无效。');
+    const extras=Object.fromEntries(Object.entries(event).filter(([k])=>!known.includes(k)));
+    if(!Object.keys(extras).length)return;
+    const target=result.ActionContent.ActionMacroEvents[i];
+    requireThat(target&&winInt(event.Type,'Type',0,127)===target.Type&&winInt(event.Button,'Button',0,255)===target.Button&&event.Action===target.Action,'宏步骤变化后无法对应未知事件字段，不能无损导出。');
+    result.ActionContent.ActionMacroEvents[i]={...extras,...target};
+  });return result;
+}
+function hasOfficialMacroExtras(action){
+  const content=action.ActionContent;requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
+  return Object.keys(action).some(k=>!['ActionType','ActionName','ActionContent'].includes(k))||Object.keys(content).some(k=>!['ActionMacroType','ActionMacroLoopValue','ActionMacroFixTimeIsSelected','ActionMacroFixTimeValue','ActionMacroEvents'].includes(k))||content.ActionMacroEvents.some(e=>Object.keys(e??{}).some(k=>!['Type','Button','Action','Delay'].includes(k)));
+}
 // Template-based building block. Lighting/device fields are copied unchanged;
 // the full exporter must update and validate those separately before UI use.
 export function exportWindowsKeysAndMacros(profile,template){
   validateProfile(profile);const snapshot=resolveMacros(profile),root=clone(template);
   validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
-  const old=root.ActionInfo??[],actions=[],emitted=[],remap=new Map(),variants=new Map();
-  old.forEach((a,i)=>{const type=winInt(a?.ActionType,'ActionType',0,4);if(type!==2){remap.set(i,actions.length);actions.push(a);}});
+  const old=root.ActionInfo??[],actions=[],emitted=[],remap=new Map(),variants=new Map(),templates=new Map();
+  old.forEach((a,i)=>{const type=winInt(a?.ActionType,'ActionType',0,4);if(type!==2){remap.set(i,actions.length);actions.push(a);}else{
+    requireThat(profile.macros.some(m=>m.name===a.ActionName)||!hasOfficialMacroExtras(a),'旧宏包含无法关联到当前宏库的未知字段，不能无损导出。');
+    const list=templates.get(a.ActionName)??[];list.push(a);templates.set(a.ActionName,list);
+  }});
   const add=(index,playback)=>{validatePlayback(playback);const identity=`${index}:${playback.mode}:${playback.count}`;
-    if(!variants.has(identity)){variants.set(identity,actions.length);actions.push(officialMacroAction(profile.macros[index],playback));emitted.push(profile.macros[index]);}return variants.get(identity);};
+    if(!variants.has(identity)){const macro=profile.macros[index],next=officialMacroAction(macro,playback),sources=templates.get(macro.name)??[],merged=sources.map(a=>mergeOfficialMacro(a,next));
+      requireThat(merged.every(a=>canonicalJSON(a)===canonicalJSON(merged[0])),'同名官方宏的附加字段不同，无法确定导出对应关系。');
+      variants.set(identity,actions.length);actions.push(merged[0]??next);emitted.push(macro);}return variants.get(identity);};
   // Emit every library item, including unbound macros; a shared binding reuses
   // one action, while different modes need distinct official ActionContent.
   profile.macros.forEach((m,i)=>add(i,m.preferredPlayback??{mode:'count',count:1}));

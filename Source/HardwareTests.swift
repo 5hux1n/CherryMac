@@ -735,6 +735,21 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     precondition(try! data(["lighting":exportedRoot["LightInfo"]!])==data(["lighting":exportTemplate["LightInfo"]!]))
     let roundtrip=try! WindowsProfile.decode(official,baseline:baseline).profile
     for slot in [102,108,114]{let name=roundtrip.macroBindings![slot]!;precondition(roundtrip.macros.first{$0.name==name}!.steps==macro.profile.macros[0].steps && roundtrip.macroModes![slot]==(exportProfile.macroModes?[slot] ?? .once))}
+    var extraAction=try! WindowsProfile.macroAction(exportProfile.macros[0]);extraAction["opaque"]=["id":42]
+    var extraContent=extraAction["ActionContent"] as! [String:Any];extraContent["opaque"]="keep"
+    var extraEvents=extraContent["ActionMacroEvents"] as! [[String:Any]];extraEvents[0]["opaque"]="first";extraContent["ActionMacroEvents"]=extraEvents;extraAction["ActionContent"]=extraContent
+    var extraTemplate=root;extraTemplate["ActionInfo"]=[extraAction]
+    let extraOutput=try! WindowsProfile.templateRoot(WindowsProfile.encodeKeysAndMacros(exportProfile,template:data(extraTemplate)))
+    let extraActions=extraOutput["ActionInfo"] as! [[String:Any]];let extraResult=extraActions[0]["ActionContent"] as! [String:Any]
+    precondition((extraActions[0]["opaque"] as! [String:Int])["id"]==42 && extraResult["opaque"] as! String=="keep" && (extraResult["ActionMacroEvents"] as! [[String:Any]])[0]["opaque"] as! String=="first")
+    var changedExtra=exportProfile;changedExtra.macros[0].steps[0].delayMilliseconds=99
+    _ = try! WindowsProfile.encodeKeysAndMacros(changedExtra,template:data(extraTemplate))
+    changedExtra.macros[0].steps[0].usage=225;changedExtra.macros[0].steps[3].usage=225
+    rejected{_ = try WindowsProfile.encodeKeysAndMacros(changedExtra,template:data(extraTemplate))}
+    var conflicting=extraAction;conflicting["opaque"]=["id":43];extraTemplate["ActionInfo"]=[extraAction,conflicting]
+    rejected{_ = try WindowsProfile.encodeKeysAndMacros(exportProfile,template:data(extraTemplate))}
+    extraAction["ActionName"]="Unknown old macro";extraTemplate["ActionInfo"]=[extraAction]
+    rejected{_ = try WindowsProfile.encodeKeysAndMacros(exportProfile,template:data(extraTemplate))}
     var fullExport=try! HardwareProfile.fromHardware(baseline)
     fullExport.macros=(0..<32).map{KeyboardMacro(name:"M\($0)",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])}
     try! fullExport.assignMacro(named:"M0",to:102,playback:.init(count:2))

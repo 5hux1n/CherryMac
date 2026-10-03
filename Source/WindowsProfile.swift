@@ -76,6 +76,24 @@ enum WindowsProfile {
             "ActionMacroFixTimeValue":macro.recordingDelay?.milliseconds ?? 0,
             "ActionMacroEvents":events]]
     }
+    private static let macroFields:Set<String>=["ActionMacroType","ActionMacroLoopValue","ActionMacroFixTimeIsSelected","ActionMacroFixTimeValue","ActionMacroEvents"]
+    private static let eventFields:Set<String>=["Type","Button","Action","Delay"]
+    private static func hasMacroExtras(_ action:[String:Any])throws->Bool {
+        guard let content=action["ActionContent"] as? [String:Any],let events=content["ActionMacroEvents"] as? [[String:Any]] else{throw HardwareError(message:"官方宏模板结构无效。")}
+        return !Set(action.keys).subtracting(["ActionType","ActionName","ActionContent"]).isEmpty || !Set(content.keys).subtracting(macroFields).isEmpty || events.contains{!Set($0.keys).subtracting(eventFields).isEmpty}
+    }
+    private static func mergeMacro(_ original:[String:Any],_ next:[String:Any])throws->[String:Any] {
+        guard var content=original["ActionContent"] as? [String:Any],let events=content["ActionMacroEvents"] as? [[String:Any]] else{throw HardwareError(message:"官方宏模板结构无效。")}
+        let updated=next["ActionContent"] as! [String:Any];var steps=updated["ActionMacroEvents"] as! [[String:Any]]
+        for (i,event) in events.enumerated(){
+            let extras=event.filter{!eventFields.contains($0.key)};if extras.isEmpty{continue}
+            guard steps.indices.contains(i),try integer(event["Type"],"Type",range:0...127)==steps[i]["Type"] as! Int,
+                  try integer(event["Button"],"Button",range:0...255)==steps[i]["Button"] as! Int,event["Action"] as? String==steps[i]["Action"] as? String else{throw HardwareError(message:"宏步骤变化后无法对应未知事件字段，不能无损导出。")}
+            steps[i]=extras.merging(steps[i]){_,new in new}
+        }
+        content.merge(updated){_,new in new};content["ActionMacroEvents"]=steps
+        var result=original.merging(next){_,new in new};result["ActionContent"]=content;return result
+    }
     // Intermediate exporter: update keys/macros in an official template while
     // preserving lighting, device settings and unrelated/unknown fields.
     static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data)throws->Data {
@@ -83,12 +101,25 @@ enum WindowsProfile {
         var root=try templateRoot(template),keys=root["KeyList"] as! [[String:Any]]
         if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
         let old=root["ActionInfo"] as? [[String:Any]] ?? []
-        var actions:[[String:Any]]=[],remap:[Int:Int]=[:],variants:[String:Int]=[:],emitted:[KeyboardMacro]=[]
-        for (i,action) in old.enumerated(){if try integer(action["ActionType"],"ActionType",range:0...4) != 2{remap[i]=actions.count;actions.append(action)}}
+        var actions:[[String:Any]]=[],remap:[Int:Int]=[:],variants:[String:Int]=[:],emitted:[KeyboardMacro]=[],templates:[String:[[String:Any]]]=[:]
+        for (i,action) in old.enumerated(){
+            if try integer(action["ActionType"],"ActionType",range:0...4) != 2{remap[i]=actions.count;actions.append(action)}
+            else{
+                let name=action["ActionName"] as? String ?? ""
+                if !profile.macros.contains(where:{$0.name==name}){guard !(try hasMacroExtras(action)) else{throw HardwareError(message:"旧宏包含无法关联到当前宏库的未知字段，不能无损导出。")}}
+                templates[name,default:[]].append(action)
+            }
+        }
         func add(_ index:Int,_ playback:MacroPlayback)throws->Int {
             try playback.validate();let identity="\(index):\(playback.mode.rawValue):\(playback.count)"
             if let existing=variants[identity]{return existing}
-            let next=actions.count;actions.append(try macroAction(profile.macros[index],playback:playback));emitted.append(profile.macros[index]);variants[identity]=next;return next
+            let macro=profile.macros[index],generated=try macroAction(macro,playback:playback)
+            let merged=try (templates[macro.name] ?? []).map{try mergeMacro($0,generated)}
+            if let first=merged.first{
+                let canonical=try JSONSerialization.data(withJSONObject:first,options:.sortedKeys)
+                for candidate in merged.dropFirst(){guard try JSONSerialization.data(withJSONObject:candidate,options:.sortedKeys)==canonical else{throw HardwareError(message:"同名官方宏的附加字段不同，无法确定导出对应关系。")}}
+            }
+            let next=actions.count;actions.append(merged.first ?? generated);emitted.append(macro);variants[identity]=next;return next
         }
         for (index,macro) in profile.macros.enumerated(){_ = try add(index,macro.preferredPlayback ?? .once)}
         for i in keys.indices {

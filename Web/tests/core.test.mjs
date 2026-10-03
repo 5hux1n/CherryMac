@@ -211,6 +211,19 @@ test('official source template survives profile save/reload, validates layout an
   assert.throws(()=>parseProfile(' '.repeat(3000001)));assert.equal(fromHardware(base).windowsTemplateJSON,undefined);
 });
 
+test('official macro export preserves attached unknown fields and refuses ambiguous or unmatched metadata',()=>{
+  const root=windowsFixture(),base=demoSnapshot(),p=fromHardware(base);p.macros=[macro];p.snapshot=resolveMacros(p);
+  const source=officialMacroAction(macro);source.opaque={id:42};source.ActionContent.opaque='keep';source.ActionContent.ActionMacroEvents[0].opaque='first';root.ActionInfo=[source];
+  const before=clone(p),template=clone(root),out=exportWindowsKeysAndMacros(p,root),a=out.ActionInfo[0];
+  assert.deepEqual(a.opaque,source.opaque);assert.equal(a.ActionContent.opaque,'keep');assert.equal(a.ActionContent.ActionMacroEvents[0].opaque,'first');
+  p.macros[0]=clone(macro);p.macros[0].steps[0].delayMilliseconds=99;const changed=exportWindowsKeysAndMacros(p,root);assert.equal(changed.ActionInfo[0].ActionContent.ActionMacroEvents[0].Delay,99);
+  p.macros[0].steps[0].usage=6;p.macros[0].steps[1].usage=6;assert.throws(()=>exportWindowsKeysAndMacros(p,root));
+  p.macros=[macro];root.ActionInfo.push(Object.fromEntries(Object.entries(clone(source)).reverse()));assert.equal(exportWindowsKeysAndMacros(p,root).ActionInfo.length,1);root.ActionInfo.pop();
+  p.macros=[macro];root.ActionInfo.push({...clone(source),opaque:{id:43}});assert.throws(()=>exportWindowsKeysAndMacros(p,root));
+  root.ActionInfo=[{...clone(source),ActionName:'Unknown old macro'}];assert.throws(()=>exportWindowsKeysAndMacros(p,root));
+  assert.deepEqual(p,before);assert.deepEqual(template.ActionInfo[0],source);
+});
+
 test('official template export preserves unknown fields and shared or differing macro modes',()=>{
   const base=demoSnapshot(),p=fromHardware(base),template=windowsFixture();
   template.DeviceBasicInfo={opaque:'unchanged'};template.ActionInfo=[officialMacroAction(macro),{ActionType:3,ActionName:'Text',ActionContent:{ActionText:'untouched'}}];
