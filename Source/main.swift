@@ -1143,10 +1143,20 @@ let app = NSApplication.shared
 #if CHERRY_MACRO_TEST
 if CommandLine.arguments.contains("--macro-observer-self-test"){
     MacroObserverTestController().runOfflineTests()
-    do{try MacroPhysicalStopController.runOfflineTests()}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)};exit(0)
+    do{try MacroPhysicalStopController.runOfflineTests();try MacroHardwareTestController.runOfflineTests()}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)};exit(0)
 }
 if let i=CommandLine.arguments.firstIndex(of:"--macro-stop-window-preview"),CommandLine.arguments.count>i+1{
     do{try MacroPhysicalStopController.preview(URL(fileURLWithPath:CommandLine.arguments[i+1]));exit(0)}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
+if let i=CommandLine.arguments.firstIndex(of:"--macro-hardware-window-preview"),CommandLine.arguments.count>i+1{
+    do{try MacroHardwareTestController.preview(URL(fileURLWithPath:CommandLine.arguments[i+1]));exit(0)}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
+if let i=CommandLine.arguments.firstIndex(of:"--macro-recover-dir"),CommandLine.arguments.count>i+1{
+    let tester=MacroHardwareTestController(resumeDirectory:URL(fileURLWithPath:CommandLine.arguments[i+1]));app.delegate=tester;app.run();exit(0)
+}
+if CommandLine.arguments.contains("--macro-hardware-test"){
+    let directory:URL? = CommandLine.arguments.firstIndex(of:"--test-dir").flatMap{CommandLine.arguments.count>$0+1 ? URL(fileURLWithPath:CommandLine.arguments[$0+1]):nil}
+    let tester=MacroHardwareTestController(directory:directory);app.delegate=tester;app.run();exit(0)
 }
 if CommandLine.arguments.contains("--macro-output-observer"){
     let tester=MacroObserverTestController();app.delegate=tester;app.run();exit(0)

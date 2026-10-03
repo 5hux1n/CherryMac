@@ -11,7 +11,7 @@ if [[ "$TASK_TEST_OUTPUT" != /* ]]; then echo 'Output must be an absolute path.'
 mkdir -p "$(dirname "$TASK_TEST_OUTPUT")"
 xcrun swiftc -D CHERRY_MACRO_TEST \
     "$TASK_SOURCE_DIR/main.swift" "$TASK_SOURCE_DIR/InputRouter.swift" "$TASK_SOURCE_DIR/CherryHardware.swift" \
-    "$TASK_SOURCE_DIR/CalculatorKeyTest.swift" "$TASK_SOURCE_DIR/KeymapWrite.swift" "$TASK_SOURCE_DIR/MacroObserverTest.swift" "$TASK_SOURCE_DIR/MacroPhysicalStop.swift" \
+    "$TASK_SOURCE_DIR/CalculatorKeyTest.swift" "$TASK_SOURCE_DIR/KeymapWrite.swift" "$TASK_SOURCE_DIR/MacroObserverTest.swift" "$TASK_SOURCE_DIR/MacroPhysicalStop.swift" "$TASK_SOURCE_DIR/MacroHardwareTest.swift" \
     "$TASK_SOURCE_DIR/CherryMacro.swift" "$TASK_SOURCE_DIR/HardwareProfile.swift" "$TASK_SOURCE_DIR/WindowsProfile.swift" \
     "$TASK_SOURCE_DIR/LightingModel.swift" "$TASK_SOURCE_DIR/HardwareWindow.swift" "$TASK_SOURCE_DIR/HardwareLighting.swift" \
     "$TASK_SOURCE_DIR/CalculatorService.swift" "$TASK_SOURCE_DIR/HardwareTests.swift" \
