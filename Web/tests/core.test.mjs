@@ -1,3 +1,4 @@
+import {macroTestPlan,testMacro,testPlayback} from '../assets/macro-test-flow.js';
 import {waitForFiniteMacroCompletion,applyMacroWithStop} from '../assets/macro-session.js';
 import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.js';
 import test from 'node:test';
@@ -528,4 +529,17 @@ test('reconnected macro recovery retains original scope for undecodable mixed ba
     const options={...session.options(),confirmStopped:async request=>{called=true;assert.equal(request.phase,'recovery');assert.equal(session.packets.length,0);if(refuse)throw new Error('stop refused');else session.state.parameters[9]^=1;}};
     await assert.rejects(restoreMacroTransaction(session,before,loop,options));assert.equal(called,true);assert.equal(session.packets.length,0);
   }
+});
+
+
+test('macro flow target appends without replacing existing macros or bindings and refuses full or non-original calculator states',()=>{
+  const before=demoSnapshot();before.macroData=encodeBank([macro]);before.keymap.splice(324,3,...macroBinding(0,{mode:'count',count:3}));
+  const plan=macroTestPlan(before),library=decodeBank(plan.expected.macroData);
+  assert.equal(library.length,2);assert.deepEqual(library[0].steps,macro.steps);assert.deepEqual(library[1].steps,testMacro.steps);
+  assert.deepEqual(decodeMacroBinding(plan.expected.keymap.slice(306,309),library.length),testPlayback);
+  for(let slot=0;slot<126;slot++)if(slot!==102)assert.deepEqual(plan.expected.keymap.slice(slot*3,slot*3+3),before.keymap.slice(slot*3,slot*3+3));
+  assert.deepEqual(plan.expected.colors,before.colors);assert.deepEqual(plan.expected.parameters,before.parameters);
+  const full=clone(before);full.macroData=encodeBank(Array.from({length:32},(_,i)=>({...macro,name:String(i)})));assert.throws(()=>macroTestPlan(full));
+  const changed=clone(before);changed.keymap[306]=32;assert.throws(()=>macroTestPlan(changed));
+  const short=clone(before);short.keymap=[];assert.throws(()=>macroTestPlan(short));
 });
