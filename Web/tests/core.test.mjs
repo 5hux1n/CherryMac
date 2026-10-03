@@ -5,9 +5,18 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
+import {officialHostTextEvent} from '../assets/model.js';
 import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
+
+test('host text reports reject configuration replies and malformed input',()=>{
+  const report=[5,0x66,7,0,0,0,0,0,0];
+  assert.equal(officialHostTextEvent(report),0x766);
+  for(const invalid of [[4,...report.slice(1)],report.slice(0,8),[...report,0],
+    [5,0x7e,7,0,0,0,0,0,0],[5,0,8,0,0,0,0,0,0],
+    [5,256,7,0,0,0,0,0,0],null])assert.equal(officialHostTextEvent(invalid),null);
+});
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};

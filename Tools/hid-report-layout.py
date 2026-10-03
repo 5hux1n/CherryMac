@@ -10,7 +10,8 @@ def parse_descriptor(data):
         raise ValueError('Descriptor size invalid')
     state = {'page': 0, 'size': 0, 'count': 0, 'id': 0}
     stack, reports, collections = [], {}, []
-    local, offset = {}, 0
+    local, offset, top_level_count = {}, 0, 0
+    collection_ordinals = []
     while offset < len(data):
         prefix = data[offset]
         offset += 1
@@ -41,11 +42,15 @@ def parse_descriptor(data):
                 local[{0: 'usage', 1: 'minimum', 2: 'maximum'}[tag]] = value
         elif kind == 0:
             if tag == 10:
+                if not collections:
+                    top_level_count += 1
                 collections.append((state['page'], local.get('usage')))
+                collection_ordinals.append(top_level_count)
             elif tag == 12:
                 if not collections:
                     raise ValueError('Collection stack underflow')
                 collections.pop()
+                collection_ordinals.pop()
             elif tag in [8, 9, 11]:
                 direction = {8: 'input', 9: 'output', 11: 'feature'}[tag]
                 key = (state['id'], direction)
@@ -55,7 +60,8 @@ def parse_descriptor(data):
                     raise ValueError('Oversized report')
                 report['fields'].append({'offsetBits': report['bits'], 'sizeBits': state['size'], 'count': state['count'],
                                          'usagePage': state['page'], 'flags': value, 'local': local.copy(),
-                                         'collections': [list(c) for c in collections]})
+                                         'collections': [list(c) for c in collections],
+                                         'topLevelCollectionOrdinal': collection_ordinals[0] if collection_ordinals else None})
                 report['bits'] += bits
             else:
                 raise ValueError('Unsupported main item')

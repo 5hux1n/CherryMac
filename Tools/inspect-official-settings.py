@@ -219,6 +219,13 @@ def inspect(path, skin=None):
         0x4A05EA: "6a01",           # connection kind argument
         0x4A064D: "e8fea90600",     # raw connection entry
         0x50C45E: "0fb782e4190000", # reads CAPS max input report length
+        0x49878D: "0fb74808",       # connection selector to dispatcher argument
+        0x4987AC: "0fb7400a",       # secondary selector
+        0x4987CB: "81bdd0fdfffffe000000",
+        0x4987D5: "0f8460060000",   # FE -> 0x498e3b
+        0x498E4C: "e84f6d0000",     # FE branch -> 0x49fba0
+        0x49FBE1: "83e901",         # connection kind - 1 indexes switch
+        0x49FBFD: "ff2495100a4a00", # dispatch table
     }
     for address, encoded in interface_checks.items():
         expected_bytes = bytes.fromhex(encoded)
@@ -226,6 +233,8 @@ def inspect(path, skin=None):
             raise ValueError("Unexpected interface selection instruction")
     if wide_string(0x77EB18, 10) != "&mi_" or wide_string(0x77EB24, 10) != "&col":
         raise ValueError("Unexpected HID path parser tokens")
+    if pe.pointer(0x4A0A10) != 0x4A04C6:
+        raise ValueError("Unexpected raw connection dispatch table")
     result = {
         "format": "CherryMacOfficialSettingsStaticAudit", "version": 3,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
@@ -237,7 +246,7 @@ def inspect(path, skin=None):
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},
         "modelFactory": {"xmlClass": "EevisionKeyboardDevice", "constructor": "0x4f6060", "vtable": "0x77f604", "model": 47, "vendorID": 0x046A, "productID": 0x01CE, "instructionChecks": len(model_checks)},
         "logicalMatchingTable": {"address": "0x76c6c8", "count": 126, "defaultKeymapReadCommand": 7, "rawSHA256": hashlib.sha256(logical_bytes).hexdigest(), "records": logical_records, "limits": "Requires actual factory keymap to map event values; not the JSON DefaultAssignment array"},
-        "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "reportID": "not established"},
+        "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "registeredWindowsCollection": 5, "secondarySelector": 254, "reportID": "Requires descriptor correlation; not encoded in receiver"},
         "registeredInterfaces": {"rows": interface_rows, "instructionChecks": len(interface_checks),
                                  "rowOffsets": {"interfaceNumber": 4, "collectionNumber": 6,
                                                 "connectionSelector": 8, "secondarySelector": 10,

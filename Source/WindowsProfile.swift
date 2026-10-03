@@ -51,6 +51,16 @@ enum WindowsProfile {
         return result
     }()
     struct HostTextTrigger:Equatable {let logicalIndex:Int;let physicalSlot:Int}
+    // Fixed EXE: COL 5 / secondary FE -> raw receiver. Saved descriptor:
+    // that top-level collection contains Report 5, eight payload bytes.
+    // Accept a normalized complete report (ID included). Callers must still
+    // establish device/session provenance; parsing does not authorize output.
+    static func hostTextEvent(fullReport:[UInt8])->Int? {
+        guard fullReport.count==9,fullReport[0]==5 else{return nil}
+        let value=Int(fullReport[1]) | Int(fullReport[2])<<8
+        guard let slot=HostTextPlan.triggerIndex(eventValue:value),slot<126 else{return nil}
+        return value
+    }
     static func resolveHostTextTrigger(eventValue:Int,factoryKeymap:[UInt8])throws->HostTextTrigger? {
         guard factoryKeymap.count==378 else{throw HardwareError(message:"文本触发解析需要完整的固件默认键位表。")}
         guard let slot=HostTextPlan.triggerIndex(eventValue:eventValue),slot<126 else{return nil}

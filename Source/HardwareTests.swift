@@ -570,6 +570,11 @@ func runHostTextPlanChecks(){
     precondition((try! plan("\n")).marker==[0xA1,0,0] && (try! plan("\n")).scalarUTF16.isEmpty)
     precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x700)==0 && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x7FF)==255)
     precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x6FF)==nil && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x800)==nil)
+    let report:[UInt8]=[5,0x66,7,0,0,0,0,0,0]
+    precondition(WindowsProfile.hostTextEvent(fullReport:report)==0x766)
+    for invalid in [[4]+Array(report.dropFirst()),Array(report.dropLast()),report+[0],[5,0x7E,7,0,0,0,0,0,0],[5,0,8,0,0,0,0,0,0]] {
+        precondition(WindowsProfile.hostTextEvent(fullReport:invalid)==nil)
+    }
     var factory=Array(repeating:UInt8(0),count:378)
     factory.replaceSubrange(306..<309,with:[0x30,0x92,1])
     precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x766,factoryKeymap:factory))==WindowsProfile.HostTextTrigger(logicalIndex:17,physicalSlot:102))

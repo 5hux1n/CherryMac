@@ -22,5 +22,9 @@ class ReportLayoutTests(unittest.TestCase):
         reports=layout.parse_descriptor(bytes.fromhex('050c0901a10185037510950119002aff1f81008100c0'))
         self.assertEqual(reports[0]['fields'][0]['local'],{'minimum':0,'maximum':8191})
         self.assertEqual(reports[0]['fields'][1]['local'],{})
+    def test_collection_ordinals_distinguish_equal_usages_and_ignore_nesting(self):
+        reports=layout.parse_descriptor(bytes.fromhex('061cff0992a101850475089501a1008100c0c00992a10185058100c0'))
+        self.assertEqual([r['fields'][0]['topLevelCollectionOrdinal'] for r in reports],[1,2])
+        self.assertEqual(reports[0]['fields'][0]['collections'][0],reports[1]['fields'][0]['collections'][0])
 
 if __name__=='__main__':unittest.main()

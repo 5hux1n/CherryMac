@@ -14,6 +14,14 @@ export function officialHostTextPlan(action){
     scalarUTF16:Array.from(prefix).filter(c=>c!=='\n').map(c=>Array.from({length:c.length},(_,i)=>c.charCodeAt(i)))};
 }
 export function officialTextTriggerIndex(eventValue){return Number.isInteger(eventValue)&&eventValue>=0x700&&eventValue<0x800?eventValue-0x700:null;}
+// Complete normalized report, including its ID. WebHID callbacks omit the ID;
+// their caller must prepend reportId explicitly and verify device/session
+// provenance. This pure decoder does not install listeners or authorize writes.
+export function officialHostTextEvent(fullReport){
+  if(!bytes(fullReport,9)||fullReport[0]!==5)return null;
+  const value=fullReport[1]|fullReport[2]<<8,slot=officialTextTriggerIndex(value);
+  return slot!==null&&slot<126?value:null;
+}
 export function resolveHostTextTrigger(eventValue,factoryKeymap){
   requireThat(bytes(factoryKeymap,378),'文本触发解析需要完整的固件默认键位表。');
   const slot=officialTextTriggerIndex(eventValue);if(slot===null||slot>=126)return null;
