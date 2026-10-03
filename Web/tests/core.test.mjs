@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {clone,equal,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
-import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration} from '../assets/writer.js';
+import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
@@ -500,4 +500,32 @@ test('stop replay verifies final quiet evidence and rejects forged budgets, cloc
   const late=new MacroStopObservation(stopRequest(),0);late.acknowledge(270);assert.throws(()=>late.observe({kind:'key',code:'KeyB',pressed:true,milliseconds:300}));
   const failed={...late.record(),result:'failed',postAcknowledgementQuietMilliseconds:null};assert.equal(replayMacroStopRecord(failed).status,'failed');
   const forged=clone(failed);forged.failure='unrelated';assert.throws(()=>replayMacroStopRecord(forged));
+});
+
+
+test('reconnected macro recovery retains original scope for undecodable mixed banks, refuses unrelated changes and never retries',async()=>{
+  const before=demoSnapshot(),target=clone(before);target.macroData=encodeBank([{...macro,steps:Array.from({length:3},()=>macro.steps).flat()}]);target.keymap.splice(306,3,...macroBinding(0,{mode:'count',count:3}));
+  const plan=new MacroWriteAuthorization(before,target),mixed=clone(plan.disabled);mixed.macroData=clone(target.macroData);mixed.macroData.splice(0,54,...before.macroData.slice(0,54));
+  assert.throws(()=>decodeBank(mixed.macroData));
+  for(const state of [before,target,mixed]){
+    const session=new SimulatedMacroSession(state),result=await restoreMacroTransaction(session,before,target,session.options());
+    assert.ok(sameSnapshot(result,before));assert.equal(session.operationId,'previous');assert.equal(session.authorization,undefined);
+    if(state===before){assert.equal(session.packets.length,0);assert.equal(session.saved.length,0);}else{
+      assert.deepEqual(session.saved,[state]);assert.deepEqual(session.drains,[630]);
+      const bank=session.packets.filter(p=>p[3]===21);assert.equal(bank.at(-1)[5]|bank.at(-1)[6]<<8,0);session.packets.forEach(p=>plan.validate(p));
+    }
+  }
+  for(const fault of ['outside','bank','backup','held','packet','logging']){
+    const state=clone(mixed);if(fault==='outside')state.colors[0]^=1;if(fault==='bank')state.macroData[3000]^=1;
+    const session=new SimulatedMacroSession(state);session.backupFailure=fault==='backup';session.heldAt=fault==='held'?1:0;session.failAt=fault==='packet'?1:0;session.logFailure=fault==='logging';
+    await assert.rejects(restoreMacroTransaction(session,before,target,session.options()));assert.equal(session.packets.length,fault==='packet'?1:0);assert.equal(session.authorization,undefined);assert.equal(session.operationId,'previous');
+  }
+  const loop=clone(target);loop.keymap.splice(306,3,...macroBinding(0,{mode:'toggle',count:1}));
+  const confirmed=new SimulatedMacroSession(loop);let sawStop=false;
+  assert.ok(sameSnapshot(await restoreMacroTransaction(confirmed,before,loop,{...confirmed.options(),confirmStopped:async request=>{sawStop=true;assert.equal(request.phase,'recovery');assert.equal(confirmed.packets.length,0);}}),before));assert.equal(sawStop,true);
+  for(const refuse of [true,false]){
+    const session=new SimulatedMacroSession(loop);let called=false;
+    const options={...session.options(),confirmStopped:async request=>{called=true;assert.equal(request.phase,'recovery');assert.equal(session.packets.length,0);if(refuse)throw new Error('stop refused');else session.state.parameters[9]^=1;}};
+    await assert.rejects(restoreMacroTransaction(session,before,loop,options));assert.equal(called,true);assert.equal(session.packets.length,0);
+  }
 });

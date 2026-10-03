@@ -1,5 +1,5 @@
 import {requireThat} from './model.js?v=0.5.0';
-import {applyMacroConfiguration} from './writer.js?v=0.5.0';
+import {applyMacroConfiguration,restoreMacroTransaction} from './writer.js?v=0.5.0';
 import {confirmMacroStopped} from './macro-stop.js?v=0.5.0';
 
 // A nominal finite delay is never evidence of firmware cancellation. Keep the
@@ -21,11 +21,19 @@ export async function waitForFiniteMacroCompletion(milliseconds,{hid,gate,signal
 // Product/test integration: backup, logging, stop UI and nominal completion
 // feed the same scoped writer. This grants no macro transport capability.
 export async function applyMacroWithStop(hid,target,before,{gate,backup,progress=()=>{},signal,win=window,doc=document}={}){
+  return macroSession(applyMacroConfiguration,hid,target,before,{gate,backup,progress,signal,win,doc});
+}
+
+export async function recoverMacroWithStop(hid,before,target,{gate,backup,progress=()=>{},signal,win=window,doc=document}={}){
+  return macroSession(restoreMacroTransaction,hid,before,target,{gate,backup,progress,signal,win,doc});
+}
+
+async function macroSession(transaction,hid,first,second,{gate,backup,progress,signal,win,doc}){
   requireThat(gate&&typeof gate.check==='function'&&typeof gate.acknowledge==='function'&&typeof gate.invalidate==='function','缺少物理释放确认。');
   const ready=()=>requireThat(!signal?.aborted,'用户已取消宏写入，停止发送。');
   ready();
   const guardedGate={invalidate:()=>gate.invalidate(),acknowledge:event=>{ready();gate.acknowledge(event);},check:async()=>{ready();await gate.check();ready();}};
-  return applyMacroConfiguration(hid,target,before,{gate:guardedGate,backup,progress,
+  return transaction(hid,first,second,{gate:guardedGate,backup,progress,
     waitForCompletion:ms=>waitForFiniteMacroCompletion(ms,{hid,gate,signal,win,doc}),
     confirmStopped:request=>confirmMacroStopped(request,{hid,gate:guardedGate,signal,win,doc,log:async row=>{hid.record(row);await hid.flushLogs();}})
   });

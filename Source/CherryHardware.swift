@@ -126,6 +126,37 @@ extension CherryHardwareAccess {
 }
 
 extension CherryHardwareAccess {
+    // Reconnected recovery uses the saved before/target scope, including an
+    // undecodable mixed bank. It never authorizes the mixed bank as a new plan.
+    func restoreMacroTransaction(_ authorization:MacroWriteAuthorization,operationLog:HardwareOperationLog? = nil,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
+        let original=authorization.before,target=authorization.expected
+        operationLog?.record("phase","reconnect-recovery-read");try operationLog?.requireHealthy()
+        let current=try completeSnapshot();try authorization.validateRecovery(current)
+        func same(_ a:HardwareSnapshot,_ b:HardwareSnapshot)->Bool {a.deviceInfo==b.deviceInfo && a.parameters==b.parameters && a.colors==b.colors && a.keymap==b.keymap && a.macroData==b.macroData}
+        if same(current,original){operationLog?.record("phase","original-already-present");try operationLog?.requireHealthy();return current}
+        let saved=try backup(current);operationLog?.record("recoverySnapshot",saved.path);try operationLog?.requireHealthy();try waitUntilKeysReleased()
+        if !authorization.beforeCompletion.repeatingBindings.isEmpty || !authorization.targetCompletion.repeatingBindings.isEmpty {
+            guard let confirmStopped else{throw HardwareError(message:"缺少持续宏停止流程，未发送恢复写包。")}
+            try confirmStopped(.init(phase:.recovery,configurations:[original,target],requirements:[authorization.beforeCompletion,authorization.targetCompletion]))
+            try waitUntilKeysReleased();try operationLog?.requireHealthy()
+        }
+        try authorization.validateRecovery(completeSnapshot())
+        func send(_ packet:[UInt8])throws{try authorization.validate(packet);try waitUntilKeysReleased();try operationLog?.requireHealthy();_ = try exchange(packet)}
+        func keys(_ map:[UInt8])throws{for offset in stride(from:0,to:378,by:54){try send(CherryPacket.chunk(9,offset:offset,length:54,data:Array(map[offset..<offset+54])))}}
+        operationLog?.record("phase","recovery-disable-triggers");try keys(authorization.disabled.keymap)
+        try waitForMacroCompletion(seconds:Double(max(authorization.beforeDurationMilliseconds,authorization.targetDurationMilliseconds))/1000)
+        guard let bank=original.macroData else{throw HardwareError(message:"缺少原宏备份。")}
+        // Header last; no automatic second recovery/retry if a packet fails.
+        operationLog?.record("phase","recovery-original-bank")
+        for offset in authorization.changedOffsets.reversed(){let end=min(offset+54,3071);try send(CherryPacket.chunk(0x15,offset:offset,length:end-offset,data:Array(bank[offset..<end])))}
+        guard try read(0x14,count:3071)==bank else{throw HardwareError(message:"重连恢复宏区读回不一致，停止发送。")}
+        operationLog?.record("phase","recovery-original-bindings");try keys(original.keymap)
+        let restored=try completeSnapshot();guard same(restored,original) else{throw HardwareError(message:"重连恢复完整读回不一致。")}
+        operationLog?.record("phase","reconnect-recovery-complete");try operationLog?.requireHealthy();return restored
+    }
+}
+
+extension CherryHardwareAccess {
     func writeMacroConfiguration(_ expected:HardwareSnapshot,baseline:HardwareSnapshot,operationLog:HardwareOperationLog? = nil,confirmStopped:((MacroStopRequest)throws->Void)? = nil) throws -> HardwareSnapshot {
         let authorization=try MacroWriteAuthorization(baseline:baseline,target:expected,allowUnbounded:confirmStopped != nil)
         guard let wanted=expected.macroData,let original=baseline.macroData else{throw HardwareError(message:"请重新读取包含宏数据的完整配置。")}
@@ -244,6 +275,14 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #if CHERRY_MACRO_TEST
     private var macroAuthorization:MacroWriteAuthorization?
+    func recoverMacro(_ authorization:MacroWriteAuthorization,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
+        guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能开始恢复。")}
+        try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
+        defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
+        log.record("scope","reconnected recovery of saved macro transaction only")
+        do{ return try restoreMacroTransaction(authorization,operationLog:log,confirmStopped:confirmStopped) }
+        catch{log.record("phase","reconnect-recovery-failed");log.record("error",error.localizedDescription);throw error}
+    }
     func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
         guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
         let authorization=try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:confirmStopped != nil)

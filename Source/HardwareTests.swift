@@ -37,20 +37,20 @@ func runHardwareTests() {
         fails{try recorder.observe(usage:4,pressed:true,milliseconds:200)}
     }
     var captured:KeyboardMacro?
-    let sheet=MacroRecordingSheet(name:"native recorder"){captured=$0};sheet.timing.selectItem(at:1);sheet.delay.stringValue="777";sheet.begin()
+    let sheet=MacroRecordingSheet(name:"native recorder"){captured=$0};sheet.timing.selectItem(at:1);sheet.delay.stringValue="777";sheet.beginRecording(modifierFlags:[])
     func key(_ down:Bool)->NSEvent{NSEvent.keyEvent(with:down ? .keyDown:.keyUp,location:.zero,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,characters:"a",charactersIgnoringModifiers:"a",isARepeat:false,keyCode:0)!}
     sheet.keyboard(key(true),pressed:true);sheet.finish();precondition(!sheet.closed && captured==nil)
     sheet.keyboard(key(false),pressed:false);sheet.finish()
     precondition(captured?.steps.map{$0.usage}==[4,4] && captured?.steps.map{$0.delayMilliseconds}==[777,777])
     var chordCaptured:KeyboardMacro?
-    let chordSheet=MacroRecordingSheet(name:"chord") {chordCaptured=$0};chordSheet.begin()
+    let chordSheet=MacroRecordingSheet(name:"chord") {chordCaptured=$0};chordSheet.beginRecording(modifierFlags:[])
     for (pressed,raw) in [(true,UInt(1)|(1<<18)),(false,UInt(0))]{
         let flag=NSEvent.keyEvent(with:.flagsChanged,location:.zero,modifierFlags:NSEvent.ModifierFlags(rawValue:raw),timestamp:0,windowNumber:0,context:nil,characters:"",charactersIgnoringModifiers:"",isARepeat:false,keyCode:59)!
         chordSheet.modifier(flag)
         if pressed{chordSheet.keyboard(key(true),pressed:true);chordSheet.keyboard(key(false),pressed:false)}
     }
     chordSheet.finish();precondition(chordCaptured?.steps.map{$0.usage}==[224,4,4,224])
-    let cancelled=MacroRecordingSheet(name:"cancel"){_ in preconditionFailure("focus loss must not commit recording")};cancelled.begin();cancelled.keyboard(key(true),pressed:true)
+    let cancelled=MacroRecordingSheet(name:"cancel"){_ in preconditionFailure("focus loss must not commit recording")};cancelled.beginRecording(modifierFlags:[]);cancelled.keyboard(key(true),pressed:true)
     cancelled.windowDidResignKey(Notification(name:NSWindow.didResignKeyNotification));precondition(cancelled.recorder==nil && cancelled.stop.isEnabled==false)
     if let path=ProcessInfo.processInfo.environment["CHERRY_RECORDER_PREVIEW"],let view=cancelled.window?.contentView{
         view.displayIfNeeded();if let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds){view.cacheDisplay(in:view.bounds,to:bitmap);try! bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:path))}
@@ -357,6 +357,23 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
     var moved=desired;moved.keymap[306..<309]=[0x20,0,0];moved.keymap[303..<306]=[0x70,0,0];moved.macroData=try! CherryMacroCodec.encode([a,chord])
     let moveWriter=SimulatedCherry(desired)
     precondition(try! moveWriter.writeMacroConfiguration(moved,baseline:desired)==moved)
+    // A reconnect uses the original plan, even if only some bank blocks survived.
+    var mixed=plan.disabled;mixed.macroData=desired.macroData
+    mixed.macroData!.replaceSubrange(0..<54,with:original.macroData![0..<54])
+    _=rejected{_ = try CherryMacroCodec.decode(mixed.macroData!)}
+    for state in [original,desired,mixed]{
+        let reconnect=SimulatedCherry(state)
+        precondition(try! reconnect.restoreMacroTransaction(plan)==original)
+        if state==original{precondition(reconnect.packets.isEmpty && reconnect.saved.isEmpty)}
+        else{precondition(reconnect.saved==[state]);for packet in reconnect.packets{try! plan.validate(packet)}
+            let chunks=reconnect.packets.filter{$0[3]==0x15};precondition(chunks.last![5]==0 && chunks.last![6]==0)}
+    }
+    for kind in ["outside","bank","backup","held","packet"]{
+        var current=mixed;if kind=="outside"{current.colors![0]^=1};if kind=="bank"{current.macroData![3000]^=1}
+        let reconnect=SimulatedCherry(current);reconnect.backupFails=kind=="backup";reconnect.heldFromCheck=kind=="held" ? 1:nil;reconnect.failSendAt=kind=="packet" ? 1:nil
+        _=rejected{_ = try reconnect.restoreMacroTransaction(plan)}
+        precondition(reconnect.packets.count==(kind=="packet" ? 1:0))
+    }
     let success=SimulatedCherry(original)
     precondition(try! success.writeMacroConfiguration(desired,baseline:original)==desired)
     precondition(success.saved==[original] && success.readCommands.contains(0x14))
@@ -436,6 +453,21 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
         let changedDuringStop=SimulatedCherry(unbounded)
         _=rejected{_ = try changedDuringStop.writeMacroConfiguration(desired,baseline:unbounded,confirmStopped:{_ in changedDuringStop.state.parameters[9]^=1})}
         precondition(changedDuringStop.packets.isEmpty)
+        let reconnectPlan=try! MacroWriteAuthorization(baseline:original,target:unbounded,allowUnbounded:true)
+        let missingStop=SimulatedCherry(unbounded)
+        _=rejected{_ = try missingStop.restoreMacroTransaction(reconnectPlan)}
+        precondition(missingStop.packets.isEmpty)
+        for stopResult in ["confirmed","refused","changed"]{
+            let reconnected=SimulatedCherry(unbounded);var sawStop=false
+            let attempt={try reconnected.restoreMacroTransaction(reconnectPlan,confirmStopped:{request in
+                precondition(request.phase == .recovery && reconnected.packets.isEmpty);sawStop=true
+                if stopResult=="refused"{throw HardwareError(message:"stop refused")}
+                if stopResult=="changed"{reconnected.state.parameters[9]^=1}
+            })}
+            if stopResult=="confirmed"{precondition(try! attempt()==original)}
+            else{_=rejected{_ = try attempt()};precondition(reconnected.packets.isEmpty)}
+            precondition(sawStop)
+        }
     }
     var unsupported=desired;unsupported.keymap[306]=0x71
     let unknown=SimulatedCherry(unsupported)
@@ -448,7 +480,7 @@ private func runHardwareMacroTests(_ fixture:HardwareSnapshot) {
     let dangling=SimulatedCherry(original)
     _=rejected{_ = try dangling.writeKeymap(desired.keymap,baseline:original)}
     precondition(dangling.packets.isEmpty && dangling.saved.isEmpty)
-    print("PASS: explicit unbounded stop before disabling and recovery, stop refusal/configuration-change no-write; finite repeat budgets and binding-only disable/drain; macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
+    print("PASS: reconnected recovery of complete and undecodable mixed macro banks, original no-op, unrelated changes refusal and no retry; explicit unbounded stop before disabling and recovery, stop refusal/configuration-change no-write; finite repeat budgets and binding-only disable/drain; macro transaction scope, outside-change recovery refusal and original media binding restoration; macro wire captures, modifier masks, malformed-bank rejection; full-bank backup, header-last writes, binding disable/drain, stale baseline, failed backup, lost acknowledgement and readback rollback, held-key recovery block (simulated firmware only)")
 }
 
 private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {

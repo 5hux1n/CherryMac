@@ -118,3 +118,36 @@ export async function applyMacroConfiguration(hid,target,before,{gate,backup,wai
     });
   }finally{hid.operationId=previousOperationId;}
 }
+
+// Resume recovery on a NEW connection with the original immutable transaction
+// scope. A mixed/undecodable bank is never used as a new write authorization.
+export async function restoreMacroTransaction(hid,before,target,{gate,backup,waitForCompletion,confirmStopped,progress=()=>{}}={}){
+  requireThat(typeof hid?.withMacroAuthorization==='function','宏传输尚未开放，未读取或写入键盘。');
+  const auth=new MacroWriteAuthorization(before,target,{allowUnbounded:typeof confirmStopped==='function'});
+  requireThat(gate&&typeof gate.check==='function'&&typeof backup==='function'&&typeof waitForCompletion==='function','缺少恢复释放、备份或宏结束检查。');
+  const previous=hid.operationId;hid.operationId=crypto.randomUUID();
+  const phase=async(name,extra={})=>{hid.record({id:crypto.randomUUID(),operationId:hid.operationId,kind:'phase',at:new Date().toISOString(),phase:name,...extra});await hid.flushLogs();progress(name);};
+  try{
+    await phase('重连恢复完整读取',{baseline:auth.before,target:auth.expected});
+    const current=await hid.snapshot();auth.validateRecovery(current);
+    if(sameSnapshot(current,auth.before)){await phase('原宏配置已在设备中，无需写入');return current;}
+    await backup(clone(current));await phase('恢复前中间状态备份已保存');await gate.check();
+    if(auth.beforeCompletion.repeatingBindings.length||auth.targetCompletion.repeatingBindings.length){
+      await confirmStopped({phase:'recovery',configurations:[auth.before,auth.expected],requirements:[auth.beforeCompletion,auth.targetCompletion]});
+      await gate.check();await hid.flushLogs();
+    }
+    // Recheck even after a finite wait/user action; outside changes are never overwritten.
+    auth.validateRecovery(await hid.snapshot());
+    return await hid.withMacroAuthorization(auth,gate,async()=>{
+      const send=async packet=>{auth.validate(packet);await gate.check();await hid.flushLogs();await hid.exchange(packet);};
+      const keys=async map=>{for(let o=0;o<378;o+=54)await send(auth.packet(9,map,o));};
+      await phase('恢复前禁用新旧宏绑定');await keys(auth.disabled.keymap);
+      await waitForCompletion(Math.max(auth.beforeDurationMilliseconds,auth.targetDurationMilliseconds));await gate.check();
+      // No blind retry on this recovery attempt. Any failure retains the backup.
+      await phase('恢复原宏事件与头部');for(const o of auth.changedOffsets.slice().reverse())await send(auth.packet(0x15,auth.before.macroData,o));
+      requireThat(equal(await hid.read(0x14,3071),auth.before.macroData),'重连恢复宏区读回不一致，停止发送。');
+      await phase('恢复原宏绑定');await keys(auth.before.keymap);
+      const restored=await hid.snapshot();requireThat(sameSnapshot(restored,auth.before),'重连恢复完整读回不一致。');await phase('重连恢复完成');return restored;
+    });
+  }finally{hid.operationId=previous;}
+}

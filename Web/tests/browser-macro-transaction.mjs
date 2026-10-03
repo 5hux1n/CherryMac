@@ -11,7 +11,7 @@ const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(
 try{
   await page.goto(process.env.CHERRY_TEST_URL??'http://127.0.0.1:8768/');
   await page.evaluate(async()=>{
-    const {CherryHID,PageReleaseGate}=await import('./assets/hid.js'),{applyMacroWithStop}=await import('./assets/macro-session.js');
+    const {CherryHID,PageReleaseGate}=await import('./assets/hid.js'),{applyMacroWithStop,recoverMacroWithStop}=await import('./assets/macro-session.js');
     const {demoSnapshot}=await import('./assets/layout.js'),{encodeBank,macroBinding}=await import('./assets/model.js');
     const {saveLog,listLogs}=await import('./assets/logs.js'),{sameSnapshot}=await import('./assets/writer.js');
     const before=demoSnapshot(),macro={name:'A',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30}]};
@@ -38,7 +38,8 @@ try{
       tx.promise=(async()=>{
         const after=await applyMacroWithStop(tx.hid,target,before,options);if(!sameSnapshot(after,target))throw new Error('Target mismatch');
         tx.targetVerified=true;
-        const restored=await applyMacroWithStop(tx.hid,before,after,options);if(!sameSnapshot(restored,before))throw new Error('Restore mismatch');
+        await tx.hid.close();tx.hid=new CherryHID(tx.device,{macroResearch:true,log:saveLog});await tx.hid.open();
+        const restored=await recoverMacroWithStop(tx.hid,before,target,options);if(!sameSnapshot(restored,before))throw new Error('Restore mismatch');
         // Capability must be gone outside the transaction, even in research mode.
         const {MacroWriteAuthorization}=await import('./assets/safety.js'),auth=new MacroWriteAuthorization(before,target,{allowUnbounded:true});
         const count=tx.device.requests.length;let denied=false;try{await tx.hid.exchange(auth.packet(9,target.keymap,0));}catch{denied=true;}
@@ -50,6 +51,8 @@ try{
   await page.locator('#macro-transaction-start').click();await page.locator('.macro-stop-dialog').waitFor();
   assert.equal(await page.evaluate(()=>tx.device.requests.filter(p=>[9,21].includes(p[3])).length),0);
   await page.waitForFunction(()=>!document.querySelector('.macro-stop-accept').disabled);await page.locator('.macro-stop-accept').click();
+  await page.waitForFunction(()=>tx.targetVerified===true||tx.outcome!=null);
+  await page.locator('.macro-stop-dialog').waitFor();await page.waitForFunction(()=>!document.querySelector('.macro-stop-accept').disabled);await page.locator('.macro-stop-accept').click();
   await page.waitForFunction(()=>tx.outcome!=null);const outcome=await page.evaluate(()=>tx.outcome);assert.deepEqual(outcome,{ok:true,restored:true,permissionRevoked:true});
   // A cancelled stop dialog must leave the old toggle trigger and all banks intact.
   await page.evaluate(async()=>{
@@ -72,6 +75,6 @@ try{
   });
   assert.equal(evidence.backups.length,3);assert.equal(evidence.summary.targetVerified,true);assert.ok(evidence.summary.writeCommands.includes(21));assert.ok(evidence.summary.writeCommands.every(c=>[9,21].includes(c)));
   const filename=join(artifacts,'memory-transaction-diagnostics.json');await writeFile(filename,JSON.stringify(evidence,null,2));
-  const replay=spawnSync(process.execPath,['Web/tests/replay-diagnostics.mjs',filename],{encoding:'utf8'});assert.equal(replay.status,0,replay.stderr);const report=JSON.parse(replay.stdout);assert.deepEqual(report.issues,[]);assert.equal(report.missingReplies,0);assert.equal(report.macroStopRecords.length,2);assert.ok(report.macroStopRecords.every(r=>r.authorizationLinked));assert.deepEqual(report.macroStopRecords.map(r=>r.status).sort(),['acknowledged','failed']);assert.deepEqual(errors,[]);
+  const replay=spawnSync(process.execPath,['Web/tests/replay-diagnostics.mjs',filename],{encoding:'utf8'});assert.equal(replay.status,0,replay.stderr);const report=JSON.parse(replay.stdout);assert.deepEqual(report.issues,[]);assert.equal(report.missingReplies,0);assert.equal(report.macroStopRecords.length,3);assert.ok(report.macroStopRecords.every(r=>r.authorizationLinked));assert.deepEqual(report.macroStopRecords.map(r=>r.status).sort(),['acknowledged','acknowledged','failed']);assert.deepEqual(errors,[]);
   await writeFile(join(artifacts,'replay.json'),replay.stdout);console.log(JSON.stringify({passed:true,scope:'memory USB reports and headless browser; no physical HID access, macro execution or power-cycle proof',writePackets:evidence.summary.writeCommands.length,validReplies:report.validReplies,artifacts}));
 }finally{await browser.close();}
