@@ -602,6 +602,11 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     let copied=try! opaque.duplicateMacro(named:opaque.macros[0].name)
     precondition(opaque.macros.last?.hardwareReserved==[0xA5,0xF1]);try! opaque.removeMacro(named:copied)
     var invalid=opaque.macros[0];invalid.hardwareReserved=[1];rejected{try invalid.validate()}
+    var recorded:KeyboardMacro?
+    let segment=MacroRecordingSheet(name:"插入录制",originalSteps:a.steps,selectedStep:0){recorded=$0}
+    segment.placement.selectItem(at:2);segment.timing.selectItem(at:1);segment.delay.stringValue="17";segment.beginRecording(modifierFlags:[])
+    segment.observe(5,pressed:true);segment.observe(5,pressed:false);segment.finish()
+    precondition(recorded?.steps.map{$0.usage}==[5,5,4,4] && recorded?.steps.map{$0.delayMilliseconds}==[17,0,30,0])
     var adopted=false
     let recording=MacroRecordingSheet(name:"保留原步骤"){_ in adopted=true}
     recording.beginRecording(modifierFlags:[]);recording.unsupportedMouseEvent();precondition(recording.recorder != nil,"keyboard-only recording ignores mouse events")

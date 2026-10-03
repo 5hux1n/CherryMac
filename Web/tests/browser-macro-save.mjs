@@ -47,6 +47,10 @@ try{
   assert.deepEqual(await page.locator('.macro-step select:first-of-type').evaluateAll(nodes=>nodes.map(node=>node.value)),['5','5','4','4','6','6']);
   assert.deepEqual(await page.locator('.macro-step input').evaluateAll(nodes=>nodes.map(node=>Number(node.value))),[30,0,30,0,30,0]);
   await page.locator('#save-macro').click();assert.equal(await page.locator('#status').evaluate(node=>node.classList.contains('error')),false);
+  await page.locator('#record-placement').selectOption('before:0');await page.locator('#record-timing').selectOption('fixed');await page.locator('#record-delay').fill('17');await page.locator('#record-start').click();
+  await page.keyboard.press('d');await page.locator('#record-stop').click();
+  assert.deepEqual(await page.locator('.macro-step select:first-of-type').evaluateAll(nodes=>nodes.map(node=>node.value)),['7','7','5','5','4','4','6','6']);
+  assert.deepEqual(await page.locator('.macro-step input').evaluateAll(nodes=>nodes.map(node=>Number(node.value))),[17,0,30,0,30,0,30,0]);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
   console.log('Macro form defaults preserved; existing trigger unchanged; invalid count rejected; no USB access.');
 }finally{await browser.close();}

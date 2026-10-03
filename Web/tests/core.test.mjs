@@ -685,3 +685,13 @@ test('macro write review includes unchanged triggers when their library updates 
   assert.match(summary,/宏库：1 → 1 个，将更新/);assert.match(summary,/准备写入：AB · 4 步/);assert.match(summary,/计算器 → AB · 执行 1 次/);
   const cleared=clearMacros(p),empty=macroWriteReview(cleared,before,cleared.snapshot,{102:'计算器'});assert.match(empty,/将清空宏库/);assert.match(empty,/计算器 → 禁用/);
 });
+
+
+test('recorded segments insert without changing original waits and failures keep recording reusable',()=>{
+  const recorder=new MacroRecorder({timing:'fixed',fixedMilliseconds:17,startedMilliseconds:0});recorder.observe({usage:6,pressed:true,milliseconds:1});recorder.observe({usage:6,pressed:false,milliseconds:2});
+  const original=clone(macro.steps);assert.throws(()=>recorder.finish('C',{originalSteps:original,insertionIndex:99}));assert.equal(recorder.active,true);
+  const result=recorder.finish('merged',{originalSteps:original,insertionIndex:2});assert.deepEqual(result.steps.map(s=>s.usage),[4,4,6,6,5,5]);assert.deepEqual(result.steps.map(s=>s.delayMilliseconds),[0,30,17,0,10,30]);assert.deepEqual(original,macro.steps);
+  const overflow=new MacroRecorder({timing:'ignore',startedMilliseconds:0});overflow.observe({usage:6,pressed:true,milliseconds:1});overflow.observe({usage:6,pressed:false,milliseconds:2});
+  assert.throws(()=>overflow.finish('large',{originalSteps:Array.from({length:256},(_,i)=>({usage:4,pressed:i%2===0,delayMilliseconds:0})),insertionIndex:256}));assert.equal(overflow.active,true);
+  assert.equal(overflow.finish('replace').steps.length,2);
+});

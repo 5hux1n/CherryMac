@@ -274,7 +274,11 @@ export class MacroRecorder{
     this.steps.push({usage,pressed,delayMilliseconds:0,...(kind==='mouse'?{kind}:{})});
     if(pressed)this.held.add(identity);else this.held.delete(identity);this.lastMilliseconds=milliseconds;
   }
-  finish(name){requireThat(this.active&&this.held.size===0,'请先松开全部录制按键，再停止录制。');const m={name,steps:clone(this.steps),recordingDelay:{fixed:this.timing==='fixed',milliseconds:this.fixedMilliseconds}};validateMacro(m);this.active=false;return m;}
+  finish(name,{originalSteps=[],insertionIndex=null}={}){
+    requireThat(this.active&&this.held.size===0,'请先松开全部录制按键，再停止录制。');requireThat(this.steps.length>0,'请先录制至少一个操作。');
+    let steps=clone(this.steps);if(insertionIndex!=null){requireThat(Array.isArray(originalSteps)&&Number.isInteger(insertionIndex)&&insertionIndex>=0&&insertionIndex<=originalSteps.length,'录制插入位置无效。');steps=clone(originalSteps);steps.splice(insertionIndex,0,...clone(this.steps));}
+    const m={name,steps,recordingDelay:{fixed:this.timing==='fixed',milliseconds:this.fixedMilliseconds}};validateMacro(m);this.active=false;return m;
+  }
   cancel(){this.active=false;this.steps=[];this.held.clear();}
 }
 

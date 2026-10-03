@@ -139,9 +139,12 @@ struct MacroRecorder {
         if pressed{held.insert(identity)}else{held.remove(identity)}
         lastMilliseconds=milliseconds
     }
-    mutating func finish(name:String)throws->KeyboardMacro{
+    mutating func finish(name:String,originalSteps:[KeyboardMacro.Step]=[],insertionIndex:Int?=nil)throws->KeyboardMacro{
         guard active,held.isEmpty else{throw HardwareError(message:"请先松开全部录制按键，再停止录制。")}
-        let result=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:timing == .fixed,milliseconds:fixedMilliseconds))
+        guard !steps.isEmpty else{throw HardwareError(message:"请先录制至少一个操作。")}
+        var merged=steps
+        if let insertionIndex{guard (0...originalSteps.count).contains(insertionIndex) else{throw HardwareError(message:"录制插入位置无效。")};merged=originalSteps;merged.insert(contentsOf:steps,at:insertionIndex)}
+        let result=KeyboardMacro(name:name,steps:merged,recordingDelay:.init(fixed:timing == .fixed,milliseconds:fixedMilliseconds))
         try result.validate();active=false;return result
     }
     mutating func cancel(){active=false;steps=[];held=[]}

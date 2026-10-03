@@ -643,7 +643,12 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func recordMacro(){
         guard !busy,profile?.macroBindings != nil,let parent=window,macroRecordingSheet==nil else{return}
-        let sheet=MacroRecordingSheet(name:macroName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "录制宏":macroName.stringValue){[weak self] macro in
+        let original:[KeyboardMacro.Step]
+        do{original=try parsedMacroSteps()}catch{message.stringValue=error.localizedDescription;return}
+        let text=macroText.string as NSString,caret=min(macroText.selectedRange().location,text.length)
+        let preceding=text.substring(to:caret).components(separatedBy:"\n").dropLast().filter{!$0.trimmingCharacters(in:.whitespaces).isEmpty}.count
+        let selectedStep=original.indices.contains(preceding) && !text.substring(with:text.lineRange(for:NSRange(location:caret,length:0))).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? preceding:nil
+        let sheet=MacroRecordingSheet(name:macroName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "录制宏":macroName.stringValue,originalSteps:original,selectedStep:selectedStep){[weak self] macro in
             guard let self else{return};self.macroRecordingSheet=nil
             guard let macro else{self.message.stringValue="录制已取消，原步骤保留。";return}
             self.recordingPreference=macro.recordingDelay;self.macroName.stringValue=macro.name
@@ -765,6 +770,9 @@ final class MacroRecordingArea:NSView {
 }
 final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     let name:String
+    let originalSteps:[KeyboardMacro.Step]
+    let selectedStep:Int?
+    let placement=NSPopUpButton()
     let completion:(KeyboardMacro?)->Void
     let timing=NSPopUpButton(frame:.zero,pullsDown:false),delay=NSTextField(string:"30")
     let mouseOption=NSButton(checkboxWithTitle:"记录录制区内的鼠标按钮",target:nil,action:nil)
@@ -774,15 +782,19 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     var closed=false
     static let modifiers:[UInt16:(UInt8,UInt)] = [59:(224,1),56:(225,2),58:(226,32),55:(227,8),62:(228,8192),60:(229,4),61:(230,64),54:(231,16)]
     static let nativeUsages:[UInt16:UInt8] = Dictionary(uniqueKeysWithValues:Dictionary(grouping:hidToMacKey.filter{$0.key>=4 && $0.key<=231},by:{$0.value}).compactMap{code,entries in entries.count==1 ? (code,UInt8(entries[0].key)):nil})
-    init(name:String,completion:@escaping(KeyboardMacro?)->Void){
-        self.name=name;self.completion=completion
-        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:330),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+    init(name:String,originalSteps:[KeyboardMacro.Step]=[],selectedStep:Int?=nil,completion:@escaping(KeyboardMacro?)->Void){
+        self.name=name;self.originalSteps=originalSteps;self.selectedStep=selectedStep;self.completion=completion
+        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:366),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="录制宏";super.init(window:panel);panel.delegate=self
         let root=panel.contentView!;root.wantsLayer=true;root.layer?.backgroundColor=NSColor.windowBackgroundColor.cgColor;area.owner=self
         let intro=NSTextField(wrappingLabelWithString:"选择事件间隔，开始后在录制区按键。完成前松开全部按键；切换窗口会取消录制并保留原步骤。")
-        intro.frame=NSRect(x:20,y:274,width:520,height:40);root.addSubview(intro)
-        timing.addItems(withTitles:["实际间隔","固定间隔","忽略间隔"]);timing.frame=NSRect(x:20,y:236,width:180,height:28);delay.frame=NSRect(x:216,y:236,width:80,height:26);root.addSubview(timing);root.addSubview(delay)
-        let unit=NSTextField(labelWithString:"毫秒（0–60000）");unit.frame=NSRect(x:306,y:236,width:190,height:24);root.addSubview(unit)
+        intro.frame=NSRect(x:20,y:310,width:520,height:40);root.addSubview(intro)
+        timing.addItems(withTitles:["实际间隔","固定间隔","忽略间隔"]);timing.frame=NSRect(x:20,y:272,width:180,height:28);delay.frame=NSRect(x:216,y:272,width:80,height:26);root.addSubview(timing);root.addSubview(delay)
+        let unit=NSTextField(labelWithString:"毫秒（0–60000）");unit.frame=NSRect(x:306,y:272,width:190,height:24);root.addSubview(unit)
+        placement.addItems(withTitles:["替换全部步骤","末尾追加","所选步骤前插入","所选步骤后插入"]);placement.frame=NSRect(x:20,y:236,width:260,height:28);placement.setAccessibilityLabel("录制片段的插入位置");root.addSubview(placement)
+        let selected=selectedStep.flatMap{originalSteps.indices.contains($0) ? $0:nil}
+        placement.item(at:2)?.isEnabled=selected != nil;placement.item(at:3)?.isEnabled=selected != nil
+        let context=NSTextField(labelWithString:selected.map{"所选步骤 \($0+1) · 原有 \(originalSteps.count) 步"} ?? "原有 \(originalSteps.count) 步");context.frame=NSRect(x:298,y:236,width:242,height:24);root.addSubview(context)
         mouseOption.frame=NSRect(x:20,y:204,width:300,height:24);root.addSubview(mouseOption);root.addSubview(area)
         status.frame=NSRect(x:20,y:50,width:520,height:24);root.addSubview(status)
         for (index,button) in [start,stop,cancelButton].enumerated(){button.frame=NSRect(x:20+index*172,y:10,width:160,height:30);button.bezelStyle = .rounded;button.target=self;root.addSubview(button)}
@@ -790,7 +802,7 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     }
     required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
     static func clock()->Int{Int(ProcessInfo.processInfo.systemUptime*1000)}
-    func controls(){let active=recorder != nil;start.isEnabled = !active;stop.isEnabled=active;timing.isEnabled = !active;delay.isEnabled = !active;mouseOption.isEnabled = !active;area.needsDisplay=true}
+    func controls(){let active=recorder != nil;start.isEnabled = !active;stop.isEnabled=active;timing.isEnabled = !active;delay.isEnabled = !active;mouseOption.isEnabled = !active;placement.isEnabled = !active;area.needsDisplay=true}
     @objc func begin(){beginRecording(modifierFlags:NSEvent.modifierFlags)}
     func beginRecording(modifierFlags:NSEvent.ModifierFlags){do{guard modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{throw HardwareError(message:"请先松开修饰键，再开始录制。")};guard let value=Int(delay.stringValue)else{throw HardwareError(message:"请输入固定间隔毫秒。")};recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock());controls();status.stringValue="0 个事件";window?.makeFirstResponder(area)}catch{status.stringValue=error.localizedDescription}}
     func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{recorder?.cancel();recorder=nil;controls();status.stringValue=error.localizedDescription}}
@@ -798,7 +810,10 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     func modifier(_ event:NSEvent){guard let (usage,mask)=Self.modifiers[event.keyCode]else{return};observe(usage,pressed:event.modifierFlags.rawValue & mask != 0)}
     func unsupportedMouseEvent(){guard recorder != nil,mouseOption.state == .on else{return};recorder?.cancel();recorder=nil;controls();status.stringValue="滚轮或其他鼠标事件尚未支持，录制已取消；原步骤保留。"}
     func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on else{return};guard let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{unsupportedMouseEvent();return};observe(usage,kind:.mouse,pressed:pressed)}
-    @objc func finish(){do{guard recorder != nil else{return};let macro=try recorder!.finish(name:name);complete(macro)}catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
+    @objc func finish(){do{guard var draft=recorder else{return};let index:Int?
+        switch placement.indexOfSelectedItem{case 0:index=nil;case 1:index=originalSteps.count;default:guard let selectedStep,originalSteps.indices.contains(selectedStep) else{throw HardwareError(message:"请重新选择录制插入位置。")};index=selectedStep+(placement.indexOfSelectedItem==3 ? 1:0)}
+        let macro=try draft.finish(name:name,originalSteps:originalSteps,insertionIndex:index);complete(macro)
+    }catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
     @objc func cancel(){recorder?.cancel();complete(nil)}
     func complete(_ macro:KeyboardMacro?){guard !closed else{return};closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}
     func windowShouldClose(_ sender:NSWindow)->Bool{cancel();return false}
