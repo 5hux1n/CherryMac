@@ -476,7 +476,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let target:HardwareSnapshot
         do{target=try macroWriteTarget()}catch{message.stringValue=error.localizedDescription;return}
         guard target.keymap != baseline.keymap || target.macroData != baseline.macroData else{message.stringValue="没有待写入的宏或键位改动。";return}
-        let panel=NSAlert();panel.messageText="写入宏与绑定键";panel.informativeText="仅更新宏库和宏绑定键，普通键与灯效草稿保留。请先停止正在运行的宏并松开全部键；将保存完整备份，写入后完整读回。";panel.addButton(withTitle:"全部已松开，开始写入");panel.addButton(withTitle:"返回编辑")
+        let labels=Dictionary(uniqueKeysWithValues:keyboardLayout().compactMap{key in CherryMatrix.slot(key).map{($0,key.label.replacingOccurrences(of:"\n",with:" / "))}})
+        let review:String
+        do{review=try draft.macroWriteReview(before:baseline,target:target,labels:labels)}catch{message.stringValue=error.localizedDescription;return}
+        let panel=NSAlert();panel.messageText="写入宏与绑定键";panel.informativeText=review+"\n\n仅更新宏库和宏绑定键，普通键与灯效草稿保留。请先停止正在运行的宏并松开全部键；将保存完整备份，写入后完整读回。";panel.addButton(withTitle:"全部已松开，开始写入");panel.addButton(withTitle:"返回编辑")
         panel.beginSheetModal(for:owner){[weak self] response in
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
             // Freeze the review scope; a changed draft/baseline requires a new review.

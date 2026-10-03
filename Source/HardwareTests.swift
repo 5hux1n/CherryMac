@@ -578,6 +578,11 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     rejected{try broken.assignMacro(named:"B",to:102)};precondition(broken==before)
     rejected{try broken.removeMacro(named:"A")};precondition(broken==before)
     rejected{try broken.unassignMacro(from:102)};precondition(broken==before)
+    var reviewed=assigned;reviewed.macros[0].steps[0].delayMilliseconds=42;reviewed.snapshot=try! reviewed.resolvedMacros()
+    let review=try! reviewed.macroWriteReview(before:assigned.snapshot,target:reviewed.snapshot,labels:[102:"计算器"])
+    precondition(review.contains("宏库：2 → 2 个，将更新") && review.contains("计算器 → A · 执行 1 次"))
+    var empty=assigned;try! empty.clearMacros();let clearing=try! empty.macroWriteReview(before:assigned.snapshot,target:empty.snapshot,labels:[102:"计算器"])
+    precondition(clearing.contains("将清空宏库") && clearing.contains("计算器 → 禁用"))
     var pending=assigned;pending.snapshot.keymap.replaceSubrange(60..<63,with:[0x20,8,21]);pending.snapshot.parameters[2]=3;pending.snapshot.colors![45]=123
     try! pending.assignMacro(named:"B",to:12)
     let recovered=try! HardwareProfile.mergeMacroRecovery(restored:assigned,previous:pending,before:assigned.snapshot,target:assigned.snapshot)

@@ -5,7 +5,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
@@ -675,4 +675,13 @@ test('macro recovery preserves ordinary and lighting drafts without retaining un
   assert.deepEqual(result.snapshot.parameters,previous.snapshot.parameters);assert.deepEqual(result.snapshot.colors,previous.snapshot.colors);assert.deepEqual(result.snapshot.keymap.slice(60,63),[0x20,8,21]);
   assert.deepEqual(result.snapshot.keymap.slice(36,39),before.keymap.slice(36,39));assert.deepEqual(result.macroBindings,restored.macroBindings);assert.deepEqual(result.macros,restored.macros);assert.deepEqual(previous,saved);
   const wrong=clone(restored);wrong.snapshot.macroData[20]=1;assert.throws(()=>mergeMacroRecoveryDraft(wrong,previous,before,before));
+});
+
+
+test('macro write review includes unchanged triggers when their library updates and explains clearing',()=>{
+  const before=demoSnapshot();before.keymap.fill(0);before.macroData=encodeBank([macro]);before.keymap.splice(306,3,0x70,0,0);
+  const p=fromHardware(before);p.macros[0].name='AB';p.macroBindings[102]='AB';p.macros[0].steps[0].delayMilliseconds=42;p.snapshot=resolveMacros(p);
+  const summary=macroWriteReview(p,before,p.snapshot,{102:'计算器'});
+  assert.match(summary,/宏库：1 → 1 个，将更新/);assert.match(summary,/准备写入：AB · 4 步/);assert.match(summary,/计算器 → AB · 执行 1 次/);
+  const cleared=clearMacros(p),empty=macroWriteReview(cleared,before,cleared.snapshot,{102:'计算器'});assert.match(empty,/将清空宏库/);assert.match(empty,/计算器 → 禁用/);
 });

@@ -355,6 +355,24 @@ export function replayMacroExecutionLog(log){
 }
 
 
+export function macroWriteReview(profile,before,target,labels={},descriptions={}){
+  validateSnapshot(before);validateSnapshot(target);
+  const old=decodeBank(before.macroData),next=decodeBank(target.macroData),changed=!equal(before.macroData,target.macroData);
+  const name=index=>profile.macros[index]?.name??next[index].name;
+  const lines=[`宏库：${old.length} → ${next.length} 个，${changed?'将更新':'内容保留'}。`];
+  if(changed){next.slice(0,6).forEach((macro,index)=>lines.push(`准备写入：${name(index)} · ${macro.steps.length} 步`));if(next.length>6)lines.push(`另有 ${next.length-6} 个宏。`);if(!next.length)lines.push('将清空宏库。');}
+  const bindings=[];
+  for(let slot=0;slot<126;slot++){
+    const offset=slot*3,prior=before.keymap.slice(offset,offset+3),record=target.keymap.slice(offset,offset+3);
+    if(!equal(prior,record)||(changed&&[0x70,0x71].includes(record[0]))){
+      let description;if([0x70,0x71].includes(record[0])){const mode=decodeMacroBinding(record,next.length);description=`${name(record[1])} · ${mode.mode==='count'?`执行 ${mode.count} 次`:mode.mode==='held'?'按住持续':'再次按键停止'}`;}
+      else description=descriptions[slot]??(record[0]===0x20&&record[1]===0&&record[2]===0?'禁用':'普通按键功能');
+      bindings.push(`${labels[slot]??`槽位 ${slot}`} → ${description}`);
+    }
+  }
+  if(bindings.length){lines.push('绑定目标（含沿用绑定）：',...bindings.slice(0,8));if(bindings.length>8)lines.push(`另有 ${bindings.length-8} 个绑定目标。`);}
+  return lines.join('\n');
+}
 export function duplicateMacro(profile,name){
   validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能复制。');
   const p=clone(profile),original=p.macros.find(m=>sameMacroName(m.name,name));requireThat(original,'请选择已保存的宏。');

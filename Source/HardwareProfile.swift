@@ -151,6 +151,32 @@ struct HardwareProfile: Codable, Equatable {
         }
         try result.validate();return result
     }
+    func macroWriteReview(before:HardwareSnapshot,target:HardwareSnapshot,labels:[Int:String]=[:])throws->String {
+        try before.validate();try target.validate()
+        guard let oldBank=before.macroData,let nextBank=target.macroData else{throw HardwareError(message:"缺少完整宏库，无法核对。")}
+        let old=try CherryMacroCodec.decode(oldBank),next=try CherryMacroCodec.decode(nextBank)
+        let changed=oldBank != nextBank
+        var lines=["宏库：\(old.count) → \(next.count) 个，\(changed ? "将更新":"内容保留")。"]
+        if changed {
+            lines += next.enumerated().prefix(6).map{index,macro in "准备写入：\(macros.indices.contains(index) ? macros[index].name:macro.name) · \(macro.steps.count) 步"}
+            if next.count>6{lines.append("另有 \(next.count-6) 个宏。")}
+            if next.isEmpty{lines.append("将清空宏库。")}
+        }
+        var bindings:[String]=[]
+        for slot in 0..<126 {
+            let offset=slot*3,prior=Array(before.keymap[offset..<offset+3]),record=Array(target.keymap[offset..<offset+3])
+            if prior != record || (changed && [UInt8(0x70),0x71].contains(record[0])) {
+                let description:String
+                if [UInt8(0x70),0x71].contains(record[0]) {
+                    let mode=try CherryMacroCodec.playback(record,macroCount:next.count),index=Int(record[1])
+                    description="\(macros.indices.contains(index) ? macros[index].name:next[index].name) · \(mode.label)"
+                }else{description=CherryMatrix.describe(record)}
+                bindings.append("\(labels[slot] ?? "槽位 \(slot)") → \(description)")
+            }
+        }
+        if !bindings.isEmpty{lines.append("绑定目标（含沿用绑定）：");lines += bindings.prefix(8);if bindings.count>8{lines.append("另有 \(bindings.count-8) 个绑定目标。")}}
+        return lines.joined(separator:"\n")
+    }
     mutating func duplicateMacro(named name:String)throws->String {
         guard macroBindings != nil,let original=macros.first(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
         var draft=self;let stem=KeyboardMacro.nameStem(name);var next="\(stem) 副本",number=2

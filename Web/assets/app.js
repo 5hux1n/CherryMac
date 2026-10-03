@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -131,7 +131,7 @@ $('diagnostics').onclick=()=>operation(async()=>{
   download(evidence,'CherryMac-diagnostics.json');status(Object.keys(storageErrors).length?'排查资料已下载；部分本地记录无法读取，错误已写入文件，其余日志保留。':'排查资料已下载到本地，未上传。',Object.keys(storageErrors).length>0);
 });
 function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(profile.snapshot,baseline);}
-$('write').onclick=()=>act(()=>{const wanted=plan();pending={wanted,kind:tab==='macros'&&macroProduct?'macro':'key',before:clone(baseline),draft:clone(profile)};requireThat(!sameSnapshot(wanted,baseline),'选中的写入类别没有变化。');const c=counts(wanted,baseline);$('confirm-summary').textContent=pending.kind==='macro'?`将更新宏库与 ${c.keys} 个宏绑定键。灯效和设备参数保留；写入前保存完整备份。`:`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
+$('write').onclick=()=>act(()=>{const wanted=plan();pending={wanted,kind:tab==='macros'&&macroProduct?'macro':'key',before:clone(baseline),draft:clone(profile)};requireThat(!sameSnapshot(wanted,baseline),'选中的写入类别没有变化。');const c=counts(wanted,baseline);$('confirm-summary').textContent=pending.kind==='macro'?macroWriteReview(profile,baseline,wanted,Object.fromEntries(keys.map(key=>[key.slot,key.label.replaceAll('\n',' / ')])),Object.fromEntries(keys.map(key=>[key.slot,describe(wanted.keymap.slice(key.slot*3,key.slot*3+3))])))+'\n\n灯效和设备参数保留；普通键草稿保留，写入前保存完整备份。':`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
 $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending;requireThat(wanted,'没有待写入配置。');requireThat(equal(profile,wanted.draft)&&sameSnapshot(baseline,wanted.before),'编辑区或读取基线已变化，请重新确认。');}catch(error){status(error.message,true);return;}$('confirm').close();pending=null;void operation(async()=>{
   let after;

@@ -14,3 +14,5 @@
 
 /* Disabled confirmations must route mouse input to the observing parent. */
 .macro-stop-accept:disabled{pointer-events:none}
+
+#confirm{max-height:85vh;overflow:auto}#confirm-summary{white-space:pre-line;overflow-wrap:anywhere}
