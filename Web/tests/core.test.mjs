@@ -757,3 +757,26 @@ test('host text transport reads factory separately and invalidates prepared rout
   await assert.rejects(hid.exchange(packet(9,0,1,[0])));assert.equal(route(report),null);assert.equal(device.writeCount,0);
   const fresh=await hid.readHostTextBindings(root);assert.ok(fresh(report));await hid.close();assert.equal(fresh(report),null);
 });
+
+test('host text observation checks source and cancels queued preparation and consumers',async()=>{
+  const root=windowsFixture(),s=demoSnapshot();s.factoryKeymap=Array(378).fill(0);s.factoryKeymap.splice(306,3,48,146,1);s.keymap.splice(306,3,161,0,0);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;root.ActionInfo=[{ActionType:3,ActionContent:{ActionText:'中😀'}}];
+  const {hid,device}=await transport(s);device.collections[0].inputReports.push({reportId:5,items:[{reportSize:8,reportCount:8}]});
+  const outputs=[],errors=[];let isCurrent;
+  const handlers={onBinding:(binding,current)=>{outputs.push(binding.plan.originalText);isCurrent=current;},onError:e=>errors.push(e.message)};
+  const emit=(source=device,id=5,payload=[0x66,7,0,0,0,0,0,0])=>{
+    const buffer=new Uint8Array(20);buffer.set(payload,3);const event=new Event('inputreport');
+    Object.assign(event,{device:source,reportId:id,data:new DataView(buffer.buffer,3,payload.length)});device.dispatchEvent(event);
+  };
+  emit();assert.deepEqual(outputs,[]);
+  await hid.startHostTextObservation(root,handlers);emit({});emit(device,5,[0x66,7]);assert.deepEqual(outputs,[]);
+  emit();assert.deepEqual(outputs,['中😀']);assert.equal(isCurrent(),true);
+  hid.stopHostTextObservation();assert.equal(isCurrent(),false);emit();assert.equal(outputs.length,1);
+  const pending=hid.startHostTextObservation(root,handlers);hid.stopHostTextObservation();await assert.rejects(pending,/取消/);emit();assert.equal(outputs.length,1);
+  await hid.startHostTextObservation(root,{onBinding:async()=>{throw new Error('consumer failed');},onError:handlers.onError});
+  emit();await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(errors,['consumer failed']);assert.equal(hid.dead,false);
+  await hid.startHostTextObservation(root,handlers);emit();assert.equal(isCurrent(),true);
+  await assert.rejects(hid.exchange(packet(9,0,1,[0])));assert.equal(isCurrent(),false);emit();assert.equal(outputs.length,2);
+  await hid.startHostTextObservation(root,handlers);emit();await hid.close();assert.equal(isCurrent(),false);emit();assert.equal(outputs.length,3);
+  assert.equal(device.writeCount,0);
+});

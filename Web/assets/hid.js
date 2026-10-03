@@ -24,6 +24,7 @@ export function supportsDevice(device){
 export class CherryHID{
   #keyAuthorization=null;#macroAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
   #configurationGeneration=0;
+  #hostTextObservation=null;#hostTextObservationGeneration=0;
   constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
@@ -31,7 +32,23 @@ export class CherryHID{
     // preview is explicitly gated by the PHP deployment environment.
     if(macroResearch===true||macroProduct===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
     this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
-    this.input=e=>{if(e.reportId!==4||!this.pending)return;const p=this.pending;
+    this.input=e=>{
+      if(e.device!==this.device)return;
+      if(e.reportId===5){
+        const observation=this.#hostTextObservation;
+        if(!observation||this.dead||!this.device.opened||e.data.byteLength!==8)return;
+        const bytes=[5,...new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength)],binding=observation.resolve(bytes);
+        if(!binding)return;
+        const isCurrent=()=>this.#hostTextObservation===observation&&!this.dead&&this.device.opened;
+        const failed=error=>{if(isCurrent()){
+          this.stopHostTextObservation();
+          // Consumer failures must not escape into the configuration reader.
+          try{Promise.resolve(observation.onError(error)).catch(()=>{});}catch{}
+        }};
+        try{Promise.resolve(observation.onBinding(binding,isCurrent)).catch(failed);}catch(error){failed(error);}
+        return;
+      }
+      if(e.reportId!==4||!this.pending)return;const p=this.pending;
       try{const bytes=new Uint8Array(1+e.data.byteLength);bytes[0]=4;bytes.set(new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength),1);p.entry.reply=Array.from(bytes);validateReply(bytes,p.request);this.finish(null,bytes);}
       catch(error){this.poison(error);}
     };
@@ -40,7 +57,7 @@ export class CherryHID{
   async open(){await this.device.open();this.device.addEventListener('inputreport',this.input);globalThis.navigator?.hid?.addEventListener('disconnect',this.disconnected);}
   record(entry){const copy=structuredClone(entry);this.logTasks=this.logTasks.then(()=>this.log(copy)).catch(error=>{this.loggingError=error.message;});}
   finish(error,result){const p=this.pending;if(!p)return;this.pending=null;clearTimeout(p.timer);p.entry.durationMs=performance.now()-p.start;p.entry.status=error?'error':'ok';p.entry.error=error?.message??null;this.record(p.entry);if(error)p.reject(error);else p.resolve(result);}
-  poison(error){if(this.dead)return;this.dead=true;this.finish(error);this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);void this.device.close().catch(()=>{});this.onDisconnect(error);}
+  poison(error){if(this.dead)return;this.stopHostTextObservation();this.dead=true;this.finish(error);this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);void this.device.close().catch(()=>{});this.onDisconnect(error);}
   async close(){this.poison(new Error('USB 会话已关闭。'));await this.tail.catch(()=>{});}
   async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
   async withKeymapAuthorization(authorization,gate,body){
@@ -58,7 +75,7 @@ export class CherryHID{
     request=Array.from(request);
     // Invalidate prepared text data when a mutation is queued, before it can
     // affect the keyboard. A failed/blocked mutation also requires rereading.
-    if([6,9,11,0x15].includes(request[3]))this.#configurationGeneration++;
+    if([6,9,11,0x15].includes(request[3])){this.#configurationGeneration++;this.stopHostTextObservation();}
     const task=this.tail.then(async()=>{
       requireThat(request.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'USB 包包含无效字节。');
       const authorization=(request[3]===9&&this.#keyAuthorization)||([9,0x15].includes(request[3])&&this.#macroAuthorization);
@@ -102,6 +119,14 @@ export class CherryHID{
       if(this.dead||!this.device.opened||generation!==this.#configurationGeneration)return null;
       const value=officialHostTextEvent(fullReport);return value===null?null:binding(value);
     };
+  }
+  stopHostTextObservation(){this.#hostTextObservation=null;this.#hostTextObservationGeneration++;}
+  async startHostTextObservation(root,{onBinding,onError}={}){
+    requireThat(typeof onBinding==='function'&&typeof onError==='function','文本监听需要事件和错误处理器。');
+    this.stopHostTextObservation();const generation=this.#hostTextObservationGeneration;
+    const resolve=await this.readHostTextBindings(root);
+    requireThat(!this.dead&&this.device.opened&&generation===this.#hostTextObservationGeneration,'文本监听准备已取消，请重新读取。');
+    this.#hostTextObservation={resolve,onBinding,onError};
   }
   async snapshot(){
     this.progress('读取设备信息');const deviceInfo=await this.read(3,34);

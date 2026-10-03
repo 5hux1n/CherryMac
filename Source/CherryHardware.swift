@@ -263,7 +263,24 @@ final class CherryUSB: CherryHardwareAccess {
     private let runLoop = CFRunLoopGetCurrent()!
     var trace: ((String) -> Void)?
     var observedReport: ((UInt32,[UInt8]) -> Void)?
-    private var transportDead=false
+    private var transportDead=false {didSet{if transportDead{stopHostTextObservation()}}}
+    private var hostTextGeneration=UUID()
+    private var hostTextRouting:WindowsProfile.HostTextBindings?
+    private var hostTextSink:((WindowsProfile.HostTextBinding,UUID)->Void)?
+    private(set) var hostTextObservationToken:UUID?
+    func stopHostTextObservation(){
+        hostTextGeneration=UUID();hostTextObservationToken=nil;hostTextRouting=nil;hostTextSink=nil
+    }
+    // Opt-in preparation on this session's hardware queue. No Unicode output
+    // is sent here. A consumer must check the token when executing later.
+    func startHostTextObservation(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,UUID)->Void)throws {
+        stopHostTextObservation()
+        guard !transportDead,device != nil else{throw HardwareError(message:"USB 会话已失效，请重新连接。")}
+        let generation=hostTextGeneration
+        let routing=try readHostTextBindings(officialJSON:officialJSON)
+        guard !transportDead,hostTextGeneration==generation else{throw HardwareError(message:"准备文本监听期间配置或 USB 会话发生变化，请重新读取。")}
+        hostTextRouting=routing;hostTextSink=onBinding;hostTextObservationToken=generation
+    }
     private var keymapAuthorization:KeymapWriteAuthorization?
     private var keymapLog:HardwareOperationLog?
     private var lastKeyWriteAt:TimeInterval?
@@ -333,6 +350,10 @@ final class CherryUSB: CherryHardwareAccess {
             let owner = Unmanaged<CherryUSB>.fromOpaque(context).takeUnretainedValue()
             let bytes=Array(UnsafeBufferPointer(start:report,count:length))
             owner.observedReport?(id,bytes)
+            if !owner.transportDead,id==5,let token=owner.hostTextObservationToken,
+               let value=WindowsProfile.hostTextEvent(fullReport:bytes),let binding=owner.hostTextRouting?.binding(eventValue:value){
+                owner.hostTextSink?(binding,token)
+            }
             guard id == 4, length == 64 else {return}
             owner.received.append(bytes)
             if owner.received.count > 32 { owner.received.removeFirst() }
@@ -345,6 +366,7 @@ final class CherryUSB: CherryHardwareAccess {
         IOHIDDeviceScheduleWithRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue)
     }
     deinit {
+        stopHostTextObservation()
         if let device {
             IOHIDDeviceUnscheduleFromRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue)
             IOHIDDeviceRegisterInputReportCallback(device, buffer, 64, nil, nil)
@@ -363,6 +385,7 @@ final class CherryUSB: CherryHardwareAccess {
         return false
     }
     func exchange(_ request: [UInt8]) throws -> [UInt8] {
+        if request.count==64,[UInt8(6),9,0x0B,0x15].contains(request[3]){stopHostTextObservation()}
         guard !transportDead else{throw HardwareError(message:"USB 会话已失效，停止发送。命令可能已执行，请重新连接并读取后恢复。")}
         let scopedWrite=try validateMacroResearchPacket(request)
         if scopedWrite{
