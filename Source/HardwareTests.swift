@@ -727,7 +727,24 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
 
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let editor=HardwareWindowController()
+    #if CHERRY_MACRO_PRODUCT
+    precondition(editor.tabButtons.count==6 && editor.lightTabButtons.count==2)
+    editor.chooseTab(editor.tabButtons[5])
+    precondition(editor.board.isHidden && editor.pageTitle.stringValue=="文本快捷输入" && editor.hostTextJSON==nil)
+    editor.startHostTextService()
+    precondition(editor.hostTextState.stringValue=="请先选择官方文本配置。")
+    let textKeys=WindowsProfile.defaults.map{["DefaultAssignment":$0,"ActionLink":0,"ActionLinkIndex":-1]}
+    let textRoot:[String:Any]=["//":"47","KeyList":textKeys,"ActionInfo":[["ActionType":3,"ActionContent":["ActionText":"中😀"]]]]
+    let textData=try! JSONSerialization.data(withJSONObject:textRoot)
+    let draftBeforeText=editor.profile
+    try! editor.loadHostTextProfile(textData,name:"official-text.json")
+    precondition(editor.hostTextJSON==textData && editor.profile==draftBeforeText && editor.hostTextFile.stringValue.contains("1 个文本动作"))
+    do{try editor.loadHostTextProfile(Data("{}".utf8),name:"bad.json");preconditionFailure("invalid text template accepted")}catch{}
+    precondition(editor.hostTextJSON==textData && editor.profile==draftBeforeText)
+    editor.hostTextJSON=nil
+    #else
     precondition(editor.tabButtons.count==5 && editor.lightTabButtons.count==2)
+    #endif
     let demoProfile=editor.profile
     editor.chooseTab(editor.tabButtons[3]);precondition(editor.board.isHidden && editor.pageTitle.stringValue=="配置与备份")
     editor.chooseTab(editor.tabButtons[4]);precondition(editor.board.isHidden && editor.profile==demoProfile)

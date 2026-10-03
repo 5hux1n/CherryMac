@@ -233,6 +233,7 @@ enum HostTextExecutor {
 // Owns USB and its run loop on one dedicated thread. Constructing the worker
 // does not open hardware; only an explicit service start launches it.
 private final class HostTextUSBWorker {
+    private let completion=DispatchGroup()
     private let lock=NSLock()
     private var stopped=false
     private var ticket:WindowsProfile.HostTextTicket?
@@ -250,7 +251,11 @@ private final class HostTextUSBWorker {
         lock.lock();stopped=true;let active=ticket,loop=runLoop;lock.unlock()
         active?.invalidate();if let loop{CFRunLoopWakeUp(loop)}
     }
-    func start(){Thread{[self] in autoreleasepool{run()}}.start()}
+    func waitUntilStopped(){completion.wait()}
+    func start(after shutdown:@escaping ()->Void={}){
+        completion.enter()
+        Thread{[self] in defer{completion.leave()};shutdown();autoreleasepool{run()}}.start()
+    }
     private func run(){
         guard !isStopped else{return}
         lock.lock();runLoop=CFRunLoopGetCurrent();lock.unlock()
@@ -279,6 +284,7 @@ private final class HostTextUSBWorker {
 
 @MainActor final class HostTextService {
     private var worker:HostTextUSBWorker?
+    private var retiringWorker:HostTextUSBWorker?
     private var generation=UUID()
     private let onState:(String)->Void
     private var diagnostics:HostTextDiagnostics?
@@ -313,11 +319,19 @@ private final class HostTextUSBWorker {
         }},onError:{[weak self] error in Task{@MainActor [weak self] in
             guard let self,self.generation==expected else{return};self.fail(error)
         }})
-        worker=source;onState("正在读取键盘并准备文本服务。")
-        // A state callback is allowed to stop the service before launch.
-        if generation==expected{source.start()}
+        let previous=retiringWorker;retiringWorker=nil;worker=source
+        // Reserve this worker's completion before notifying the UI. A
+        // reentrant stop/start must still wait for the previous USB owner.
+        source.start(after:{previous?.waitUntilStopped()})
+        onState("正在读取键盘并准备文本服务。")
     }
-    func stop(reason:String="stopped",error:Error?=nil){generation=UUID();worker?.stop();worker=nil;dispatcher.stop();diagnostics?.finish(reason:reason,error:error);diagnostics=nil}
+    func stop(reason:String="stopped",error:Error?=nil){generation=UUID();if let worker{worker.stop();retiringWorker=worker};worker=nil;dispatcher.stop();diagnostics?.finish(reason:reason,error:error);diagnostics=nil}
+    // Wait on the configuration queue, never on the main actor.
+    func stopForConfiguration()->()->Void {
+        stop(reason:"configuration-operation")
+        let previous=retiringWorker
+        return {previous?.waitUntilStopped()}
+    }
     private func fail(_ error:Error){
         stop(reason:"error",error:error)
         onState(error.localizedDescription)
