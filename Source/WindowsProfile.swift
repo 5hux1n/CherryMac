@@ -2,6 +2,30 @@ import Foundation
 import CoreFoundation
 
 enum WindowsProfile {
+    struct HostTextPlan:Equatable {
+        let name:String
+        let originalText:String
+        let windowsFlag:Int?
+        let marker:[UInt8]?
+        let scalarUTF16:[[UInt16]]
+        // Official conversion creates a NUL-terminated host string; the
+        // execution thread skips LF, while preserving CR and other units.
+        init(action:[String:Any])throws {
+            guard try WindowsProfile.integer(action["ActionType"],"ActionType",range:0...4)==3,
+                  let content=action["ActionContent"] as? [String:Any],
+                  let text=content["ActionText"] as? String else{
+                throw HardwareError(message:"Windows 文本动作结构无效。")
+            }
+            name=action["ActionName"] as? String ?? "文本";originalText=text
+            windowsFlag=try action["ActionTextFlag"].map{try WindowsProfile.integer($0,"ActionTextFlag",range:0...Int(Int32.max))}
+            let prefix=String(text.prefix{ $0 != "\0" })
+            marker=prefix.isEmpty ? nil:[0xA1,0,0]
+            scalarUTF16=prefix.unicodeScalars.filter{$0.value != 10}.map{Array(String($0).utf16)}
+        }
+        static func triggerIndex(eventValue:Int)->Int? {
+            (0x700..<0x800).contains(eventValue) ? eventValue-0x700:nil
+        }
+    }
     // Logical default-assignment fingerprint of Pokémon model 47.
     // The official 126-entry order differs from the USB matrix order.
     static let defaults:[Int] = [
@@ -240,6 +264,9 @@ enum WindowsProfile {
                     let playback=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
                     result.macroModes![slot]=playback
                     bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!,playback:playback)
+                case 3:
+                    _=try HostTextPlan(action:actions[actionIndex])
+                    throw HardwareError(message:"此配置含文本绑定，需要主机执行服务；实体触发格式仍待确认，尚不能导入写入。原编辑区保留。")
                 case 4:
                     let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
                     let media=mediaCodes[index];bytes=[0x30,UInt8(media&255),UInt8(media>>8)]

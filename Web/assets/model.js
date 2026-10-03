@@ -4,6 +4,16 @@ export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
 export function bytes(a,n){return Array.isArray(a)&&a.length===n&&a.every(x=>Number.isInteger(x)&&x>=0&&x<=255);}
+// Host text preparation only; WebHID cannot inject text into other apps.
+export function officialHostTextPlan(action){
+  requireThat(winInt(action?.ActionType,'ActionType',0,4)===3&&action.ActionContent&&typeof action.ActionContent.ActionText==='string','Windows 文本动作结构无效。');
+  const content=action.ActionContent,originalText=content.ActionText,flag=action.ActionTextFlag===undefined?null:winInt(action.ActionTextFlag,'ActionTextFlag',0,2147483647);
+  const prefix=originalText.split('\0',1)[0];
+  return {name:typeof action.ActionName==='string'?action.ActionName:'文本',originalText,windowsFlag:flag??null,
+    marker:prefix.length?[161,0,0]:null,
+    scalarUTF16:Array.from(prefix).filter(c=>c!=='\n').map(c=>Array.from({length:c.length},(_,i)=>c.charCodeAt(i)))};
+}
+export function officialTextTriggerIndex(eventValue){return Number.isInteger(eventValue)&&eventValue>=0x700&&eventValue<0x800?eventValue-0x700:null;}
 export function validateSnapshot(s,complete=false){
   requireThat(s&&s.format==='CherryMacHardware'&&s.version===1&&s.vendorID===1130&&s.productID===462,'配置不适用于这款宝可梦键盘。');
   requireThat(bytes(s.keymap,378)&&bytes(s.parameters,56)&&bytes(s.deviceInfo,34),'键位、参数或设备信息长度无效。');
@@ -232,7 +242,7 @@ export function importWindows(root,baseline){
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
-      }else throw new Error('Windows 文本和其他动作尚未支持导入。');
+      }else if(type===3){officialHostTextPlan(a);throw new Error('此配置含文本绑定，需要主机执行服务；实体触发格式仍待确认，尚不能导入写入。原编辑区保留。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');

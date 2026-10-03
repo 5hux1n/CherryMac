@@ -101,6 +101,13 @@ def inspect(path, skin=None):
         0x50C6A6: "81fa00080000",
         0x50C6B2: "2d00070000",
         0x50C6C0: "8b822c030000",
+        0x4FF3F7: "7515",          # nonempty branch falls through to marker
+        0x4FF3F9: "c685e6fdffffa1",
+        0x4FF400: "c685e7fdffff00",
+        0x4FF407: "c685e8fdffff00",
+        0x512047: "6a01",          # export constructs numeric flag 1
+        0x512064: "68c4eb7600",    # ActionTextFlag key
+        0x512E81: "3b10",          # compare logical key value while searching
     }
     for address, encoded in text_checks.items():
         expected_bytes = bytes.fromhex(encoded)
@@ -140,7 +147,7 @@ def inspect(path, skin=None):
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
-        "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks)},
+        "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},
         "modelFactory": {"xmlClass": "EevisionKeyboardDevice", "constructor": "0x4f6060", "vtable": "0x77f604", "model": 47, "vendorID": 0x046A, "productID": 0x01CE, "instructionChecks": len(model_checks)},
         "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "reportID": "not established"},
         "limits": "Static factory and reader paths only; does not prove actual interface or report ID, USB setting writes, text trigger execution or persistence",

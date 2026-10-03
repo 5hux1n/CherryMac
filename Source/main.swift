@@ -1182,6 +1182,9 @@ if CommandLine.arguments.contains("--calculator-key-test"){
 }
 #endif
 #if CHERRY_MACRO_PRODUCT
+if CommandLine.arguments.contains("--host-text-self-test"){
+    runHostTextPlanChecks();exit(0)
+}
 if CommandLine.arguments.contains("--macro-editor-self-test"){
     runMacroEditorChecks();exit(0)
 }

@@ -1,4 +1,5 @@
 import Cocoa
+import ApplicationServices
 import IOKit.hid
 import Darwin
 
@@ -138,4 +139,44 @@ final class KeyboardEventRouter {
         reset()
     }
     deinit { stop() }
+}
+
+// Host execution core only: no listener is installed and no firmware marker
+// is written here. A confirmed device trigger must supply the target PID.
+enum HostTextExecutor {
+    @MainActor static func execute(_ plan:WindowsProfile.HostTextPlan,targetPID:pid_t,cancelled:()->Bool={false})async throws -> Int {
+        guard plan.marker != nil,!plan.scalarUTF16.isEmpty else{return 0}
+        guard plan.windowsFlag == nil || plan.windowsFlag == 1 else{throw HardwareError(message:"该文本标志尚未支持执行。")}
+        guard targetPID>0, targetPID != getpid(),
+              let target=NSRunningApplication(processIdentifier:targetPID),!target.isTerminated else{
+            throw HardwareError(message:"文本目标应用无效。")
+        }
+        guard AXIsProcessTrusted() else{throw HardwareError(message:"文本输入需要此 App 的辅助功能权限。")}
+        // Target an explicit process; stop if focus changes. Do not use the
+        // clipboard or encode Unicode as physical keycode macros.
+        var postedUnits=0
+        for units in plan.scalarUTF16 {
+            try Task.checkCancellation()
+            guard !cancelled(),!target.isTerminated,NSWorkspace.shared.frontmostApplication?.processIdentifier==targetPID else{
+                throw HardwareError(message:"文本输入已中止（已发送 \(postedUnits) 个 UTF-16 单元）。")
+            }
+            guard NSEvent.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{
+                throw HardwareError(message:"文本输入已停止，请松开修饰键。")
+            }
+            guard let down=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:true),
+                  let up=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:false) else{throw HardwareError(message:"无法创建文本输入事件。")}
+            units.withUnsafeBufferPointer{buffer in
+                down.keyboardSetUnicodeString(stringLength:units.count,unicodeString:buffer.baseAddress!)
+                up.keyboardSetUnicodeString(stringLength:units.count,unicodeString:buffer.baseAddress!)
+            }
+            down.flags=[];up.flags=[]
+            down.setIntegerValueField(.eventSourceUserData,value:adapterEventTag)
+            up.setIntegerValueField(.eventSourceUserData,value:adapterEventTag)
+            // Always send the release once its press has been posted.
+            down.postToPid(targetPID);up.postToPid(targetPID)
+            postedUnits += units.count
+            await Task.yield()
+        }
+        return postedUnits
+    }
 }

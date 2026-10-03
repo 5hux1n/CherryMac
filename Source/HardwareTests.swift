@@ -561,6 +561,18 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
     print("PASS: hardware writes with current-map backup, stale baseline and failed-backup rejection; per-packet release checks; lost acknowledgement/readback failure rollback; held-key rollback blocked; lighting rollback preserves mappings (simulated firmware only)")
 }
 
+func runHostTextPlanChecks(){
+    func plan(_ text:String)throws->WindowsProfile.HostTextPlan {try WindowsProfile.HostTextPlan(action:["ActionType":3,"ActionName":"中文文本","ActionTextFlag":1,"ActionContent":["ActionText":text]])}
+    let mixed=try! plan("中😀\r\nA\0后文")
+    precondition(mixed.originalText=="中😀\r\nA\0后文" && mixed.marker==[0xA1,0,0] && mixed.windowsFlag==1)
+    precondition(mixed.scalarUTF16==[[0x4E2D],[0xD83D,0xDE00],[13],[65]])
+    precondition((try! plan("")).marker==nil && (try! plan("\0后文")).marker==nil)
+    precondition((try! plan("\n")).marker==[0xA1,0,0] && (try! plan("\n")).scalarUTF16.isEmpty)
+    precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x700)==0 && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x7FF)==255)
+    precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x6FF)==nil && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x800)==nil)
+    print("PASS: official host text marker, UTF-16 scalar boundaries, LF/NUL handling and event index bounds (no listener, permission query, text posting or hardware I/O)")
+}
+
 func runMacroEditorChecks(){var fixture=HardwareSnapshot.demo();fixture.keymap=Array(repeating:0,count:378);runHardwareEditorTests(fixture);runMacroManagementChecks(fixture)}
 
 private func runMacroManagementChecks(_ fixture:HardwareSnapshot){

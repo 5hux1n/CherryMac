@@ -5,7 +5,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
@@ -694,4 +694,19 @@ test('recorded segments insert without changing original waits and failures keep
   const overflow=new MacroRecorder({timing:'ignore',startedMilliseconds:0});overflow.observe({usage:6,pressed:true,milliseconds:1});overflow.observe({usage:6,pressed:false,milliseconds:2});
   assert.throws(()=>overflow.finish('large',{originalSteps:Array.from({length:256},(_,i)=>({usage:4,pressed:i%2===0,delayMilliseconds:0})),insertionIndex:256}));assert.equal(overflow.active,true);
   assert.equal(overflow.finish('replace').steps.length,2);
+});
+
+test('official host text prepares UTF-16 without treating Unicode as onboard macro',()=>{
+  const action=text=>({ActionType:3,ActionName:'中文文本',ActionTextFlag:1,ActionContent:{ActionText:text}});
+  const raw='中😀\r\nA\0后文',p=officialHostTextPlan(action(raw));
+  assert.deepEqual(p,{name:'中文文本',originalText:raw,windowsFlag:1,marker:[161,0,0],scalarUTF16:[[0x4e2d],[0xd83d,0xde00],[13],[65]]});
+  assert.equal(officialHostTextPlan(action('')).marker,null);
+  assert.equal(officialHostTextPlan(action('\0后文')).marker,null);
+  assert.deepEqual(officialHostTextPlan(action('\n')).scalarUTF16,[]);
+  assert.deepEqual(officialHostTextPlan(action('\n')).marker,[161,0,0]);
+  assert.deepEqual([0x6ff,0x700,0x7ff,0x800,1792.5].map(officialTextTriggerIndex),[null,0,255,null,null]);
+  assert.throws(()=>officialHostTextPlan({ActionType:3,ActionContent:{ActionText:7}}));
+  const root=windowsFixture(),baseline=demoSnapshot(),before=clone(baseline);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;root.ActionInfo=[action(raw)];
+  assert.throws(()=>importWindows(root,baseline),/需要主机执行服务/);assert.deepEqual(baseline,before);
 });
