@@ -42,6 +42,11 @@ try{
   await page.locator('#record-area').hover();await page.mouse.wheel(0,120);
   await page.waitForFunction(()=>document.getElementById('record-stop').disabled);
   assert.match(await page.locator('#record-status').textContent(),/滚轮.*原步骤保留/);assert.equal(await page.locator('.macro-step').count(),2);
+  await page.locator('#macro-key').selectOption('5');await page.locator('#macro-insert').selectOption('before:0');await page.locator('#add-pair').click();
+  await page.locator('#macro-key').selectOption('6');await page.locator('#macro-insert').selectOption('after:3');await page.locator('#add-pair').click();
+  assert.deepEqual(await page.locator('.macro-step select:first-of-type').evaluateAll(nodes=>nodes.map(node=>node.value)),['5','5','4','4','6','6']);
+  assert.deepEqual(await page.locator('.macro-step input').evaluateAll(nodes=>nodes.map(node=>Number(node.value))),[30,0,30,0,30,0]);
+  await page.locator('#save-macro').click();assert.equal(await page.locator('#status').evaluate(node=>node.classList.contains('error')),false);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
   console.log('Macro form defaults preserved; existing trigger unchanged; invalid count rejected; no USB access.');
 }finally{await browser.close();}

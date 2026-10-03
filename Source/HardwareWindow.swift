@@ -8,6 +8,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     let choices:[KeyChoice]
     let completion:([KeyboardMacro.Step]?)->Void
     let table=NSTableView()
+    let insertion=NSPopUpButton()
     let message=NSTextField(wrappingLabelWithString:"每步等待在该事件执行后发生。完成编辑后采用，再保存宏；不会写入键盘。")
     var finished=false
     init(steps:[KeyboardMacro.Step],choices:[KeyChoice],completion:@escaping([KeyboardMacro.Step]?)->Void){
@@ -23,6 +24,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         func button(_ title:String,_ action:Selector,_ x:CGFloat,_ width:CGFloat,tag:Int=0){let b=NSButton(title:title,target:self,action:action);b.frame=NSRect(x:x,y:378,width:width,height:30);b.tag=tag;view.addSubview(b)}
         button("添加按下／松开",#selector(addPair),18,160);button("删除",#selector(deleteStep),188,64)
         for (index,title) in ["置顶","上移","下移","置底"].enumerated(){button(title,#selector(moveStep),268+CGFloat(index)*76,68,tag:index)}
+        insertion.addItems(withTitles:["末尾追加","所选步骤前插入","所选步骤后插入"]);insertion.frame=NSRect(x:588,y:378,width:174,height:30);insertion.setAccessibilityLabel("新增步骤的位置");view.addSubview(insertion)
         message.frame=NSRect(x:18,y:424,width:470,height:66);message.font = .systemFont(ofSize:12);view.addSubview(message)
         let cancel=NSButton(title:"取消",target:self,action:#selector(cancel));cancel.frame=NSRect(x:506,y:448,width:90,height:32);view.addSubview(cancel)
         let apply=NSButton(title:"采用步骤",target:self,action:#selector(apply));apply.frame=NSRect(x:608,y:448,width:152,height:32);view.addSubview(apply)
@@ -49,8 +51,11 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     @objc func addPair(){
         window?.makeFirstResponder(nil)
         guard steps.count<=254 else{message.stringValue="最多 256 个事件，请先删除部分步骤。";return}
+        guard insertion.indexOfSelectedItem==0 || steps.indices.contains(table.selectedRow) else{message.stringValue="请先选中插入位置对应的步骤。";return}
         let key=steps.indices.contains(table.selectedRow) ? steps[table.selectedRow]:.init(usage:4,pressed:true,delayMilliseconds:50)
-        let index=steps.count;steps.append(.init(usage:key.usage,pressed:true,delayMilliseconds:50,kind:key.kind));steps.append(.init(usage:key.usage,pressed:false,delayMilliseconds:0,kind:key.kind));delays.append(contentsOf:["50","0"]);select(index)
+        let index=insertion.indexOfSelectedItem==0 ? steps.count:table.selectedRow+(insertion.indexOfSelectedItem==2 ? 1:0)
+        steps.insert(contentsOf:[.init(usage:key.usage,pressed:true,delayMilliseconds:50,kind:key.kind),.init(usage:key.usage,pressed:false,delayMilliseconds:0,kind:key.kind)],at:index)
+        delays.insert(contentsOf:["50","0"],at:index);select(index);message.stringValue="已插入按下／松开；原步骤和等待保留，采用时检查事件配对。"
     }
     @objc func deleteStep(){window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row) else{return};steps.remove(at:row);delays.remove(at:row);select(min(row,steps.count-1))}
     @objc func moveStep(_ sender:NSButton){
