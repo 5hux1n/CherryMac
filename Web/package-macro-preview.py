@@ -13,7 +13,7 @@ root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) != 2:
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.8.0'
+version = '0.9.0'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')
@@ -48,7 +48,7 @@ contents['README.md'] = '''# CherryMac 网页宏预览
 
 电脑已有 PHP 时，解压后双击 `start.command`，用 Chrome 或 Edge 打开 http://localhost:8770/ 。无需 Node、安装依赖或构建。Linux／Windows 可在解压目录设置环境变量 `CHERRY_MACRO_PRODUCT=1` 后运行 `php -S 127.0.0.1:8770 -t .`。
 
-按键、灯效、宏、配置与备份分成不同页面。宏支持录制、步骤编辑与排序、复制、删除、清空、单独解绑，以及单次／指定次数、按住持续、再次按键停止。编辑时显示宏容量和设定等待总量；等待总量不是实际固件执行时间。保存宏不会改动已有按键的执行方式；选择执行方式后点击“分配到所选键”才更改对应绑定。解除绑定会把所选键设为禁用，宏库保留，仍需写入。滚轮尚未支持；启用鼠标录制时遇到滚轮会取消本次录制，保留原步骤。连接与读取不会自动写入。宏页写入只更新宏库与宏绑定键；普通键和灯效草稿保留，可分别处理。灯效与设备设置写入仍未开放。
+按键、灯效、宏、配置与备份分成不同页面。宏支持录制片段替换／追加／插入、步骤编辑与排序、复制、删除、清空、单独解绑，以及单次／指定次数、按住持续、再次按键停止。编辑时显示宏容量和设定等待总量；等待总量不是实际固件执行时间。保存宏不会改动已有按键的执行方式；选择执行方式后点击“分配到所选键”才更改对应绑定。解除绑定会把所选键设为禁用，宏库保留，仍需写入。滚轮尚未支持；启用鼠标录制时遇到滚轮会取消本次录制，保留原步骤。连接与读取不会自动写入。宏页写入只更新宏库与宏绑定键；普通键和灯效草稿保留，可分别处理。灯效与设备设置写入仍未开放。
 
 写入之前会保存完整备份和恢复记录，完成后完整读回核对。连续运行的宏需要按界面提示先停止。操作期间可点击“停止发送”；这会停止后续配置写包，不能代替停止键盘正在执行的宏。遇到断开或取消后，在“配置与备份”使用“恢复最近宏写入前配置”。
 

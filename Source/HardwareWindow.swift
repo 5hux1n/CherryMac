@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 // Local editing only: no HID handle, global input hooks or permission requests.
 final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSWindowDelegate {
@@ -775,7 +776,9 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     let placement=NSPopUpButton()
     let completion:(KeyboardMacro?)->Void
     let timing=NSPopUpButton(frame:.zero,pullsDown:false),delay=NSTextField(string:"30")
-    let mouseOption=NSButton(checkboxWithTitle:"记录录制区内的鼠标按钮",target:nil,action:nil)
+    let mouseOption=NSButton(checkboxWithTitle:"记录鼠标按钮（开启后也会录入切换应用的点击）",target:nil,action:nil)
+    let globalOption=NSButton(checkboxWithTitle:"同时录制其他应用中的操作（需要辅助功能权限）",target:nil,action:nil)
+    private var globalMonitor:Any?
     let start=NSButton(title:"开始录制",target:nil,action:nil),stop=NSButton(title:"停止并采用",target:nil,action:nil),cancelButton=NSButton(title:"取消",target:nil,action:nil)
     let area=MacroRecordingArea(frame:NSRect(x:20,y:82,width:520,height:112)),status=NSTextField(labelWithString:"只记录本窗口事件；系统占用的快捷键请手动添加。")
     var recorder:MacroRecorder?
@@ -784,38 +787,73 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     static let nativeUsages:[UInt16:UInt8] = Dictionary(uniqueKeysWithValues:Dictionary(grouping:hidToMacKey.filter{$0.key>=4 && $0.key<=231},by:{$0.value}).compactMap{code,entries in entries.count==1 ? (code,UInt8(entries[0].key)):nil})
     init(name:String,originalSteps:[KeyboardMacro.Step]=[],selectedStep:Int?=nil,completion:@escaping(KeyboardMacro?)->Void){
         self.name=name;self.originalSteps=originalSteps;self.selectedStep=selectedStep;self.completion=completion
-        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:366),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:404),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="录制宏";super.init(window:panel);panel.delegate=self
         let root=panel.contentView!;root.wantsLayer=true;root.layer?.backgroundColor=NSColor.windowBackgroundColor.cgColor;area.owner=self
-        let intro=NSTextField(wrappingLabelWithString:"选择事件间隔，开始后在录制区按键。完成前松开全部按键；切换窗口会取消录制并保留原步骤。")
-        intro.frame=NSRect(x:20,y:310,width:520,height:40);root.addSubview(intro)
-        timing.addItems(withTitles:["实际间隔","固定间隔","忽略间隔"]);timing.frame=NSRect(x:20,y:272,width:180,height:28);delay.frame=NSRect(x:216,y:272,width:80,height:26);root.addSubview(timing);root.addSubview(delay)
-        let unit=NSTextField(labelWithString:"毫秒（0–60000）");unit.frame=NSRect(x:306,y:272,width:190,height:24);root.addSubview(unit)
-        placement.addItems(withTitles:["替换全部步骤","末尾追加","所选步骤前插入","所选步骤后插入"]);placement.frame=NSRect(x:20,y:236,width:260,height:28);placement.setAccessibilityLabel("录制片段的插入位置");root.addSubview(placement)
+        let intro=NSTextField(wrappingLabelWithString:"默认只录制下方区域；勾选其他应用录制后可切换应用。操作会正常执行，请避开密码等敏感内容，完成后回到此处停止。")
+        intro.frame=NSRect(x:20,y:348,width:520,height:40);root.addSubview(intro)
+        timing.addItems(withTitles:["实际间隔","固定间隔","忽略间隔"]);timing.frame=NSRect(x:20,y:310,width:180,height:28);delay.frame=NSRect(x:216,y:310,width:80,height:26);root.addSubview(timing);root.addSubview(delay)
+        let unit=NSTextField(labelWithString:"毫秒（0–60000）");unit.frame=NSRect(x:306,y:310,width:190,height:24);root.addSubview(unit)
+        placement.addItems(withTitles:["替换全部步骤","末尾追加","所选步骤前插入","所选步骤后插入"]);placement.frame=NSRect(x:20,y:274,width:260,height:28);placement.setAccessibilityLabel("录制片段的插入位置");root.addSubview(placement)
         let selected=selectedStep.flatMap{originalSteps.indices.contains($0) ? $0:nil}
         placement.item(at:2)?.isEnabled=selected != nil;placement.item(at:3)?.isEnabled=selected != nil
-        let context=NSTextField(labelWithString:selected.map{"所选步骤 \($0+1) · 原有 \(originalSteps.count) 步"} ?? "原有 \(originalSteps.count) 步");context.frame=NSRect(x:298,y:236,width:242,height:24);root.addSubview(context)
-        mouseOption.frame=NSRect(x:20,y:204,width:300,height:24);root.addSubview(mouseOption);root.addSubview(area)
+        let context=NSTextField(labelWithString:selected.map{"所选步骤 \($0+1) · 原有 \(originalSteps.count) 步"} ?? "原有 \(originalSteps.count) 步");context.frame=NSRect(x:298,y:274,width:242,height:24);root.addSubview(context)
+        globalOption.frame=NSRect(x:20,y:240,width:520,height:24);root.addSubview(globalOption)
+        mouseOption.frame=NSRect(x:20,y:204,width:520,height:24);root.addSubview(mouseOption);root.addSubview(area)
         status.frame=NSRect(x:20,y:50,width:520,height:24);root.addSubview(status)
         for (index,button) in [start,stop,cancelButton].enumerated(){button.frame=NSRect(x:20+index*172,y:10,width:160,height:30);button.bezelStyle = .rounded;button.target=self;root.addSubview(button)}
         start.action=#selector(begin);stop.action=#selector(finish);cancelButton.action=#selector(cancel);stop.isEnabled=false
     }
     required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
     static func clock()->Int{Int(ProcessInfo.processInfo.systemUptime*1000)}
-    func controls(){let active=recorder != nil;start.isEnabled = !active;stop.isEnabled=active;timing.isEnabled = !active;delay.isEnabled = !active;mouseOption.isEnabled = !active;placement.isEnabled = !active;area.needsDisplay=true}
+    func controls(){let active=recorder != nil;start.isEnabled = !active;stop.isEnabled=active;timing.isEnabled = !active;delay.isEnabled = !active;mouseOption.isEnabled = !active;globalOption.isEnabled = !active;placement.isEnabled = !active;area.needsDisplay=true}
     @objc func begin(){beginRecording(modifierFlags:NSEvent.modifierFlags)}
-    func beginRecording(modifierFlags:NSEvent.ModifierFlags){do{guard modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{throw HardwareError(message:"请先松开修饰键，再开始录制。")};guard let value=Int(delay.stringValue)else{throw HardwareError(message:"请输入固定间隔毫秒。")};recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock());controls();status.stringValue="0 个事件";window?.makeFirstResponder(area)}catch{status.stringValue=error.localizedDescription}}
-    func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{recorder?.cancel();recorder=nil;controls();status.stringValue=error.localizedDescription}}
-    func keyboard(_ event:NSEvent,pressed:Bool){guard recorder != nil else{return};guard let usage=Self.nativeUsages[event.keyCode]else{recorder?.cancel();recorder=nil;controls();status.stringValue="此按键编码不明确，请手动添加；录制已取消。";return};observe(usage,pressed:pressed,repeatEvent:event.isARepeat)}
+    func beginRecording(modifierFlags:NSEvent.ModifierFlags,globalAccessGranted:()->Bool={AXIsProcessTrusted()}){
+        guard recorder == nil,!closed else{return}
+        do{
+            guard modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{throw HardwareError(message:"请先松开修饰键，再开始录制。")}
+            guard let value=Int(delay.stringValue)else{throw HardwareError(message:"请输入固定间隔毫秒。")}
+            if globalOption.state == .on {
+                guard globalAccessGranted() else{throw HardwareError(message:"请在系统设置 → 隐私与安全性 → 辅助功能允许此 App，然后重新打开；也可取消勾选，只录制下方区域。")}
+            }
+            recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock())
+            if globalOption.state == .on {
+                var mask:NSEvent.EventTypeMask=[.keyDown,.keyUp,.flagsChanged]
+                if mouseOption.state == .on {mask.formUnion([.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp,.scrollWheel])}
+                guard let monitor=NSEvent.addGlobalMonitorForEvents(matching:mask,handler:{[weak self] event in self?.externalEvent(event)}) else{
+                    throw HardwareError(message:"无法开启其他应用录制；请检查权限，或使用下方录制区。")
+                }
+                globalMonitor=monitor
+            }
+            controls();status.stringValue=globalOption.state == .on ? "正在录制其他应用和下方区域；完成后回来停止":"0 个事件";window?.makeFirstResponder(area)
+        }catch{discardRecording(error.localizedDescription)}
+    }
+    func externalEvent(_ event:NSEvent){
+        guard recorder != nil,!closed,globalOption.state == .on else{return}
+        switch event.type {
+        case .keyDown:keyboard(event,pressed:true)
+        case .keyUp:keyboard(event,pressed:false)
+        case .flagsChanged:modifier(event)
+        case .leftMouseDown,.rightMouseDown,.otherMouseDown:mouse(event,pressed:true)
+        case .leftMouseUp,.rightMouseUp,.otherMouseUp:mouse(event,pressed:false)
+        case .scrollWheel:unsupportedMouseEvent()
+        default:break
+        }
+    }
+    private func removeGlobalMonitor(){if let monitor=globalMonitor{NSEvent.removeMonitor(monitor);globalMonitor=nil}}
+    func discardRecording(_ message:String){removeGlobalMonitor();recorder?.cancel();recorder=nil;controls();status.stringValue=message}
+    deinit{if let monitor=globalMonitor{NSEvent.removeMonitor(monitor)}}
+    func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{discardRecording(error.localizedDescription)}}
+    func keyboard(_ event:NSEvent,pressed:Bool){guard recorder != nil else{return};guard let usage=Self.nativeUsages[event.keyCode]else{discardRecording("此按键编码不明确，请手动添加；录制已取消。");return};observe(usage,pressed:pressed,repeatEvent:event.isARepeat)}
     func modifier(_ event:NSEvent){guard let (usage,mask)=Self.modifiers[event.keyCode]else{return};observe(usage,pressed:event.modifierFlags.rawValue & mask != 0)}
-    func unsupportedMouseEvent(){guard recorder != nil,mouseOption.state == .on else{return};recorder?.cancel();recorder=nil;controls();status.stringValue="滚轮或其他鼠标事件尚未支持，录制已取消；原步骤保留。"}
+    func unsupportedMouseEvent(){guard recorder != nil,mouseOption.state == .on else{return};discardRecording("滚轮或其他鼠标事件尚未支持，录制已取消；原步骤保留。")}
     func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on else{return};guard let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{unsupportedMouseEvent();return};observe(usage,kind:.mouse,pressed:pressed)}
     @objc func finish(){do{guard var draft=recorder else{return};let index:Int?
         switch placement.indexOfSelectedItem{case 0:index=nil;case 1:index=originalSteps.count;default:guard let selectedStep,originalSteps.indices.contains(selectedStep) else{throw HardwareError(message:"请重新选择录制插入位置。")};index=selectedStep+(placement.indexOfSelectedItem==3 ? 1:0)}
         let macro=try draft.finish(name:name,originalSteps:originalSteps,insertionIndex:index);complete(macro)
     }catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
     @objc func cancel(){recorder?.cancel();complete(nil)}
-    func complete(_ macro:KeyboardMacro?){guard !closed else{return};closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}
+    func complete(_ macro:KeyboardMacro?){guard !closed else{return};removeGlobalMonitor();recorder?.cancel();recorder=nil;closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}
     func windowShouldClose(_ sender:NSWindow)->Bool{cancel();return false}
-    func windowDidResignKey(_ notification:Notification){guard recorder != nil,!closed else{return};recorder?.cancel();recorder=nil;controls();status.stringValue="窗口失去焦点，录制已取消；原步骤保留。"}
+    func windowDidResignKey(_ notification:Notification){guard recorder != nil,!closed,globalOption.state != .on else{return};discardRecording("窗口失去焦点，录制已取消；原步骤保留。")}
 }

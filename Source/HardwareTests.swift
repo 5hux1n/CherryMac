@@ -612,6 +612,19 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     recording.beginRecording(modifierFlags:[]);recording.unsupportedMouseEvent();precondition(recording.recorder != nil,"keyboard-only recording ignores mouse events")
     recording.mouseOption.state = .on;recording.observe(4,pressed:true);recording.unsupportedMouseEvent()
     precondition(recording.recorder==nil && !adopted && recording.status.stringValue.contains("原步骤保留"))
+    let denied=MacroRecordingSheet(name:"未授权") {_ in preconditionFailure("must not adopt")}
+    denied.globalOption.state = .on;denied.beginRecording(modifierFlags:[],globalAccessGranted:{false})
+    precondition(denied.recorder==nil && denied.start.isEnabled && denied.status.stringValue.contains("辅助功能"))
+    var externalMacro:KeyboardMacro?
+    let external=MacroRecordingSheet(name:"外部事件") {externalMacro=$0}
+    // Synthetic routing only: start in local mode; no monitor installation or permission query.
+    external.beginRecording(modifierFlags:[]);external.globalOption.state = .on
+    external.windowDidResignKey(Notification(name:NSWindow.didResignKeyNotification));precondition(external.recorder != nil)
+    for type:NSEvent.EventType in [.keyDown,.keyUp] {
+        let event=NSEvent.keyEvent(with:type,location:.zero,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,characters:"a",charactersIgnoringModifiers:"a",isARepeat:false,keyCode:0)!
+        external.externalEvent(event)
+    }
+    external.finish();precondition(externalMacro?.steps.map{$0.usage}==[4,4] && external.recorder==nil && external.closed)
     print("PASS: macro unbinding preserves library and other triggers; deletion reindexes; failed edits preserve original draft; unsupported mouse recording cancels without adoption (no hardware I/O)")
 }
 
