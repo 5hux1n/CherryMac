@@ -1154,7 +1154,7 @@ if let i=CommandLine.arguments.firstIndex(of:"--macro-hardware-window-preview"),
 if let i=CommandLine.arguments.firstIndex(of:"--macro-recover-dir"),CommandLine.arguments.count>i+1{
     let tester=MacroHardwareTestController(resumeDirectory:URL(fileURLWithPath:CommandLine.arguments[i+1]));app.delegate=tester;app.run();exit(0)
 }
-if CommandLine.arguments.contains("--macro-hardware-test"){
+if CommandLine.arguments.contains("--macro-hardware-test") || (CommandLine.arguments.count==1 && Bundle.main.object(forInfoDictionaryKey:"CherryMacMacroHardwareTest") as? Bool == true){
     let directory:URL? = CommandLine.arguments.firstIndex(of:"--test-dir").flatMap{CommandLine.arguments.count>$0+1 ? URL(fileURLWithPath:CommandLine.arguments[$0+1]):nil}
     let tester=MacroHardwareTestController(directory:directory);app.delegate=tester;app.run();exit(0)
 }

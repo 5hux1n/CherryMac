@@ -155,7 +155,10 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func applicationDidFinishLaunching(_ notification:Notification){
         do{guard !FileManager.default.fileExists(atPath:directory.path) else{throw HardwareError(message:"测试目录已存在，不能覆盖。")};try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try persist()}catch{fputs(error.localizedDescription+"\n",stderr);NSApp.terminate(nil);return}
         makeWindow(show:true)
-        guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)==kIOHIDAccessTypeGranted else{fail("缺少输入监控权限；不能进行实体宏测试，未写入。");return}
+        guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)==kIOHIDAccessTypeGranted else{
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            fail("请在系统设置 → 隐私与安全性 → 输入监控中允许 CherryMac Macro Test，然后退出并重新打开测试 App。尚未写入键盘。");return
+        }
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in guard let context else{return};let owner=Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue();if result==0{owner.receive(value)}else{owner.fail("HID 观察失败。",.reportRejected)}},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in guard let context else{return};Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue().removed()},Unmanaged.passUnretained(self).toOpaque())
