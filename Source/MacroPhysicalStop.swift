@@ -1,4 +1,4 @@
-#if CHERRY_MACRO_TEST
+#if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
 import Cocoa
 import IOKit.hid
 

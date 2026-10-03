@@ -245,7 +245,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         makeWindow(show:true)
         guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)==kIOHIDAccessTypeGranted else{
             _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-            fail("请在系统设置 → 隐私与安全性 → 输入监控中允许 CherryMac Macro Test，然后退出并重新打开测试 App。尚未写入键盘。");return
+            let name=Bundle.main.object(forInfoDictionaryKey:"CFBundleDisplayName") as? String ?? "CherryMac Macro Acceptance"
+            fail("请在系统设置 → 隐私与安全性 → 输入监控中允许 \(name)，然后退出并重新打开测试 App。尚未写入键盘。");return
         }
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in guard let context else{return};let owner=Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue();if result==0{owner.receive(value)}else{owner.fail("HID 观察失败。",.reportRejected)}},Unmanaged.passUnretained(self).toOpaque())

@@ -18,10 +18,10 @@ cat > "$TASK_APP_OUTPUT/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleDisplayName</key><string>CherryMac Macro Test</string>
-<key>CFBundleName</key><string>CherryMac Macro Test</string>
+<key>CFBundleDisplayName</key><string>CherryMac Macro Acceptance</string>
+<key>CFBundleName</key><string>CherryMac Macro Acceptance</string>
 <key>CFBundleExecutable</key><string>CherryMacMacroTest</string>
-<key>CFBundleIdentifier</key><string>local.cherrymac.macro-hardware-test</string>
+<key>CFBundleIdentifier</key><string>local.cherrymac.macro-acceptance</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>

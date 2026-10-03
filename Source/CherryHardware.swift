@@ -259,7 +259,7 @@ final class CherryUSB: CherryHardwareAccess {
     private var lastKeyWriteAt:TimeInterval?
     func applyKeymap(_ keymap:[UInt8],baseline:HardwareSnapshot,log:HardwareOperationLog) throws -> HardwareSnapshot {
         guard keymapAuthorization==nil else{throw HardwareError(message:"此会话已经用于键位写入，不能更换目标。")}
-        #if CHERRY_MACRO_TEST
+        #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
         guard macroAuthorization==nil else{throw HardwareError(message:"宏事务尚未结束，不能更换目标。")}
         #endif
         let authorization=try KeymapWriteAuthorization(baseline:baseline,keymap:keymap)
@@ -273,7 +273,7 @@ final class CherryUSB: CherryHardwareAccess {
             return result
         }catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
     }
-    #if CHERRY_MACRO_TEST
+    #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
     private var macroAuthorization:MacroWriteAuthorization?
     func recoverMacro(_ authorization:MacroWriteAuthorization,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
         guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能开始恢复。")}
@@ -341,7 +341,7 @@ final class CherryUSB: CherryHardwareAccess {
         buffer.deinitialize(count: 64); buffer.deallocate()
     }
     private func validateMacroResearchPacket(_ request:[UInt8])throws->Bool {
-        #if CHERRY_MACRO_TEST
+        #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
         if request.count==64,[UInt8(9),0x15].contains(request[3]),let authorization=macroAuthorization {
             try authorization.validate(request);return true
         }

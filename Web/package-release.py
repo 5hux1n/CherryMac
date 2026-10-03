@@ -13,7 +13,8 @@ if not re.fullmatch(r'\d+\.\d+\.\d+', version):
 files = [root / name for name in ['index.php', 'README.md', 'start.command']]
 files += [root / 'assets' / name for name in
           ['app.js', 'hid.js', 'layout.js', 'logs.js', 'model.js', 'safety.js',
-           'storage.js', 'style.css', 'tables.js', 'writer.js']]
+           'storage.js', 'style.css', 'tables.js', 'writer.js', 'macro-session.js',
+           'macro-stop.js', 'product-macros.js']]
 paths = {path.resolve() for path in files}
 for path in files:
     text = path.read_text()

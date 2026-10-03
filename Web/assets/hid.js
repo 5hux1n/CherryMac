@@ -22,12 +22,12 @@ export function supportsDevice(device){
 }
 export class CherryHID{
   #keyAuthorization=null;#macroAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
-  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false}={}){
+  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
-    // Research-only entry. Normal product construction exposes no macro write
-    // method until execution/stop/recovery and the UI have been accepted.
-    if(macroResearch===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
+    // Both entries use the same immutable packet authorization. Product
+    // preview is explicitly gated by the PHP deployment environment.
+    if(macroResearch===true||macroProduct===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
     this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
     this.input=e=>{if(e.reportId!==4||!this.pending)return;const p=this.pending;
       try{const bytes=new Uint8Array(1+e.data.byteLength);bytes[0]=4;bytes.set(new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength),1);p.entry.reply=Array.from(bytes);validateReply(bytes,p.request);this.finish(null,bytes);}
