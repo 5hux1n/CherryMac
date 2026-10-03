@@ -570,6 +570,14 @@ func runHostTextPlanChecks(){
     precondition((try! plan("\n")).marker==[0xA1,0,0] && (try! plan("\n")).scalarUTF16.isEmpty)
     precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x700)==0 && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x7FF)==255)
     precondition(WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x6FF)==nil && WindowsProfile.HostTextPlan.triggerIndex(eventValue:0x800)==nil)
+    var factory=Array(repeating:UInt8(0),count:378)
+    factory.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x766,factoryKeymap:factory))==WindowsProfile.HostTextTrigger(logicalIndex:17,physicalSlot:102))
+    factory.replaceSubrange(360..<363,with:[0xF0,0,2])
+    precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x778,factoryKeymap:factory))?.logicalIndex==120)
+    factory.replaceSubrange(309..<312,with:[0x30,0x92,1])
+    precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x767,factoryKeymap:factory))==nil)
+    precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x7FF,factoryKeymap:factory))==nil)
     print("PASS: official host text marker, UTF-16 scalar boundaries, LF/NUL handling and event index bounds (no listener, permission query, text posting or hardware I/O)")
 }
 

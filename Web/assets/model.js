@@ -1,4 +1,4 @@
-import {SLOTS,WINDOWS_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.6.0';
+import {SLOTS,WINDOWS_DEFAULTS,FIRMWARE_LOGICAL_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.6.0';
 import {keys,modes} from './layout.js?v=0.6.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
@@ -14,6 +14,15 @@ export function officialHostTextPlan(action){
     scalarUTF16:Array.from(prefix).filter(c=>c!=='\n').map(c=>Array.from({length:c.length},(_,i)=>c.charCodeAt(i)))};
 }
 export function officialTextTriggerIndex(eventValue){return Number.isInteger(eventValue)&&eventValue>=0x700&&eventValue<0x800?eventValue-0x700:null;}
+export function resolveHostTextTrigger(eventValue,factoryKeymap){
+  requireThat(bytes(factoryKeymap,378),'文本触发解析需要完整的固件默认键位表。');
+  const slot=officialTextTriggerIndex(eventValue);if(slot===null||slot>=126)return null;
+  const offset=slot*3,value=(factoryKeymap[offset]<<16)|(factoryKeymap[offset+1]<<8)|factoryKeymap[offset+2],logicalIndex=FIRMWARE_LOGICAL_DEFAULTS.indexOf(value);
+  if(logicalIndex<0)return null;
+  for(let i=0;i<slot;i++)if([0,1,2].every(j=>factoryKeymap[i*3+j]===factoryKeymap[offset+j]))return null;
+  return {logicalIndex,physicalSlot:slot};
+}
+
 export function validateSnapshot(s,complete=false){
   requireThat(s&&s.format==='CherryMacHardware'&&s.version===1&&s.vendorID===1130&&s.productID===462,'配置不适用于这款宝可梦键盘。');
   requireThat(bytes(s.keymap,378)&&bytes(s.parameters,56)&&bytes(s.deviceInfo,34),'键位、参数或设备信息长度无效。');

@@ -5,7 +5,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
@@ -709,4 +709,13 @@ test('official host text prepares UTF-16 without treating Unicode as onboard mac
   const root=windowsFixture(),baseline=demoSnapshot(),before=clone(baseline);
   root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;root.ActionInfo=[action(raw)];
   assert.throws(()=>importWindows(root,baseline),/需要主机执行服务/);assert.deepEqual(baseline,before);
+});
+
+test('host text dispatch uses factory matching table instead of JSON logical position',()=>{
+  const factory=Array(378).fill(0);factory.splice(306,3,48,146,1);
+  assert.deepEqual(resolveHostTextTrigger(0x766,factory),{logicalIndex:17,physicalSlot:102});
+  factory.splice(360,3,240,0,2);assert.deepEqual(resolveHostTextTrigger(0x778,factory),{logicalIndex:120,physicalSlot:120});
+  factory.splice(309,3,48,146,1);assert.equal(resolveHostTextTrigger(0x767,factory),null);
+  assert.equal(resolveHostTextTrigger(0x7ff,factory),null);
+  assert.throws(()=>resolveHostTextTrigger(0x766,factory.slice(0,377)));
 });

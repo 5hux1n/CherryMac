@@ -126,7 +126,14 @@ def inspect(path, skin=None):
         0x50B165: "e856040000",           # starts raw event reader
         0x50B640: "68d0c35000",           # worker 0x50c3d0
         0x50C473: "81c1b4170000",         # reads same connection
-        0x50C49A: "8a4908",               # copies ninth byte of report
+        0x50C49A: "8a4908",
+        0x4DC340: "c64405bc07",       # default keymap read command
+        0x4FC2F4: "e8f76e0000",       # builds logical matching table
+        0x50325F: "837df87e",         # 126 logical entries
+        0x5033CE: "390c85c8c67600",   # match against reference dword triple
+        0x5033EA: "390495ccc67600",
+        0x503406: "39148dd0c67600",
+        0x503424: "8908",             # logical entry stores physical slot               # copies ninth byte of report
     }
     for address, encoded in model_checks.items():
         expected_bytes = bytes.fromhex(encoded)
@@ -139,6 +146,13 @@ def inspect(path, skin=None):
     expected_resource = "XML\\CustomControlXML\\DeviceOption_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
     if wide_string(0x751560, 160) != expected_resource:
         raise ValueError("Unexpected registered model resource path")
+    logical_bytes = pe.at(0x76C6C8, 126 * 3 * 4)
+    logical_words = struct.unpack("<378I", logical_bytes)
+    if any(word > 255 for word in logical_words):
+        raise ValueError("Logical matching table has non-byte fields")
+    logical_records = [list(logical_words[i:i + 3]) for i in range(0, 378, 3)]
+    if len({tuple(row) for row in logical_records}) != 126 or logical_records[17] != [48, 146, 1]:
+        raise ValueError("Unexpected logical matching table")
     result = {
         "format": "CherryMacOfficialSettingsStaticAudit", "version": 2,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
@@ -149,6 +163,7 @@ def inspect(path, skin=None):
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},
         "modelFactory": {"xmlClass": "EevisionKeyboardDevice", "constructor": "0x4f6060", "vtable": "0x77f604", "model": 47, "vendorID": 0x046A, "productID": 0x01CE, "instructionChecks": len(model_checks)},
+        "logicalMatchingTable": {"address": "0x76c6c8", "count": 126, "defaultKeymapReadCommand": 7, "rawSHA256": hashlib.sha256(logical_bytes).hexdigest(), "records": logical_records, "limits": "Requires actual factory keymap to map event values; not the JSON DefaultAssignment array"},
         "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "reportID": "not established"},
         "limits": "Static factory and reader paths only; does not prove actual interface or report ID, USB setting writes, text trigger execution or persistence",
     }

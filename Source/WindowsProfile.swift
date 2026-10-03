@@ -43,6 +43,25 @@ enum WindowsProfile {
         0xA00100, 0x200065, 0x201000, 0x200050, 0x200051, 0x20004F, 0x200062, 0x200063, 0x200058, 0x200057,
         0xD0A201, 0xD0A202, 0xD0A203, 0xD0A204, 0xD0A205, 0x208000
     ]
+    // EXE 0x76c6c8 is the logical matching table, not the JSON defaults.
+    // Hidden international/Fn entries differ from the exported model 47 list.
+    static let firmwareLogicalDefaults:[Int] = {
+        var result=defaults
+        for (index,value) in [62:0xF00001,79:0x20008A,80:0x20008B,81:0x200090,82:0x200091,83:0x200088,100:0x200087,101:0x200089,103:0x200085,120:0xF00002,121:0xF00003,122:0xD00100,123:0xD00200,124:0xD00400]{result[index]=value}
+        return result
+    }()
+    struct HostTextTrigger:Equatable {let logicalIndex:Int;let physicalSlot:Int}
+    static func resolveHostTextTrigger(eventValue:Int,factoryKeymap:[UInt8])throws->HostTextTrigger? {
+        guard factoryKeymap.count==378 else{throw HardwareError(message:"文本触发解析需要完整的固件默认键位表。")}
+        guard let slot=HostTextPlan.triggerIndex(eventValue:eventValue),slot<126 else{return nil}
+        let offset=slot*3,value=Int(factoryKeymap[offset])<<16 | Int(factoryKeymap[offset+1])<<8 | Int(factoryKeymap[offset+2])
+        guard let logicalIndex=firmwareLogicalDefaults.firstIndex(of:value) else{return nil}
+        // Official matching picks the first physical occurrence. A later
+        // duplicate must not dispatch another key's text.
+        let first=(0..<126).first{index in let start=index*3;return Array(factoryKeymap[start..<start+3])==Array(factoryKeymap[offset..<offset+3])}
+        guard first==slot else{return nil}
+        return HostTextTrigger(logicalIndex:logicalIndex,physicalSlot:slot)
+    }
     static let mediaCodes:[UInt16] = [0x0183,0x00CD,0x00B7,0x00B6,0x00B5,0x00EA,0x00E9,0x00E2,0x0223,0x0227,0x0226,0x0224,0x0225,0x022A,0x0221,0x0194,0x0192,0x018A]
     static let modeCodes:[UInt8] = [0,1,2,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,3,8,22,23,24]
     // Confirmed JSON getter/setter struct order (seven UInt16 fields), not
