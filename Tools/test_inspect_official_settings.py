@@ -49,6 +49,24 @@ class AuditTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 audit.PE32(data)
 
+    def test_model_resource_selection_and_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            device = root / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+            option = root / "XML/CustomControlXML/DeviceOption_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+            device.parent.mkdir(parents=True); option.parent.mkdir(parents=True)
+            device.write_bytes(b' <?xml version="1.0"?><Window><EevisionKeyboardDevice/></Window>')
+            option.write_bytes(b'<Window><Label name="device_select_name" text="MX 3.0S POKEMON WIRELESS"/></Window>')
+            result = audit.inspect_model_resources(root)
+            self.assertEqual((result["model"], result["productID"], result["resourceClass"]), (47, 462, "EevisionKeyboardDevice"))
+            device.write_bytes(b'<Window><OtherKeyboardDevice/></Window>')
+            with self.assertRaisesRegex(ValueError, "select"):
+                audit.inspect_model_resources(root)
+            device.write_bytes(b'<Window><EevisionKeyboardDevice/></Window>')
+            option.write_bytes(b'<Window><Label name="device_select_name" text="another model"/></Window>')
+            with self.assertRaisesRegex(ValueError, "display name"):
+                audit.inspect_model_resources(root)
+
     def test_reject_unmatched_executable_before_version_specific_addresses(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "synthetic.exe"

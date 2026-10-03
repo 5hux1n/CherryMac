@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import struct
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EXPECTED_SHA256 = "a92412c6e3bd05d722c30e0d1ab1762570934b28bd31ea482ad2b51ce187f396"
@@ -57,7 +58,26 @@ class PE32:
         return name.decode("ascii")
 
 
-def inspect(path):
+def inspect_model_resources(skin):
+    """Validate the actual model resource, not a similarly named keyboard."""
+    root = Path(skin)
+    device_path = root / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+    option_path = root / "XML/CustomControlXML/DeviceOption_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+    device_data, option_data = device_path.read_bytes(), option_path.read_bytes()
+    device, option = ET.fromstring(device_data.lstrip()), ET.fromstring(option_data.lstrip())
+    if device.tag != "Window" or len(device) != 1 or device[0].tag != "EevisionKeyboardDevice":
+        raise ValueError("Model resource does not select EevisionKeyboardDevice")
+    names = [e.attrib.get("text") for e in option.iter("Label") if e.attrib.get("name") == "device_select_name"]
+    if names != ["MX 3.0S POKEMON WIRELESS"]:
+        raise ValueError("Unexpected model display name")
+    return {"model": 47, "vendorID": 0x046A, "productID": 0x01CE,
+            "resourceClass": device[0].tag, "displayName": names[0],
+            "deviceResourceSHA256": hashlib.sha256(device_data).hexdigest(),
+            "optionResourceSHA256": hashlib.sha256(option_data).hexdigest(),
+            "limits": "Resource selection and fixed executable initialization only; not an observed runtime session"}
+
+
+def inspect(path, skin=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != EXPECTED_SHA256:
@@ -86,8 +106,34 @@ def inspect(path):
         expected_bytes = bytes.fromhex(encoded)
         if pe.at(address, len(expected_bytes)) != expected_bytes:
             raise ValueError("Unexpected text event dispatch instruction")
-    return {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 1,
+    # Tie the XML class name to its factory constructor and actual RTTI table.
+    model_checks = {
+        0x406C4A: "c70584d881002f000000",  # registered model 47
+        0x406C54: "c70588d881006a040000",  # VID
+        0x406C5E: "c7058cd88100ce010000",  # PID
+        0x406C82: "6860157500",           # model option resource path
+        0x488E7D: "6820a37500",           # XML class name
+        0x488EBA: "e8a1d10600",           # factory constructor 0x4f6060
+        0x4F609A: "c70004f67700",         # constructor vtable
+        0x50B0BF: "81c1b4170000",         # reader connection storage
+        0x50B165: "e856040000",           # starts raw event reader
+        0x50B640: "68d0c35000",           # worker 0x50c3d0
+        0x50C473: "81c1b4170000",         # reads same connection
+        0x50C49A: "8a4908",               # copies ninth byte of report
+    }
+    for address, encoded in model_checks.items():
+        expected_bytes = bytes.fromhex(encoded)
+        if pe.at(address, len(expected_bytes)) != expected_bytes:
+            raise ValueError("Unexpected model or event reader instruction")
+    def wide_string(address, size):
+        return pe.at(address, size).decode("utf-16le").split("\0", 1)[0]
+    if wide_string(0x75A320, 44) != "EevisionKeyboardDevice":
+        raise ValueError("Unexpected factory XML class name")
+    expected_resource = "XML\\CustomControlXML\\DeviceOption_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+    if wide_string(0x751560, 160) != expected_resource:
+        raise ValueError("Unexpected registered model resource path")
+    result = {
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 2,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -95,17 +141,24 @@ def inspect(path):
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks)},
-        "limits": "Static class targets and generic event branches only; does not prove model 47 class selection, target report layout, USB setting writes, text trigger execution or persistence",
+        "modelFactory": {"xmlClass": "EevisionKeyboardDevice", "constructor": "0x4f6060", "vtable": "0x77f604", "model": 47, "vendorID": 0x046A, "productID": 0x01CE, "instructionChecks": len(model_checks)},
+        "rawEventReader": {"connect": "0x50b050", "start": "0x50b5c0", "worker": "0x50c3d0", "connectionObjectOffset": "0x17b4", "copiedReportBytes": 9, "eventValueBytes": [1, 2], "reportID": "not established"},
+        "limits": "Static factory and reader paths only; does not prove actual interface or report ID, USB setting writes, text trigger execution or persistence",
     }
+    if skin is not None:
+        result["modelResource"] = inspect_model_resources(skin)
+    return result
+
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", help="Local CHERRY-Utility-Software.exe; it will only be read")
+    parser.add_argument("--skin", help="Optional extracted Skin directory; verifies target model resource without copying it")
     args = parser.parse_args()
     try:
-        print(json.dumps(inspect(args.executable), ensure_ascii=False, indent=2))
-    except (OSError, ValueError, struct.error) as error:
+        print(json.dumps(inspect(args.executable, args.skin), ensure_ascii=False, indent=2))
+    except (OSError, ValueError, struct.error, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
 
 
