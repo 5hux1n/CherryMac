@@ -23,6 +23,28 @@ export function resolveHostTextTrigger(eventValue,factoryKeymap){
   return {logicalIndex,physicalSlot:slot};
 }
 
+// Data routing only; callers must separately establish device/report identity
+// and rebuild on configuration changes or reconnect. This does not authorize HID.
+export function prepareHostTextBindings(root,factoryKeymap,currentKeymap){
+  requireThat(bytes(factoryKeymap,378)&&bytes(currentKeymap,378),'文本路由需要完整的默认和当前键位表。');
+  requireThat(root?.['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126&&Array.isArray(root.ActionInfo),'Windows 文本配置结构无效。');
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'Windows 文本配置过大。');
+  root.KeyList.forEach((key,i)=>requireThat(winInt(key?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
+  officialSystemStageWords(root);
+  const bindings=new Map();
+  for(let slot=0;slot<126;slot++){
+    const trigger=resolveHostTextTrigger(0x700+slot,factoryKeymap),offset=slot*3;
+    if(!trigger||![161,0,0].every((v,i)=>currentKeymap[offset+i]===v))continue;
+    const key=root.KeyList[trigger.logicalIndex];if(winInt(key.ActionLink??0,'ActionLink',0,1)!==1)continue;
+    const index=winInt(key.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,root.ActionInfo.length-1)),action=root.ActionInfo[index];requireThat(action,'文本动作引用无效。');
+    if(winInt(action.ActionType,'ActionType',0,4)!==3)continue;
+    const plan=officialHostTextPlan(action);if(plan.marker===null)continue;
+    bindings.set(slot,{...trigger,actionIndex:index,plan});
+  }
+  // Freeze the prepared routing context; later draft edits cannot alter it.
+  return eventValue=>{const slot=officialTextTriggerIndex(eventValue);return bindings.has(slot)?clone(bindings.get(slot)):null;};
+}
+
 export function validateSnapshot(s,complete=false){
   requireThat(s&&s.format==='CherryMacHardware'&&s.version===1&&s.vendorID===1130&&s.productID===462,'配置不适用于这款宝可梦键盘。');
   requireThat(bytes(s.keymap,378)&&bytes(s.parameters,56)&&bytes(s.deviceInfo,34),'键位、参数或设备信息长度无效。');

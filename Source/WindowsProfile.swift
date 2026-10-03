@@ -62,6 +62,42 @@ enum WindowsProfile {
         guard first==slot else{return nil}
         return HostTextTrigger(logicalIndex:logicalIndex,physicalSlot:slot)
     }
+    struct HostTextBinding:Equatable {
+        let logicalIndex:Int
+        let physicalSlot:Int
+        let actionIndex:Int
+        let plan:HostTextPlan
+    }
+    // Prepared data only, not a device/report authorization. The eventual
+    // listener must verify report provenance and rebuild after configuration
+    // changes or reconnect; a saved JSON file alone is insufficient.
+    struct HostTextBindings {
+        private let bindings:[Int:HostTextBinding]
+        init(officialJSON:Data,factoryKeymap:[UInt8],currentKeymap:[UInt8])throws {
+            guard factoryKeymap.count==378,currentKeymap.count==378 else{throw HardwareError(message:"文本路由需要完整的默认和当前键位表。")}
+            let root=try WindowsProfile.templateRoot(officialJSON)
+            guard let keys=root["KeyList"] as? [[String:Any]],let actions=root["ActionInfo"] as? [[String:Any]] else{throw HardwareError(message:"Windows 动作列表结构无效。")}
+            var result:[Int:HostTextBinding]=[:]
+            for slot in 0..<126 {
+                guard let trigger=try WindowsProfile.resolveHostTextTrigger(eventValue:0x700+slot,factoryKeymap:factoryKeymap) else{continue}
+                let offset=slot*3
+                guard Array(currentKeymap[offset..<offset+3])==[0xA1,0,0] else{continue}
+                let key=keys[trigger.logicalIndex]
+                guard try WindowsProfile.integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 else{continue}
+                let index=try WindowsProfile.integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+                guard actions.indices.contains(index) else{throw HardwareError(message:"文本动作引用无效。")}
+                guard try WindowsProfile.integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 else{continue}
+                let plan=try HostTextPlan(action:actions[index])
+                guard plan.marker != nil else{continue}
+                result[slot]=HostTextBinding(logicalIndex:trigger.logicalIndex,physicalSlot:slot,actionIndex:index,plan:plan)
+            }
+            bindings=result
+        }
+        func binding(eventValue:Int)->HostTextBinding? {
+            guard let slot=HostTextPlan.triggerIndex(eventValue:eventValue) else{return nil}
+            return bindings[slot]
+        }
+    }
     static let mediaCodes:[UInt16] = [0x0183,0x00CD,0x00B7,0x00B6,0x00B5,0x00EA,0x00E9,0x00E2,0x0223,0x0227,0x0226,0x0224,0x0225,0x022A,0x0221,0x0194,0x0192,0x018A]
     static let modeCodes:[UInt8] = [0,1,2,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,3,8,22,23,24]
     // Confirmed JSON getter/setter struct order (seven UInt16 fields), not

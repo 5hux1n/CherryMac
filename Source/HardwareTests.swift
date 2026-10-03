@@ -578,6 +578,18 @@ func runHostTextPlanChecks(){
     factory.replaceSubrange(309..<312,with:[0x30,0x92,1])
     precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x767,factoryKeymap:factory))==nil)
     precondition((try! WindowsProfile.resolveHostTextTrigger(eventValue:0x7FF,factoryKeymap:factory))==nil)
+    var keys:[[String:Any]]=WindowsProfile.defaults.map{["DefaultAssignment":$0,"ActionLink":0,"ActionLinkIndex":-1]}
+    keys[17]["ActionLink"]=1;keys[17]["ActionLinkIndex"]=0
+    var root:[String:Any]=["//":"47","KeyList":keys,"ActionInfo":[["ActionType":3,"ActionName":"计算器文本","ActionTextFlag":1,"ActionContent":["ActionText":"中😀"]]]]
+    var current=Array(repeating:UInt8(0),count:378);current.replaceSubrange(306..<309,with:[0xA1,0,0])
+    let routing=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
+    precondition(routing.binding(eventValue:0x766)?.plan.originalText=="中😀" && routing.binding(eventValue:0x766)?.actionIndex==0)
+    precondition(routing.binding(eventValue:0x711)==nil && routing.binding(eventValue:0x767)==nil)
+    current.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    let inactive=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
+    precondition(inactive.binding(eventValue:0x766)==nil && routing.binding(eventValue:0x766)?.plan.originalText=="中😀")
+    keys[17]["ActionLinkIndex"]=7;root["KeyList"]=keys;current.replaceSubrange(306..<309,with:[0xA1,0,0])
+    do{_=try WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current);preconditionFailure("invalid text reference must be rejected")}catch{}
     print("PASS: official host text marker, UTF-16 scalar boundaries, LF/NUL handling and event index bounds (no listener, permission query, text posting or hardware I/O)")
 }
 

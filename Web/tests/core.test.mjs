@@ -5,7 +5,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
@@ -718,4 +718,19 @@ test('host text dispatch uses factory matching table instead of JSON logical pos
   factory.splice(309,3,48,146,1);assert.equal(resolveHostTextTrigger(0x767,factory),null);
   assert.equal(resolveHostTextTrigger(0x7ff,factory),null);
   assert.throws(()=>resolveHostTextTrigger(0x766,factory.slice(0,377)));
+});
+
+test('host text binding routing requires installed text marker and freezes official references',()=>{
+  const root=windowsFixture(),factory=Array(378).fill(0),current=Array(378).fill(0);
+  factory.splice(306,3,48,146,1);factory.splice(309,3,48,146,1);current.splice(306,3,161,0,0);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  root.ActionInfo=[{ActionType:3,ActionName:'计算器文本',ActionTextFlag:1,ActionContent:{ActionText:'中😀'}}];
+  const route=prepareHostTextBindings(root,factory,current);
+  assert.equal(route(0x766).logicalIndex,17);assert.equal(route(0x766).plan.originalText,'中😀');
+  assert.equal(route(0x711),null);assert.equal(route(0x767),null);
+  route(0x766).plan.scalarUTF16[0][0]=0;root.ActionInfo[0].ActionContent.ActionText='改动草稿';
+  assert.equal(route(0x766).plan.originalText,'中😀');assert.deepEqual(route(0x766).plan.scalarUTF16[0],[0x4e2d]);
+  current.splice(306,3,48,146,1);assert.equal(prepareHostTextBindings(root,factory,current)(0x766),null);
+  current.splice(306,3,161,0,0);root.KeyList[17].ActionLinkIndex=7;
+  assert.throws(()=>prepareHostTextBindings(root,factory,current));
 });
