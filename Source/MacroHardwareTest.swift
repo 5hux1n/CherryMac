@@ -14,7 +14,7 @@ private final class MacroTestInputView:NSView {
 // Full research flow. This entry is never launched by an offline check or by
 // normal product startup. Test writes still wait for macro-module acceptance.
 final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowDelegate {
-    enum Phase:String {case preparing,ready,writing,observeReady,observing,disconnect,reconnect,reading,restoreReady,restoring,complete,failed}
+    enum Phase:String {case preparing,ready,writing,observeReady,observing,disconnect,reconnect,reading,restoreReady,restoring,complete,failed,cancelled}
     let manager=IOHIDManagerCreate(kCFAllocatorDefault,0),ledger=RawInputLedger()
     let queue=DispatchQueue(label:"local.cherrymac.macro-hardware-test")
     let directory:URL
@@ -31,6 +31,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var passed:Bool{firstExecutionPassed && secondExecutionPassed && powerVerified && restored && errorMessage==nil && interruptions.isEmpty}
     var locationID:Int?,errorMessage:String?,raw:[[String:Any]]=[]
     var interruptions:[MacroExecutionEvidence.Interruption]=[]
+    var writeAttempted=false
+    var transitions:[[String:Any]]=[]
     static let playback=MacroPlayback(count:2)
     static let testMacro=KeyboardMacro(name:"CherryMac 实体测试 AB",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:80),.init(usage:5,pressed:true,delayMilliseconds:80),.init(usage:5,pressed:false,delayMilliseconds:80)])
     init(directory:URL?=nil,resumeDirectory:URL?=nil){
@@ -56,7 +58,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encoded<T:Encodable>(_ value:T)throws->Data{let e=JSONEncoder();e.outputFormatting=[.prettyPrinted,.sortedKeys];return try e.encode(value)}
     func persist()throws {
-        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scope":"calculator-slot AB twice only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
+        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scope":"calculator-slot AB twice only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
         if let errorMessage{session["error"]=errorMessage};if let locationID{session["locationID"]=locationID}
         if let power{session["originalRegistryID"]=String(power.originalRegistryID);session["disconnectedAt"]=power.disconnectedAt;session["powerOffConfirmedAt"]=power.powerOffConfirmedAt;session["reconnectedAt"]=power.reconnectedAt;session["confirmedOffInterval"]=power.confirmedOffInterval}
         try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
@@ -69,10 +71,11 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func fail(_ message:String,_ interruption:MacroExecutionEvidence.Interruption = .cancelled){
         if execution != nil{execution?.invalidate(interruption);if !interruptions.contains(interruption){interruptions.append(interruption)}}
-        phase = .failed;errorMessage=message;status.stringValue=message;action.isEnabled=false;off.isEnabled=false
+        phase = .failed;transitions.append(["phase":"failed","at":Date().timeIntervalSince1970,"error":message]);errorMessage=message;status.stringValue=message;action.isEnabled=false;off.isEnabled=false
         restore.isEnabled=authorization != nil && !busy;detail.stringValue="停止正在运行的宏；重连后可点击恢复。备份与日志：\(directory.path)";try? persist()
     }
-    func set(_ next:Phase,_ text:String)throws{phase=next;status.stringValue=text;action.isEnabled=[.ready,.observeReady,.restoreReady,.complete].contains(next);restore.isEnabled=authorization != nil && !busy && next != .complete;try persist()}
+    func set(_ next:Phase,_ text:String)throws{phase=next;status.stringValue=text;action.isEnabled=[.ready,.observeReady,.restoreReady,.complete].contains(next);restore.isEnabled=authorization != nil && !busy && ![.ready,.complete,.cancelled].contains(next);
+        transitions.append(["phase":next.rawValue,"at":Date().timeIntervalSince1970]);try persist()}
     func registry(_ device:IOHIDDevice)->UInt64?{var id:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS ? id:nil}
     func devices()->Set<IOHIDDevice>{IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []}
     func soleDevice()throws->IOHIDDevice{let all=devices();guard all.count==1,let d=all.first,(IOHIDDeviceGetProperty(d,kIOHIDLocationIDKey as CFString) as? NSNumber)?.intValue==locationID else{throw HardwareError(message:"无法确认同一把 USB 键盘，停止操作。")};return d}
@@ -92,7 +95,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
     }
     func write(){
-        guard let authorization else{return};do{_ = try soleDevice();busy=true;try set(.writing,"正在备份、写入并完整读回宏。请勿按键或拔线。")}catch{busy=false;fail(error.localizedDescription);return}
+        guard let authorization else{return};writeAttempted=true;do{_ = try soleDevice();busy=true;try set(.writing,"正在备份、写入并完整读回宏。请勿按键或拔线。")}catch{busy=false;fail(error.localizedDescription);return}
         queue.async{[self] in
             let result=Result<HardwareSnapshot,Error>{let usb=try CherryUSB(),log=try HardwareOperationLog(kind:"macro-test-write",directory:directory.appendingPathComponent("operations"));return try usb.applyMacro(authorization.expected,baseline:authorization.before,log:log,confirmStopped:stop)}
             DispatchQueue.main.async{[self] in busy=false;do{let snapshot=try result.get();try HardwareProfile(snapshot:snapshot).encoded().write(to:directory.appendingPathComponent("after-write.json"),options:.atomic)
@@ -133,7 +136,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             }catch{fail(error.localizedDescription)}}
         }
     }
-    @objc func requestRestore(){guard !busy,authorization != nil else{return};if phase == .observing{execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
+    @objc func requestRestore(){guard !busy,authorization != nil,phase != .ready else{return};if phase == .observing{execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
     func recover(){
         guard let authorization else{return};do{_ = try soleDevice();busy=true;try set(.restoring,"正在按原事务范围读取并恢复原宏与绑定。请勿拔线或按键。")}catch{busy=false;fail(error.localizedDescription);return}
         queue.async{[self] in
@@ -150,7 +153,13 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")};raw.append(["page":page,"usage":usage,"value":v,"milliseconds":at]);try execution?.observe(event);try persist()
         }catch{if phase == .observing || phase == .observeReady{fail(error.localizedDescription,.reportRejected)}}
     }
-    func windowShouldClose(_ sender:NSWindow)->Bool{guard !busy,(authorization==nil || restored) else{status.stringValue="请先停止测试并恢复原配置；操作中不能关闭窗口。";return false};NSApp.terminate(nil);return true}
+    func windowShouldClose(_ sender:NSWindow)->Bool{
+        guard !busy,(authorization==nil || restored || (phase == .ready && !writeAttempted)) else{status.stringValue="请先停止测试并恢复原配置；操作中不能关闭窗口。";return false}
+        if phase == .ready && !writeAttempted{
+            do{try set(.cancelled,"已在首次写入前退出，未进行宏写入或验收。")}catch{status.stringValue="退出记录保存失败："+error.localizedDescription;return false}
+        }
+        NSApp.terminate(nil);return true
+    }
     func windowDidResignKey(_ notification:Notification){if phase == .observing{fail("窗口失去焦点，宏输出观察中止。请恢复原配置。",.focusLost)}}
     func applicationDidFinishLaunching(_ notification:Notification){
         do{guard !FileManager.default.fileExists(atPath:directory.path) else{throw HardwareError(message:"测试目录已存在，不能覆盖。")};try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try persist()}catch{fputs(error.localizedDescription+"\n",stderr);NSApp.terminate(nil);return}
@@ -180,7 +189,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             }
             DispatchQueue.main.async{[self] in busy=false;do{let plan=try result.get();guard phase == .preparing else{return};authorization=plan
                 if resumeDirectory != nil{errorMessage="恢复以前中断的测试，不计作本轮宏验收通过。";action.title="恢复原配置";try set(.restoreReady,"已核对以前测试的原表、目标和当前配置。点击恢复原宏与计算器键；不会重写测试目标。")}
-                else{action.title="备份并写入测试宏";try set(.ready,"已保存原配置和测试目标。点击后，仅把计算器键绑定到 AB 两次宏；灯效不变。")};detail.stringValue="测试完成将恢复原配置。日志：\(directory.path)"}catch{fail(error.localizedDescription)}}
+                else{action.title="备份并写入测试宏";try set(.ready,"已保存原配置和测试目标。点击后，仅把计算器键绑定到 AB 两次宏；灯效不变。首次写入前可直接关闭窗口退出。")};detail.stringValue="测试完成将恢复原配置。日志：\(directory.path)"}catch{fail(error.localizedDescription)}}
         }
     }
     func makeWindow(show:Bool){
@@ -229,6 +238,14 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         let resumed=try Self.resumePlan(directory:folder,current:plan.expected);precondition(resumed.before==plan.before && resumed.expected==plan.expected)
         do{_ = try Self.resumePlan(directory:folder,current:outside);throw HardwareError(message:"outside resume accepted")}catch let e as HardwareError{precondition(e.message != "outside resume accepted")}
         let controller=MacroHardwareTestController(directory:folder);controller.authorization=plan
+        try controller.set(.ready,"ready")
+        precondition(!controller.restore.isEnabled && controller.action.isEnabled && !controller.writeAttempted)
+        controller.requestRestore();precondition(controller.phase == .ready,"restore must not terminate a test before its first write")
+        try controller.set(.cancelled,"closed before write")
+        let cancelled=try JSONSerialization.jsonObject(with:Data(contentsOf:folder.appendingPathComponent("session.json"))) as! [String:Any]
+        precondition(cancelled["writeAttempted"] as! Bool==false && cancelled["passed"] as! Bool==false && (cancelled["transitions"] as! [[String:Any]]).count==2)
+        controller.writeAttempted=true;try controller.set(.observeReady,"write completed")
+        precondition(controller.restore.isEnabled && controller.action.isEnabled)
         for afterPower in [false,true]{
             controller.powerVerified=afterPower;controller.phase = .observing;controller.executionStart=controller.milliseconds()-2000
             controller.execution=try MacroExecutionEvidence(macro:Self.testMacro,playback:Self.playback,source:.simulation,startedMilliseconds:controller.executionStart)
