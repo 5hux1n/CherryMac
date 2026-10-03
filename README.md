@@ -6,7 +6,7 @@
 
 **当前是按键写入测试版，完整复刻仍在推进。** USB 有线模式下开放独立键位写入、自动备份和读回核对；灯效与宏可以编辑、导出，实体写入暂缓。客户端已在计算器键位实测普通键、组合键、媒体输出、禁用与还原；计算器组合键另有用户确认断电后的保留证据。网页版也已实测普通键写入与还原。其他键位、更多网页键型和无线使用仍在验收。旧网页灯效故障根因尚未确认。
 
-[下载 Mac 0.11.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.11.0) · [下载 PHP 网页版 0.5.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.5.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
+[下载 Mac 0.12.0](https://github.com/5hux1n/CherryMac/releases/tag/v0.12.0) · [下载 PHP 网页版 0.6.0](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.6.0) · [反馈问题](https://github.com/5hux1n/CherryMac/issues)
 
 ![CherryMac 按键配置界面](docs/USB键盘配置预览.png)
 
@@ -76,3 +76,7 @@ php -S 127.0.0.1:8768 -t .
 本版通过客户端离线自测、26 项网页核心测试及 Chrome 完整操作测试；已有按键产品流程的部分实机证据；完整功能、全部键位与无线使用仍需验收。[本版审查与验证](docs/按键写入版验证.md) · [按键产品实机验收](docs/按键产品流程实机验收.md) · [完整移植验收目标](docs/移植验收目标.md) · [灯效异常调查](docs/网页版灯效异常排查.md)
 
 本项目与 CHERRY 官方没有关联。仓库不包含 Windows 安装程序、官方图形资源或用户原始配置和日志。
+
+## 本次预览版新增
+
+宏页可录制操作，选择实际、固定或忽略间隔，复制／清空宏，以及调整步骤顺序。导入 Windows 配置时保留未绑定宏、执行方式和来源资料；重命名会同步更新按键绑定。宏和灯效目前可编辑并保存为配置文件，产品实体写入仍待实机验收。[版本校验与验证范围](docs/宏编辑预览版发布.md)

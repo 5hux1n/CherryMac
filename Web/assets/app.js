@@ -1,10 +1,10 @@
-import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.5.0';
-import {clone,equal,requireThat,duplicateMacro,clearMacros,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint} from './model.js?v=0.5.0';
-import {CherryHID,PageReleaseGate} from './hid.js?v=0.5.0';
-import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.5.0';
-import {saveBackup,listBackups,download} from './storage.js?v=0.5.0';
-import {WRITE_BLOCK_REASON} from './safety.js?v=0.5.0';
-import {saveLog,listLogs} from './logs.js?v=0.5.0';
+import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
+import {clone,equal,requireThat,duplicateMacro,clearMacros,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint} from './model.js?v=0.6.0';
+import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
+import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
+import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
+import {saveLog,listLogs} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let recorder=null,recordingPreference=null;
@@ -94,7 +94,7 @@ $('discard').onclick=()=>act(()=>{profile=safeProfile(baseline??demo);refreshMac
 $('import').onclick=()=>$('file').click();$('file').onchange=()=>operation(async()=>{const file=$('file').files[0];$('file').value='';if(!file)return;requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');const p=parseProfile(await file.text(),baseline);profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();status('配置已导入编辑区，尚未写入键盘。');});
 $('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出当前编辑配置。');});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();loadPlayback();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
-$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.5.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份、按键写入阶段、请求／回复／耗时与错误；不能重建 0.1.0 故障时的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。${logError?' 日志存储异常：'+logError:''}`);});
+$('diagnostics').onclick=()=>operation(async()=>{await hid?.logTasks;let usbLogs=[],logError=hid?.loggingError??null;try{usbLogs=await listLogs();}catch(error){logError=error.message;}const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),backups:await listBackups(),usbLogs,sessionLogs:clone(hid?.history??[]),logError,note:'包含本地备份、按键写入阶段、请求／回复／耗时与错误；不能重建 0.1.0 故障时的包。'};download(evidence,'CherryMac-diagnostics.json');status(`排查资料已下载到本地，未上传。${logError?' 日志存储异常：'+logError:''}`);});
 function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return makeKeymapPlan(profile.snapshot,baseline);}
 $('write').onclick=()=>act(()=>{pending=plan();requireThat(!sameSnapshot(pending,baseline),'选中的写入类别没有变化。');const c=counts(pending,baseline);$('confirm-summary').textContent=`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};

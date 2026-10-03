@@ -1,6 +1,6 @@
-import {requireThat} from './model.js?v=0.5.0';
-import {applyMacroConfiguration,restoreMacroTransaction} from './writer.js?v=0.5.0';
-import {confirmMacroStopped} from './macro-stop.js?v=0.5.0';
+import {requireThat} from './model.js?v=0.6.0';
+import {applyMacroConfiguration,restoreMacroTransaction} from './writer.js?v=0.6.0';
+import {confirmMacroStopped} from './macro-stop.js?v=0.6.0';
 
 // A nominal finite delay is never evidence of firmware cancellation. Keep the
 // UI responsive and never pass a potentially >2^31 delay to setTimeout.

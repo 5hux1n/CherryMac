@@ -1,5 +1,5 @@
-import {clone,requireThat,validateSnapshot,decodeBank,macroCompletionRequirements} from './model.js?v=0.5.0';
-import {keys} from './layout.js?v=0.5.0';
+import {clone,requireThat,validateSnapshot,decodeBank,macroCompletionRequirements} from './model.js?v=0.6.0';
+import {keys} from './layout.js?v=0.6.0';
 const canonical=x=>JSON.stringify(x,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 
 // Quiet/release observation is distinct from execution evidence. The explicit

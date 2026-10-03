@@ -8,4 +8,4 @@ header('Referrer-Policy: no-referrer');
 header('Permissions-Policy: hid=(self)');
 header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
 ?>
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CherryMac · 宏测试</title><link rel="stylesheet" href="assets/style.css?v=0.5.0"><script type="module" src="assets/macro-test-entry.js?v=0.5.0"></script></head><body><main><a href="./">← 返回键盘配置</a><section id="macro-test" class="editor-card"></section></main></body></html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CherryMac · 宏测试</title><link rel="stylesheet" href="assets/style.css?v=0.6.0"><script type="module" src="assets/macro-test-entry.js?v=0.6.0"></script></head><body><main><a href="./">← 返回键盘配置</a><section id="macro-test" class="editor-card"></section></main></body></html>

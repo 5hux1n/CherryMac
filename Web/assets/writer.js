@@ -1,6 +1,6 @@
-import {clone,equal,requireThat,validateSnapshot,decodeBank} from './model.js?v=0.5.0';
-import {editableSlots,modes} from './layout.js?v=0.5.0';
-import {KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.5.0';
+import {clone,equal,requireThat,validateSnapshot,decodeBank} from './model.js?v=0.6.0';
+import {editableSlots,modes} from './layout.js?v=0.6.0';
+import {KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.6.0';
 export const sameSnapshot=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(k=>equal(a[k],b[k]));
 const slots=s=>Array.from({length:126},(_,i)=>i).filter(i=>[0x70,0x71].includes(s.keymap[i*3]));
 function macroDuration(s,indices){const macros=decodeBank(s.macroData);let max=0;

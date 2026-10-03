@@ -9,7 +9,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
 ?>
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CherryMac · 键盘配置</title><link rel="stylesheet" href="assets/style.css?v=0.5.0"><script type="module" src="assets/app.js?v=0.5.0"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CherryMac · 键盘配置</title><link rel="stylesheet" href="assets/style.css?v=0.6.0"><script type="module" src="assets/app.js?v=0.6.0"></script></head>
 <body>
 <div class="app-shell"><aside class="sidebar"><header class="topbar"><a class="brand" href="./"><span class="brandmark">C</span>CherryMac <span class="webtag">WEB</span></a><a href="https://github.com/5hux1n/CherryMac" target="_blank" rel="noopener noreferrer">GitHub ↗</a></header><div class="tabs navigation" role="tablist" aria-label="配置类别" aria-orientation="vertical"><button role="tab" id="tab-keys" data-tab="keys" aria-selected="true">按键功能</button><button role="tab" id="tab-lights" data-tab="lights" aria-selected="false">灯效</button><button role="tab" id="tab-macros" data-tab="macros" aria-selected="false">宏</button><button role="tab" id="tab-profiles" data-tab="profiles" aria-selected="false">配置与备份</button><button role="tab" id="tab-device" data-tab="device" aria-selected="false">设备与诊断</button></div><p class="sidebar-note">MX 3.0S POKÉMON<br>Wireless</p></aside>
 <main>
@@ -50,7 +50,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
     <aside id="review-card" class="review-card"><p class="eyebrow">当前改动</p><h2 id="change-title">待写入按键</h2><div id="changes" class="changes"></div><p id="draft-note" class="help">按键写入只发送键位表，其他配置保留。</p><label class="write-scope">写入范围<select id="scope" disabled><option value="keys">仅按键 · 灯效和宏保留</option></select></label><button id="write" class="primary wide" disabled>写入按键</button><button id="discard" class="wide">撤销编辑区修改</button><p class="help">写入后直接由键盘输出，无需保持网页打开。恢复时导入备份，再写入按键；宏绑定改动暂缓。</p></aside>
   </div>
   <div id="status" class="status" role="status" aria-live="polite">演示模式 · 连接不会自动写入</div>
-  <footer><span>CherryMac Web 0.5.0 · 按键写入版 · 与 CHERRY 官方无关联</span><span>USB 有线 · Chrome / Edge · HTTPS / localhost</span></footer>
+  <footer><span>CherryMac Web 0.6.0 · 按键写入版 · 与 CHERRY 官方无关联</span><span>USB 有线 · Chrome / Edge · HTTPS / localhost</span></footer>
 </main></div>
 <dialog id="confirm"><h2>准备写入键盘</h2><p id="confirm-summary"></p><p>请松开全部按键，包括 Ctrl、Alt、Win 和 Shift，然后用鼠标点击下方按钮。写入期间不要按键，保持此页面在前台。</p><p class="help">浏览器只能检查本页面内的按键事件，无法确认全系统按键是否已释放。写入前会保存备份，完成后完整读回核对。</p><div class="form-row"><button id="cancel-write">返回编辑</button><button id="confirm-write" class="primary">全部已松开，开始写入</button></div></dialog>
 </body></html>

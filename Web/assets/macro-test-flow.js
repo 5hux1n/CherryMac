@@ -1,10 +1,10 @@
-import {clone,equal,requireThat,validateSnapshot,decodeBank,encodeBank,macroBinding,MacroExecutionEvidence} from './model.js?v=0.5.0';
-import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.5.0';
-import {MacroWriteAuthorization} from './safety.js?v=0.5.0';
-import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.5.0';
-import {sameSnapshot} from './writer.js?v=0.5.0';
-import {saveBackup,download,listBackups} from './storage.js?v=0.5.0';
-import {saveLog,listLogs} from './logs.js?v=0.5.0';
+import {clone,equal,requireThat,validateSnapshot,decodeBank,encodeBank,macroBinding,MacroExecutionEvidence} from './model.js?v=0.6.0';
+import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.6.0';
+import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
+import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
+import {sameSnapshot} from './writer.js?v=0.6.0';
+import {saveBackup,download,listBackups} from './storage.js?v=0.6.0';
+import {saveLog,listLogs} from './logs.js?v=0.6.0';
 export const testMacro={name:'CherryMac 实体测试 AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:80},{usage:5,pressed:true,delayMilliseconds:80},{usage:5,pressed:false,delayMilliseconds:80}]};
 export const testPlayback={mode:'count',count:2};
 export function macroTestPlan(before){
