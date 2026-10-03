@@ -676,7 +676,7 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     var keys:[[String:Any]]=WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0,"ActionLinkIndex":-1]}
     let colors:[[String:Any]]=(0..<126).map{["Red":$0,"Green":255-$0,"Blue":17,"Alpha":255]}
     var root:[String:Any]=["//":"47","KeyList":keys,"ActionInfo":[],"LightInfo":["SelectItem":21,"Light":3,"Speed":4,"Fx":0,"MultiColor":1,"Red":1,"Green":2,"Blue":3],"CustomLightMode":["LightColorInfo":[colors]]]
-    func data(_ object:[String:Any])throws->Data{try JSONSerialization.data(withJSONObject:object)}
+    func data(_ object:[String:Any])throws->Data{try JSONSerialization.data(withJSONObject:object,options:.sortedKeys)}
     let simple=try! WindowsProfile.decode(data(root),baseline:baseline)
     precondition(simple.keyCount==107 && simple.colorCount==109 && simple.ignoredKeyCount==19)
     precondition(Array(simple.profile.snapshot.colors![306..<309])==[17,238,17],"logical color 17 belongs to physical calculator matrix 102")
@@ -695,6 +695,16 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     let macro=try! WindowsProfile.decode(data(root),baseline:baseline)
     precondition(macro.macroCount==1 && macro.profile.macroBindings?[102]=="Control A" && macro.profile.macros[0].steps.first!.usage==224)
     precondition(try! CherryMacroCodec.decode(macro.profile.snapshot.macroData!)[0].steps==macro.profile.macros[0].steps)
+    let mixed=KeyboardMacro(name:"Mixed",steps:[.init(usage:231,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:true,delayMilliseconds:25,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:50,kind:.mouse),.init(usage:231,pressed:false,delayMilliseconds:60000)],recordingDelay:.init(fixed:true,milliseconds:77),preferredPlayback:.init(mode:.held,count:1))
+    for playback in [MacroPlayback(count:255),.init(mode:.held,count:1),.init(mode:.toggle,count:1)]{
+        var exportRoot=root;let action=try! WindowsProfile.macroAction(mixed,playback:playback);exportRoot["ActionInfo"]=[action]
+        let exported=try! WindowsProfile.decode(data(exportRoot),baseline:baseline).profile.macros[0]
+        var expected=mixed;expected.preferredPlayback=playback;precondition(exported==expected)
+        let events=(action["ActionContent"] as! [String:Any])["ActionMacroEvents"] as! [[String:Any]]
+        precondition(events[0]["Button"] as! Int==128 && events[1]["Type"] as! Int==1)
+        precondition(try! data(["action":WindowsProfile.macroAction(exported)])==data(["action":action]))
+    }
+    rejected{_ = try WindowsProfile.macroAction(mixed,playback:.init(count:0))}
     var libraryRoot=root
     var libraryActions=root["ActionInfo"] as! [[String:Any]]
     var libraryAction=libraryActions[0];libraryAction["ActionType"]="02"

@@ -101,6 +101,16 @@ function physicalSlot(v){
   if(v>>16===0x20&&((v>>8)&255)===0){const slot=SLOTS[v&255];return [10,75].includes(slot)?undefined:slot;}
   return ({[0xa00300]:6,[0xa00100]:71,[0x200100]:5,[0x200200]:4,[0x200400]:17,[0x200800]:11,[0x201000]:83,[0x202000]:82,[0x204000]:65,[0x309201]:102,[0x30b600]:108,[0x30cd00]:114,[0x30b500]:120})[v];
 }
+// ActionInfo building block; this does not yet export a whole official document.
+export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'count',count:1}){
+  validateMacro(m);validatePlayback(playback);
+  return {ActionType:2,ActionName:m.name,ActionContent:{
+    ActionMacroType:['count','held','toggle'].indexOf(playback.mode),ActionMacroLoopValue:playback.count,
+    ActionMacroFixTimeIsSelected:m.recordingDelay?.fixed?1:0,ActionMacroFixTimeValue:m.recordingDelay?.milliseconds??0,
+    ActionMacroEvents:m.steps.map(s=>{const mouse=s.kind==='mouse',modifier=!mouse&&s.usage>=224;
+      return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};})
+  }};
+}
 export function importWindows(root,baseline){
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));

@@ -51,6 +51,25 @@ enum WindowsProfile {
         guard let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]else{return false}
         return root["KeyList"] != nil || root["DeviceBasicInfo"] != nil
     }
+    // ActionInfo serializer shared by the forthcoming full-document exporter.
+    // An explicit key binding takes precedence over the library preference.
+    static func macroAction(_ macro:KeyboardMacro,playback:MacroPlayback?=nil)throws->[String:Any] {
+        try macro.validate()
+        let selected=playback ?? macro.preferredPlayback ?? .once
+        try selected.validate()
+        let mode=selected.mode == .count ? 0:selected.mode == .held ? 1:2
+        let events:[[String:Any]]=macro.steps.map{step in
+            let mouse=step.kind == .mouse,modifier = !mouse && step.usage>=224
+            return ["Type":mouse ? 1:modifier ? 9:10,
+                    "Button":modifier ? 1 << Int(step.usage-224):Int(step.usage),
+                    "Action":step.pressed ? "down":"up","Delay":step.delayMilliseconds]
+        }
+        return ["ActionType":2,"ActionName":macro.name,"ActionContent":[
+            "ActionMacroType":mode,"ActionMacroLoopValue":selected.count,
+            "ActionMacroFixTimeIsSelected":macro.recordingDelay?.fixed == true ? 1:0,
+            "ActionMacroFixTimeValue":macro.recordingDelay?.milliseconds ?? 0,
+            "ActionMacroEvents":events]]
+    }
     static func decode(_ data:Data,baseline:HardwareSnapshot)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
         try baseline.validate()

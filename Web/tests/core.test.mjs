@@ -4,7 +4,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -196,6 +196,21 @@ test('Windows macro playback imports all supported bindings without changing the
     const p=importWindows(root,base);assert.deepEqual(p.snapshot.keymap.slice(306,309),record);assert.deepEqual(base,old);
     root.ActionInfo[0].ActionContent.ActionMacroType=3;assert.throws(()=>importWindows(root,base));assert.deepEqual(base,old);
   }
+});
+
+test('official macro actions roundtrip modifier masks, mouse identity, timing and per-binding playback',()=>{
+  const original={name:'Mixed',recordingDelay:{fixed:true,milliseconds:77},preferredPlayback:{mode:'held',count:1},steps:[
+    {usage:231,pressed:true,delayMilliseconds:0},{kind:'mouse',usage:4,pressed:true,delayMilliseconds:25},
+    {kind:'mouse',usage:4,pressed:false,delayMilliseconds:50},{usage:231,pressed:false,delayMilliseconds:60000}]};
+  for(const playback of [{mode:'count',count:255},{mode:'held',count:1},{mode:'toggle',count:1}]){
+    const root=windowsFixture(),a=officialMacroAction(original,playback);root.ActionInfo=[a];
+    assert.equal(a.ActionContent.ActionMacroEvents[0].Button,128);assert.equal(a.ActionContent.ActionMacroEvents[1].Type,1);
+    const p=importWindows(root,demoSnapshot());assert.deepEqual(p.macros[0],{...original,preferredPlayback:playback});
+    assert.deepEqual(officialMacroAction(p.macros[0]),a);
+  }
+  assert.equal(officialMacroAction(original).ActionContent.ActionMacroType,1);
+  assert.throws(()=>officialMacroAction(original,{mode:'count',count:0}));
+  assert.equal(original.preferredPlayback.mode,'held');
 });
 
 test('Windows imports unbound macro library once, preserves preferences and rejects invalid libraries atomically',()=>{
