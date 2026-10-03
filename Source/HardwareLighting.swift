@@ -67,6 +67,7 @@ extension HardwareWindowController {
         setLightColor(LightRGB(colors[slot*3],colors[slot*3+1],colors[slot*3+2]))
     }
     func controlTextDidChange(_ notification:Notification){
+        if let field=notification.object as? NSTextField,field===macroName || field===macroRepeat{updateMacroSummary();return}
         guard let field=notification.object as? NSTextField else{return}
         if field.tag==104{colorEditSource=2}else if (101...103).contains(field.tag){colorEditSource=1}
     }

@@ -85,7 +85,7 @@ final class HardwareNavigationButton:NSButton {
     }
 }
 
-final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSWindowDelegate {
+final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
     let connection = NSTextField(labelWithString:"尚未读取键盘")
@@ -125,6 +125,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let macroDelay = NSTextField(string:"50")
     let macroPlayback=NSPopUpButton()
     let macroRepeat=NSTextField(string:"1")
+    let macroSummary=NSTextField(wrappingLabelWithString:"")
     let queue = DispatchQueue(label:"local.cherrymac.hardware")
     var keyButtons:[KeyButton] = []
     var tabButtons:[NSButton]=[]
@@ -210,6 +211,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("复制",#selector(copyMacro)),456,8,64,28,in:macros)
         place(button("清空",#selector(clearMacros)),527,8,64,28,in:macros)
         place(label("名称"),8,57,90,24,in:macros);controls.append(macroName);place(macroName,116,53,333,28,in:macros)
+        macroSummary.font = .systemFont(ofSize:11);macroSummary.textColor = .secondaryLabelColor
+        place(macroSummary,463,45,412,51,in:macros)
+        macroName.delegate=self;macroRepeat.delegate=self;macroText.delegate=self
         let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:120));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
         macroText.frame=NSRect(origin:.zero,size:macroScroll.contentSize);macroText.minSize=NSSize(width:0,height:macroScroll.contentSize.height);macroText.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
         macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
@@ -552,7 +556,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard target != index else{return}
         let line=lines.remove(at:index);lines.insert(line,at:target);macroText.string=lines.joined(separator:"\n")
         let offset=lines.prefix(target).reduce(0){$0+($1 as NSString).length+1}
-        macroText.setSelectedRange(NSRange(location:offset,length:(line as NSString).length));macroText.scrollRangeToVisible(macroText.selectedRange())
+        macroText.setSelectedRange(NSRange(location:offset,length:(line as NSString).length));macroText.scrollRangeToVisible(macroText.selectedRange());updateMacroSummary()
         message.stringValue="步骤顺序已调整；保存宏时检查按下与松开是否配对。"
     }
     func parsedMacroSteps()throws->[KeyboardMacro.Step]{
@@ -575,7 +579,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard let self else{return};self.macroStepEditor=nil
                 guard let result else{self.message.stringValue="步骤编辑已取消，原步骤保留。";return}
                 self.macroText.string=result.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
-                self.message.stringValue="已采用 \(result.count) 个步骤，请点击保存宏。"
+                self.updateMacroSummary();self.message.stringValue="已采用 \(result.count) 个步骤，请点击保存宏。"
             }
             macroStepEditor=editor;parent.beginSheet(editor.window!)
         }catch{message.stringValue=error.localizedDescription}
@@ -618,7 +622,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let slot=keyboardLayout().first(where:{$0.id==selected}).flatMap{CherryMatrix.slot($0)}
         let playback=slot.flatMap{profile.macroBindings?[$0]==macro.name ? profile.macroModes?[$0]:nil} ?? macro.preferredPlayback ?? .once
         macroPlayback.selectItem(at:[MacroPlayback.Mode.count,.held,.toggle].firstIndex(of:playback.mode) ?? 0);macroRepeat.stringValue=String(playback.count)
-        macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+        macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n");updateMacroSummary()
     }
     @objc func recordMacro(){
         guard !busy,profile?.macroBindings != nil,let parent=window,macroRecordingSheet==nil else{return}
@@ -627,15 +631,38 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let macro else{self.message.stringValue="录制已取消，原步骤保留。";return}
             self.recordingPreference=macro.recordingDelay;self.macroName.stringValue=macro.name
             self.macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
-            self.message.stringValue="已采用 \(macro.steps.count) 个录制事件，请点击保存宏。"
+            self.updateMacroSummary();self.message.stringValue="已采用 \(macro.steps.count) 个录制事件，请点击保存宏。"
         }
         macroRecordingSheet=sheet;parent.beginSheet(sheet.window!)
     }
     @objc func appendMacroKey(){
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
         macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 \(delay)\n\(key) 松开 0"
+        updateMacroSummary()
     }
-    @objc func playbackChanged(){macroRepeat.isEnabled = !busy && macroPlayback.indexOfSelectedItem==0}
+    func textDidChange(_ notification:Notification){updateMacroSummary()}
+    func updateMacroSummary(){
+        guard let profile,profile.macroBindings != nil else{macroSummary.stringValue="读取完整配置后显示宏容量。";return}
+        do{
+            let saved=try CherryMacroCodec.encode(profile.macros),used=profile.macros.isEmpty ? 0:Int(saved[2]) | Int(saved[3])<<8
+            let library="宏库 \(profile.macros.count)/32 · 已占用 \(used)/3071 字节"
+            guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{macroSummary.stringValue=library+"\n添加或录制步骤后显示本次保存容量。";return}
+            do{
+                let steps=try parsedMacroSteps(),macro=KeyboardMacro(name:macroName.stringValue,steps:steps)
+                var draft=profile.macros;let index=macroPicker.indexOfSelectedItem-1
+                if draft.indices.contains(index){draft[index]=macro}else{draft.append(macro)}
+                guard Set(draft.map{$0.name}).count==draft.count else{throw HardwareError(message:"宏名称已存在。")}
+                let bank=try CherryMacroCodec.encode(draft),next=Int(bank[2]) | Int(bank[3])<<8
+                let cycle=steps.reduce(0){$0+$1.delayMilliseconds}
+                guard let count=macroPlayback.indexOfSelectedItem==0 ? Int(macroRepeat.stringValue):1 else{throw HardwareError(message:"请输入宏执行次数。")}
+                let mode:[MacroPlayback.Mode]=[.count,.held,.toggle]
+                let playback=MacroPlayback(mode:mode[max(0,macroPlayback.indexOfSelectedItem)],count:count);try playback.validate()
+                let duration=playback.mode == .count ? "\(cycle*count) ms":"每轮 \(cycle) ms · 持续执行"
+                macroSummary.stringValue=library+"\n本次保存 \(next)/3071 字节 · \(steps.count) 步\n设定等待总量："+duration
+            }catch{macroSummary.stringValue=library+"\n本次保存："+error.localizedDescription}
+        }catch{macroSummary.stringValue="宏容量暂不可计算："+error.localizedDescription}
+    }
+    @objc func playbackChanged(){macroRepeat.isEnabled = !busy && macroPlayback.indexOfSelectedItem==0;updateMacroSummary()}
     @objc func assignMacro(){
         do{guard var p=profile,macroPicker.indexOfSelectedItem>0,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key)else{throw HardwareError(message:"请先保存并选择一个宏，再点选键盘按键。")}
             let mode:[MacroPlayback.Mode]=[.count,.held,.toggle]

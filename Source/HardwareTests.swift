@@ -609,7 +609,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     editor.macroKey.selectItem(withTitle:"A");editor.macroDelay.stringValue="50"
     let keysBeforeSave=editor.profile!.snapshot.keymap
     editor.macroPlayback.selectItem(at:0);editor.macroRepeat.stringValue="5"
-    editor.appendMacroKey();editor.stageMacro()
+    editor.appendMacroKey();editor.stageMacro();precondition(editor.macroSummary.stringValue.contains("30/3071") && editor.macroSummary.stringValue.contains("250 ms"))
     precondition(editor.profile!.macros[0].preferredPlayback == .init(mode:.count,count:5))
     precondition(editor.profile!.snapshot.keymap==keysBeforeSave,"saving a default must not assign a trigger")
     precondition(editor.profile!.macros.count==1 && editor.profile!.macros[0].steps.map{$0.usage}==[4,4])
@@ -631,7 +631,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(reorder.macroText.string=="A 松开 50\nB 按下 0\nB 松开 50\nA 按下 0")
     move.tag=0;reorder.moveMacroStep(move);precondition(reorder.macroText.string=="A 按下 0\nA 松开 50\nB 按下 0\nB 松开 50")
     let saved=editor.profile
-    editor.macroText.string="A 按下 0";editor.stageMacro()
+    editor.macroText.string="A 按下 0";editor.updateMacroSummary();precondition(editor.macroSummary.stringValue.contains("必须释放"));editor.stageMacro()
     precondition(editor.profile==saved,"invalid macro must preserve the saved draft")
     editor.macroPicker.selectItem(at:0);editor.macroName.stringValue="数字键";editor.macroText.string="4 按下 0\n4 松开 50";editor.stageMacro()
     precondition(editor.profile!.macros.last!.steps.map{$0.usage}==[33,33],"digit names are keyboard digits, not raw HID codes")

@@ -16,6 +16,7 @@ try{
   await page.locator('#macro-name').fill('默认五次');await page.locator('#add-pair').click();
   await page.locator('#macro-playback').selectOption('count');await page.locator('#macro-repeat').fill('5');await page.locator('#save-macro').click();
   assert.equal(await page.locator('#macro-repeat').inputValue(),'5');
+  assert.match(await page.locator('#macro-summary').textContent(),/30\/3071 字节.*150 ms/);
   await page.locator('#assign-macro').click();
   await page.locator('#macro-repeat').fill('7');await page.locator('#save-macro').click();
   assert.equal(await page.locator('#macro-repeat').inputValue(),'7');
@@ -30,6 +31,11 @@ try{
   assert.deepEqual(profile.macros[0].steps.map(step=>step.delayMilliseconds),[30,0]);
   await page.locator('#tab-macros').click();await page.locator('#macro-repeat').fill('0');await page.locator('#save-macro').click();
   assert.equal(await page.locator('#status').evaluate(node=>node.classList.contains('error')),true);
+  assert.equal(await page.locator('#macro-summary').evaluate(node=>node.classList.contains('error')),true);
+  await page.locator('#macro-repeat').fill('1');
+  await page.locator('#macro-name').fill('👩‍💻'.repeat(25));await page.locator('#save-macro').click();
+  assert.equal(await page.locator('#macro-name').inputValue(),'👩‍💻'.repeat(25));
+  assert.match(await page.locator('#macro-summary').textContent(),/30\/3071 字节.*30 ms/);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
   console.log('Macro form defaults preserved; existing trigger unchanged; invalid count rejected; no USB access.');
 }finally{await browser.close();}
