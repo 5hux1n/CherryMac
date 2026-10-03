@@ -39,5 +39,28 @@ try{
  const bad=save('changed-event.json',invalid),rejected=join(directory,'rejected.json');
  invoke(['--export-windows-keys-macros',rejected,'--profile',bad,'--template',t],false);assert.equal(existsSync(rejected),false);
  assert.throws(()=>exportWindowsKeysAndMacros(invalid,template));
- console.log('PASS: native/Web official export equality, five-bank import equality, metadata, playback variants, source protection and ambiguous-event rejection');
+ // Differing metadata on same-name official actions must never be silently
+ // assigned to one current macro. Both implementations reject that ambiguity.
+ const ambiguous=clone(template);ambiguous.ActionInfo.push({...clone(action),opaque:{id:43}});
+ const ambiguousPath=save('ambiguous-template.json',ambiguous);
+ invoke(['--export-windows-keys-macros',rejected,'--profile',p,'--template',ambiguousPath],false);
+ assert.equal(existsSync(rejected),false);assert.throws(()=>exportWindowsKeysAndMacros(profile,ambiguous));
+ // A library with unbound items must survive export/import; repeated bindings
+ // to one mode must share an action rather than consume duplicate bank slots.
+ const library=clone(profile),libraryTemplate=clone(template);
+ library.macros.push({...clone(macro),name:'Unbound',preferredPlayback:{mode:'count',count:3}});
+ library.macroBindings[120]='Mixed';library.macroModes[120]={mode:'count',count:2};library.snapshot=resolveMacros(library);
+ libraryTemplate.ActionInfo.push({ActionType:3,ActionName:'Untouched text',ActionContent:{ActionText:'preserve'}});
+ libraryTemplate.KeyList[79].ActionLink=1;libraryTemplate.KeyList[79].ActionLinkIndex=1;
+ const lp=save('library.json',library),lt=save('library-template.json',libraryTemplate),lo=join(directory,'library-export.json');
+ invoke(['--export-windows-keys-macros',lo,'--profile',lp,'--template',lt]);
+ const libraryOut=JSON.parse(readFileSync(lo,'utf8'));assert.deepEqual(libraryOut,exportWindowsKeysAndMacros(library,libraryTemplate));
+ assert.deepEqual(libraryOut.ActionInfo[0],libraryTemplate.ActionInfo[1]);assert.equal(libraryOut.KeyList[79].ActionLinkIndex,0);
+ assert.equal(libraryOut.ActionInfo.filter(a=>a.ActionType===2&&a.ActionName==='Mixed'&&a.ActionContent.ActionMacroLoopValue===2).length,1);
+ invoke(['--convert-windows-profile',converted,'--profile',lo,'--baseline',b]);
+ const importedLibrary=JSON.parse(readFileSync(converted,'utf8')),webLibrary=importWindows(libraryOut,baseline);
+ for(const field of ['deviceInfo','parameters','keymap','colors','macroData'])assert.deepEqual(importedLibrary.snapshot[field],webLibrary.snapshot[field],field);
+ assert.deepEqual(importedLibrary.macros,webLibrary.macros);assert.ok(importedLibrary.macros.some(m=>m.name==='Unbound'&&m.preferredPlayback.count===3));
+ assert.deepEqual(importedLibrary.macroBindings,webLibrary.macroBindings);
+ console.log('PASS: native/Web official export equality, five-bank import equality, unbound libraries, shared bindings, hidden text references, metadata, playback variants, source protection and ambiguity rejection');
 }finally{rmSync(directory,{recursive:true,force:true});}
