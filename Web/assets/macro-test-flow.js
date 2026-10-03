@@ -11,6 +11,8 @@ export function macroTestScenario(id='ab-twice'){
   const definitions={
     'ab-twice':{label:'AB 两次',macro:testMacro,playback:testPlayback},
     'ab-once':{label:'AB 一次',macro:testMacro,playback:{mode:'count',count:1}},
+    held:{label:'AB 按住持续、松开停止',macro:testMacro,playback:{mode:'held',count:1}},
+    toggle:{label:'AB 开关、再次按键停止',macro:testMacro,playback:{mode:'toggle',count:1}},
     'ab-three':{label:'AB 三次',macro:testMacro,playback:{mode:'count',count:3}},
     modifier:{label:'Shift+A 一次（全部释放）',macro:{name:'CherryMac 修饰键测试',steps:[{usage:225,pressed:true,delayMilliseconds:0},{usage:4,pressed:true,delayMilliseconds:80},{usage:4,pressed:false,delayMilliseconds:80},{usage:225,pressed:false,delayMilliseconds:80}]},playback:{mode:'count',count:1}},
     mouse:{label:'鼠标中键一次（按下并释放）',macro:{name:'CherryMac 鼠标中键测试',steps:[{usage:4,pressed:true,delayMilliseconds:0,kind:'mouse'},{usage:4,pressed:false,delayMilliseconds:80,kind:'mouse'}]},playback:{mode:'count',count:1}}
@@ -29,19 +31,21 @@ export function macroTestPlan(before,scenarioId='ab-twice'){
 export class MacroTestFlow {
   constructor(root,{scenarioId='ab-twice',includePowerCycle=undefined,selectDevice=()=>navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]}),makeHID=(device,options)=>new CherryHID(device,options),hidEvents=navigator.hid,now=()=>Math.floor(performance.now())}={}){
     this.includePowerCycle=includePowerCycle??(scenarioId==='ab-twice');this.scenario=macroTestScenario(scenarioId);this.root=root;this.selectDevice=selectDevice;this.makeHID=makeHID;this.hidEvents=hidEvents;this.now=now;this.id=crypto.randomUUID();this.phase='prepared';this.busy=false;this.writeAttempted=false;this.errors=[];this.gate=new PageReleaseGate();this.logs=Promise.resolve();this.logError=null;this.operationIds=new Set([this.id]);this.interruptions=[];
-    root.innerHTML='<h1>宏 · 写入与断电测试</h1><p class="help">仅测试计算器键的独立宏场景。电源关闭由你确认；网页只能观察此页面的输入。</p><label class="form-row">本轮测试<select id="macro-test-scenario"></select></label><p class="notice" id="macro-test-status" role="status">先连接 USB 有线键盘，保存完整备份。</p><div class="form-row"><button class="primary" id="macro-test-next">连接并读取</button><button id="macro-test-restore" disabled>停止测试并恢复</button><button id="macro-test-export">导出本轮日志</button><button id="macro-test-resume">恢复以前中断的测试</button></div><label><input type="checkbox" id="macro-test-power">本轮同时测试断电保留</label><label><input type="checkbox" id="macro-test-off" disabled>已关闭键盘电源（不只是拔 USB）</label><p id="macro-test-area" tabindex="0" class="macro-stop-area">输出观察区 · 按提示开始后，再按计算器键。</p>';
+    root.innerHTML='<h1>宏 · 写入与断电测试</h1><p class="help">仅测试计算器键的独立宏场景。电源关闭由你确认；网页只能观察此页面的输入。</p><label class="form-row">本轮测试<select id="macro-test-scenario"></select></label><p class="notice" id="macro-test-status" role="status">先连接 USB 有线键盘，保存完整备份。</p><div class="form-row"><button class="primary" id="macro-test-next">连接并读取</button><button id="macro-test-stop" hidden disabled>已停止，核对输出</button><button id="macro-test-restore" disabled>停止测试并恢复</button><button id="macro-test-export">导出本轮日志</button><button id="macro-test-resume">恢复以前中断的测试</button></div><label><input type="checkbox" id="macro-test-power">本轮同时测试断电保留</label><label><input type="checkbox" id="macro-test-off" disabled>已关闭键盘电源（不只是拔 USB）</label><p id="macro-test-area" tabindex="0" class="macro-stop-area">输出观察区 · 按提示开始后，再按计算器键。</p>';
     root.querySelector('.help').textContent=`本轮：${this.scenario.label}。电源关闭由你确认；网页只能观察此页面的输入。`;
     this.powerOption=root.querySelector('#macro-test-power');this.powerOption.checked=this.includePowerCycle;
     this.scenarioPicker=root.querySelector('#macro-test-scenario');
-    for(const id of ['ab-once','ab-twice','ab-three','modifier','mouse']){const option=document.createElement('option');option.value=id;option.textContent=macroTestScenario(id).label;this.scenarioPicker.append(option);}
+    for(const id of ['ab-once','ab-twice','ab-three','modifier','mouse','held','toggle']){const option=document.createElement('option');option.value=id;option.textContent=macroTestScenario(id).label;this.scenarioPicker.append(option);}
     this.scenarioPicker.value=this.scenario.id;
+    this.stopButton=root.querySelector('#macro-test-stop');this.stopButton.hidden=this.scenario.playback.mode==='count';this.stopMarker=null;
     this.status=root.querySelector('#macro-test-status');this.next=root.querySelector('#macro-test-next');this.restore=root.querySelector('#macro-test-restore');this.off=root.querySelector('#macro-test-off');this.area=root.querySelector('#macro-test-area');this.listeners=[];
     const listen=(target,type,fn,options)=>{target?.addEventListener(type,fn,options);this.listeners.push(()=>target?.removeEventListener(type,fn,options));};
     listen(this.powerOption,'change',()=>{if(this.busy||!['prepared','ready'].includes(this.phase)){this.powerOption.checked=this.includePowerCycle;return;}this.includePowerCycle=this.powerOption.checked;void this.record();});
     listen(this.scenarioPicker,'change',()=>{
       if(this.busy||this.phase!=='prepared'){this.scenarioPicker.value=this.scenario.id;return;}
-      this.scenario=macroTestScenario(this.scenarioPicker.value);this.includePowerCycle=this.scenario.id==='ab-twice';this.powerOption.checked=this.includePowerCycle;root.querySelector('.help').textContent=`本轮：${this.scenario.label}。电源关闭由你确认；网页只能观察此页面的输入。`;
+      this.scenario=macroTestScenario(this.scenarioPicker.value);this.includePowerCycle=this.scenario.id==='ab-twice';this.powerOption.checked=this.includePowerCycle;this.stopButton.hidden=this.scenario.playback.mode==='count';root.querySelector('.help').textContent=`本轮：${this.scenario.label}。电源关闭由你确认；网页只能观察此页面的输入。`;
     });
+    listen(this.stopButton,'click',e=>this.act(e,()=>this.markStopped()));
     listen(this.next,'click',e=>this.act(e,()=>this.advance()));listen(this.restore,'click',e=>this.act(e,()=>this.recover()));
     listen(root.querySelector('#macro-test-export'),'click',()=>this.export());
     listen(root.querySelector('#macro-test-resume'),'click',e=>this.act(e,()=>this.resume()));
@@ -61,7 +65,7 @@ export class MacroTestFlow {
   }
   async flush(){await this.logs;requireThat(!this.logError,'日志无法保存，停止写入。');}
   transition(phase,text){this.phase=phase;this.status.textContent=text;this.render();void this.record();}
-  render(){this.powerOption.disabled=this.busy||!['prepared','ready'].includes(this.phase);this.scenarioPicker.disabled=this.busy||this.phase!=='prepared';this.next.disabled=this.busy||!['prepared','ready','observeReady','restoreReady','complete'].includes(this.phase);this.restore.disabled=this.busy||!this.plan||this.restored||this.phase==='ready';this.off.disabled=this.phase!=='reconnect'||this.offAt!=null;
+  render(){this.stopButton.disabled=true;this.powerOption.disabled=this.busy||!['prepared','ready'].includes(this.phase);this.scenarioPicker.disabled=this.busy||this.phase!=='prepared';this.next.disabled=this.busy||!['prepared','ready','observeReady','restoreReady','complete'].includes(this.phase);this.restore.disabled=this.busy||!this.plan||this.restored||this.phase==='ready';this.off.disabled=this.phase!=='reconnect'||this.offAt!=null;
     this.root.querySelector('#macro-test-resume').disabled=this.busy||!!this.plan;
     this.next.textContent=({prepared:'连接并读取',ready:'备份并写入测试宏',observeReady:'开始输出观察',restoreReady:'恢复原配置',complete:'本轮已结束'})[this.phase]??'等候当前步骤';}
   fail(message,interruption='cancelled',persist=true){if(this.phase==='observing'){this.evidence?.invalidate(interruption);if(!this.interruptions.includes(interruption))this.interruptions.push(interruption);void this.saveExecution();}this.errors.push(message);this.gate.invalidate();this.phase='failed';this.status.textContent=message;this.render();if(persist)void this.record();}
@@ -75,7 +79,7 @@ export class MacroTestFlow {
       const after=await applyMacroWithStop(this.hid,this.plan.expected,this.plan.before,{gate:this.gate,backup:saveBackup});requireThat(sameSnapshot(after,this.plan.expected),'目标读回不一致。');
       requireThat(this.phase==='writing','写入期间流程中断，请恢复原配置。');this.transition('observeReady','写入读回一致。点击开始，再按下并完全松开计算器键一次。');
     }else if(this.phase==='observeReady'){
-      requireThat(!this.hid.dead&&document.hasFocus()&&document.visibilityState==='visible','请连接键盘并保持页面前台。');this.started=this.now();this.interruptions=[];this.evidence=new MacroExecutionEvidence({macro:this.scenario.macro,playback:this.scenario.playback,source:'focusedBrowser',startedMilliseconds:this.started});this.transition('observing',`现在按计算器键一次。预期 ${this.scenario.label}，共 ${this.scenario.macro.steps.length*this.scenario.playback.count} 个按下／松开事件。`);this.area.focus();
+      requireThat(!this.hid.dead&&document.hasFocus()&&document.visibilityState==='visible','请连接键盘并保持页面前台。');this.started=this.now();this.stopMarker=null;this.interruptions=[];this.evidence=new MacroExecutionEvidence({macro:this.scenario.macro,playback:this.scenario.playback,source:'focusedBrowser',startedMilliseconds:this.started});this.transition('observing',this.scenario.id==='held'?'按住计算器键约两秒，观察至少两轮 AB 后松开；再点击「已停止，核对输出」。':this.scenario.id==='toggle'?'按一下计算器键启动，约两秒后再次按一下停止；再点击「已停止，核对输出」。':`现在按计算器键一次。预期 ${this.scenario.label}，共 ${this.scenario.macro.steps.length*this.scenario.playback.count} 个按下／松开事件。`);this.area.focus();
     }else if(this.phase==='restoreReady')await this.recover();
   }
   input(event,pressed){if(this.phase!=='observing'||!event.isTrusted)return;event.preventDefault();try{
@@ -83,12 +87,19 @@ export class MacroTestFlow {
     requireThat(!event.isComposing&&usage!=null,'检测到测试场景之外的按键。');
     this.evidence.observe({usage,pressed,milliseconds:this.now()});void this.saveExecution();
   }catch(e){this.fail(e.message,'reportRejected');}}
-  mouseInput(event,pressed){if(this.phase!=='observing'||!event.isTrusted)return;event.preventDefault();try{
+  mouseInput(event,pressed){if(this.phase!=='observing'||!event.isTrusted)return;if(this.scenario.playback.mode!=='count'&&event.button===0&&event.target===this.stopButton)return;event.preventDefault();try{
     requireThat(this.scenario.id==='mouse'&&event.button===1,'检测到测试场景之外的鼠标按钮。');
     this.evidence.observe({usage:4,kind:'mouse',pressed,milliseconds:this.now()});void this.saveExecution();
   }catch(e){this.fail(e.message,'reportRejected');}}
-  async saveExecution(){if(!this.evidence)return;const log={id:`${this.id}-${this.powerVerified?'after':'before'}`,operationId:this.id,kind:'macroExecution',bindingSlot:102,at:new Date().toISOString(),format:'CherryMacMacroExecution',version:1,macro:clone(this.scenario.macro),playback:clone(this.scenario.playback),source:'focusedBrowser',startedMilliseconds:this.started,events:this.evidence.observations,stop:null,assessedMilliseconds:this.now(),interruptions:clone(this.interruptions)};this.logs=this.logs.then(()=>saveLog(log)).catch(e=>{this.logError=e;this.fail('输出日志保存失败。','loggingFailed',false);});return this.logs;}
-  poll(){if(this.phase!=='observing')return;try{const assessment=this.evidence.assessment(this.now());if(assessment.status==='failed'){this.fail(assessment.failure,'reportRejected');return;}if(assessment.passed){
+  async markStopped(){
+    requireThat(this.phase==='observing'&&this.scenario.playback.mode!=='count'&&!this.stopMarker,'当前不能确认停止。');
+    const at=this.now(),assessment=this.evidence.assessment(at);
+    requireThat(assessment.completedCycles>=2&&assessment.held.length===0&&assessment.status!=='failed','先观察至少两轮完整输出，再停止并松开全部键。');
+    this.stopMarker={milliseconds:at,source:'userAcknowledged'};this.evidence.requestStop(this.stopMarker);
+    this.status.textContent='已记录停止确认，继续观察释放及静默；检测到新的按下会使测试失败。';await this.saveExecution();
+  }
+  async saveExecution(){if(!this.evidence)return;const log={id:`${this.id}-${this.powerVerified?'after':'before'}`,operationId:this.id,kind:'macroExecution',bindingSlot:102,at:new Date().toISOString(),format:'CherryMacMacroExecution',version:1,macro:clone(this.scenario.macro),playback:clone(this.scenario.playback),source:'focusedBrowser',startedMilliseconds:this.started,events:this.evidence.observations,stop:this.stopMarker?clone(this.stopMarker):null,assessedMilliseconds:this.now(),interruptions:clone(this.interruptions)};this.logs=this.logs.then(()=>saveLog(log)).catch(e=>{this.logError=e;this.fail('输出日志保存失败。','loggingFailed',false);});return this.logs;}
+  poll(){if(this.phase==='reconnect'&&this.offAt!=null){const remaining=Math.max(0,Math.ceil((15000-(this.now()-this.offAt))/1000));this.status.textContent=remaining>0?`已确认关闭电源，还需等待 ${remaining} 秒；先不要开电或接 USB。`:'15 秒已满。现在可以开电、接 USB 并切回有线模式。';}if(this.phase!=='observing')return;try{const assessment=this.evidence.assessment(this.now());this.stopButton.disabled=this.busy||this.scenario.playback.mode==='count'||!!this.stopMarker||assessment.completedCycles<2||assessment.held.length!==0||assessment.status==='failed';if(assessment.status==='failed'){this.fail(assessment.failure,'reportRejected');return;}if(assessment.passed){
       if(this.powerVerified){this.secondPassed=true;this.transition('restoreReady','断电后的输出检查通过。点击恢复原配置。');}else{this.firstPassed=true;if(this.includePowerCycle)this.transition('disconnect','输出检查通过。拔下 USB 并关闭键盘电源；断开后勾选确认。');else this.transition('restoreReady','输出与释放检查通过。本轮未选择断电测试；保持 USB 连接，点击恢复原配置。');}void this.saveExecution();
     }else if(this.now()-this.started>300000)this.fail('观察超时，请停止测试并恢复。');}catch(e){this.fail(e.message,'loggingFailed');}}
   disconnected(){if(this.phase==='disconnect'){this.disconnectedAt=this.now();this.transition('reconnect','USB 已断开。请关闭键盘电源，勾选确认并等待至少 15 秒。');}else if(!['reconnect','complete'].includes(this.phase))this.fail('键盘在预定步骤外断开；重连后恢复原配置。','observerDisconnected');}
