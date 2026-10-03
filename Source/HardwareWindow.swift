@@ -407,7 +407,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func exportProfile(){guard let p=profile else{message.stringValue="请先读取或导入配置。";return};let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json";panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{try p.encoded().write(to:url,options:.atomic);self?.message.stringValue="配置已导出。"}catch{self?.message.stringValue=error.localizedDescription}}}
     func loadImport(_ data:Data)throws {
         guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}
-        guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
+        guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")}
         let next:HardwareProfile;let summary:String
         if WindowsProfile.isOfficial(data){
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}

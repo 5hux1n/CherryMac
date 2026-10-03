@@ -51,6 +51,12 @@ enum WindowsProfile {
         guard let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]else{return false}
         return root["KeyList"] != nil || root["DeviceBasicInfo"] != nil
     }
+    static func templateRoot(_ data:Data)throws->[String:Any] {
+        guard data.count<=1_000_000,let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],
+              root["//"] as? String=="47",let keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"需要本型号的官方配置模板（不超过 1 MB）。")}
+        for (i,key) in keys.enumerated(){guard try integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF)==defaults[i] else{throw HardwareError(message:"Windows 键盘布局不匹配。")}}
+        return root
+    }
     // ActionInfo serializer shared by the forthcoming full-document exporter.
     // An explicit key binding takes precedence over the library preference.
     static func macroAction(_ macro:KeyboardMacro,playback:MacroPlayback?=nil)throws->[String:Any] {
@@ -74,9 +80,7 @@ enum WindowsProfile {
     // preserving lighting, device settings and unrelated/unknown fields.
     static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data)throws->Data {
         try profile.validate();let snapshot=try profile.resolvedMacros()
-        guard template.count<=1_000_000,var root=try JSONSerialization.jsonObject(with:template) as? [String:Any],
-              root["//"] as? String=="47",var keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"需要本型号的官方配置模板。")}
-        for (i,key) in keys.enumerated(){guard try integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF)==defaults[i] else{throw HardwareError(message:"Windows 键盘布局不匹配。")}}
+        var root=try templateRoot(template),keys=root["KeyList"] as! [[String:Any]]
         if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
         let old=root["ActionInfo"] as? [[String:Any]] ?? []
         var actions:[[String:Any]]=[],remap:[Int:Int]=[:],variants:[String:Int]=[:],emitted:[KeyboardMacro]=[]
@@ -123,6 +127,7 @@ enum WindowsProfile {
         if let object=root["ActionInfo"],!(object is NSNull),!(object is [[String:Any]]){throw HardwareError(message:"Windows ActionInfo 结构无效。")}
         let actions=root["ActionInfo"] as? [[String:Any]] ?? []
         var result=try HardwareProfile.fromHardware(baseline)
+        result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
         let oldBindings=result.macroBindings ?? [:]
         let physicalSlots=Set(defaults.compactMap{physicalSlot($0)})
         // Replace the imported physical bindings while preserving any raw hidden data.

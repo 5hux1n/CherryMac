@@ -45,9 +45,12 @@ struct HardwareProfile: Codable, Equatable {
     // Optional keeps older exported profiles readable.
     var macroBindings: [Int:String]? = nil
     var macroModes:[Int:MacroPlayback]? = nil
+    // Original official document, retained locally for lossless unknown fields.
+    var windowsTemplateJSON:String? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
+        if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
         for macro in macros { try macro.validate() }
         guard Set(macros.map { $0.name }).count == macros.count else { throw HardwareError(message: "宏名称不能重复。") }
         for (slot,playback) in macroModes ?? [:]{
@@ -121,7 +124,7 @@ struct HardwareProfile: Codable, Equatable {
         draft.snapshot=try draft.resolvedMacros();self=draft
     }
     static func decode(_ data: Data) throws -> HardwareProfile {
-        guard data.count <= 1_000_000 else { throw HardwareError(message: "配置文件过大。") }
+        guard data.count <= 3_000_000 else { throw HardwareError(message: "配置文件超过 3 MB。") }
         let decoder = JSONDecoder()
         let profile: HardwareProfile
         if let snapshot = try? decoder.decode(HardwareSnapshot.self, from: data) { profile = HardwareProfile(snapshot: snapshot) }

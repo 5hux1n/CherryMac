@@ -198,6 +198,19 @@ test('Windows macro playback imports all supported bindings without changing the
   }
 });
 
+test('official source template survives profile save/reload, validates layout and allows escaped files',()=>{
+  const root=windowsFixture(),base=demoSnapshot();root.unknown={text:'"'.repeat(420000)};
+  const p=importWindows(root,base),serialized=JSON.stringify(p);assert.ok(new TextEncoder().encode(serialized).length>1_000_000);
+  const loaded=parseProfile(serialized);assert.deepEqual(JSON.parse(loaded.windowsTemplateJSON),root);
+  assert.deepEqual(exportWindowsKeysAndMacros(loaded,JSON.parse(loaded.windowsTemplateJSON)).unknown,root.unknown);
+  const legacy=clone(p);delete legacy.macroBindings;delete legacy.macroModes;assert.equal(parseProfile(JSON.stringify(legacy)).windowsTemplateJSON,p.windowsTemplateJSON);
+  const bad=clone(p);bad.windowsTemplateJSON='{}';assert.throws(()=>parseProfile(JSON.stringify(bad)));
+  bad.windowsTemplateJSON=JSON.stringify({...root,'//':'46'});assert.throws(()=>parseProfile(JSON.stringify(bad)));
+  bad.windowsTemplateJSON=42;assert.throws(()=>parseProfile(JSON.stringify(bad)));
+  bad.windowsTemplateJSON=JSON.stringify({...root,unknown:'x'.repeat(1000000)});assert.throws(()=>parseProfile(JSON.stringify(bad)));
+  assert.throws(()=>parseProfile(' '.repeat(3000001)));assert.equal(fromHardware(base).windowsTemplateJSON,undefined);
+});
+
 test('official template export preserves unknown fields and shared or differing macro modes',()=>{
   const base=demoSnapshot(),p=fromHardware(base),template=windowsFixture();
   template.DeviceBasicInfo={opaque:'unchanged'};template.ActionInfo=[officialMacroAction(macro),{ActionType:3,ActionName:'Text',ActionContent:{ActionText:'untouched'}}];

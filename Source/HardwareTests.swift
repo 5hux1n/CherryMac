@@ -705,6 +705,19 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
         precondition(try! data(["action":WindowsProfile.macroAction(exported)])==data(["action":action]))
     }
     rejected{_ = try WindowsProfile.macroAction(mixed,playback:.init(count:0))}
+    var largeRoot=root;largeRoot["unknown"]=["text":String(repeating:"\"",count:420000)]
+    let retained=try! WindowsProfile.decode(data(largeRoot),baseline:baseline).profile
+    let retainedData=try! retained.encoded();precondition(retainedData.count>1_000_000)
+    let reloaded=try! HardwareProfile.decode(retainedData);precondition(reloaded==retained)
+    let utf16=String(decoding:try! data(root),as:UTF8.self).data(using:.utf16)!
+    let unicodeImport=try! WindowsProfile.decode(utf16,baseline:baseline).profile
+    precondition(unicodeImport.macros==macro.profile.macros && unicodeImport.windowsTemplateJSON==macro.profile.windowsTemplateJSON)
+    let retainedRoot=try! WindowsProfile.templateRoot(Data(reloaded.windowsTemplateJSON!.utf8))
+    precondition((retainedRoot["unknown"] as! [String:String])["text"]==String(repeating:"\"",count:420000))
+    var badTemplate=retained;badTemplate.windowsTemplateJSON="{}";rejected{try badTemplate.validate()}
+    largeRoot["//"]="46";badTemplate.windowsTemplateJSON=String(decoding:try! data(largeRoot),as:UTF8.self);rejected{try badTemplate.validate()}
+    largeRoot["//"]="47";largeRoot["unknown"]=String(repeating:"x",count:1_000_000)
+    badTemplate.windowsTemplateJSON=String(decoding:try! data(largeRoot),as:UTF8.self);rejected{try badTemplate.validate()}
     var exportTemplate=root
     var exportKeys=keys;exportKeys[79]["ActionLink"]=1;exportKeys[79]["ActionLinkIndex"]=1;exportKeys[17]["opaque"]=42
     exportTemplate["KeyList"]=exportKeys;exportTemplate["DeviceBasicInfo"]=["opaque":"unchanged"]
