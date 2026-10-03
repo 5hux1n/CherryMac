@@ -578,6 +578,17 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     rejected{try broken.assignMacro(named:"B",to:102)};precondition(broken==before)
     rejected{try broken.removeMacro(named:"A")};precondition(broken==before)
     rejected{try broken.unassignMacro(from:102)};precondition(broken==before)
+    var preserved=assigned.snapshot
+    preserved.macroData!.replaceSubrange(6..<16,with:Array(1...10))
+    let first=Int(preserved.macroData![16]) | Int(preserved.macroData![17])<<8
+    preserved.macroData!.replaceSubrange(first+2..<first+4,with:[0xA5,0xF1])
+    var opaque=try! HardwareProfile.fromHardware(preserved)
+    precondition((try! opaque.resolvedMacros()).macroData==preserved.macroData,"read/edit round trip must retain known opaque fields")
+    opaque.macros[0].steps[0].delayMilliseconds=45;opaque.snapshot=try! opaque.resolvedMacros()
+    precondition(Array(opaque.snapshot.macroData![6..<16])==Array(1...10) && opaque.macros[0].hardwareReserved==[0xA5,0xF1])
+    let copied=try! opaque.duplicateMacro(named:opaque.macros[0].name)
+    precondition(opaque.macros.last?.hardwareReserved==[0xA5,0xF1]);try! opaque.removeMacro(named:copied)
+    var invalid=opaque.macros[0];invalid.hardwareReserved=[1];rejected{try invalid.validate()}
     var adopted=false
     let recording=MacroRecordingSheet(name:"保留原步骤"){_ in adopted=true}
     recording.beginRecording(modifierFlags:[]);recording.unsupportedMouseEvent();precondition(recording.recorder != nil,"keyboard-only recording ignores mouse events")

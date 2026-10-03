@@ -40,7 +40,8 @@ enum CherryMacroCodec {
         }
         let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();return macro
     }
-    static func encode(_ macros:[KeyboardMacro]) throws -> [UInt8] {
+    static func encode(_ macros:[KeyboardMacro],headerReserved:[UInt8] = []) throws -> [UInt8] {
+        guard headerReserved.isEmpty || headerReserved.count==10 else{throw HardwareError(message:"宏头部保留数据长度无效。")}
         guard macros.count<=32 else{throw HardwareError(message:"硬件宏数量超出范围。")}
         if macros.isEmpty{return Array(repeating:0,count:accessibleSize)}
         let events=try macros.map{try encodeEvents($0)}
@@ -49,9 +50,11 @@ enum CherryMacroCodec {
         var bank=[UInt8](repeating:0,count:accessibleSize)
         func word(_ offset:Int,_ value:Int){bank[offset]=UInt8(value & 255);bank[offset+1]=UInt8(value >> 8)}
         bank[0]=0xAA;bank[1]=0x55;word(2,total);word(4,macros.count)
+        if !headerReserved.isEmpty{bank.replaceSubrange(6..<16,with:headerReserved)}
         var cursor=16+macros.count*2
         for (index,bytes) in events.enumerated(){
             word(16+index*2,cursor);word(cursor,bytes.count/4)
+            if let reserved=macros[index].hardwareReserved{bank.replaceSubrange(cursor+2..<cursor+4,with:reserved)}
             bank.replaceSubrange(cursor+4..<cursor+4+bytes.count,with:bytes);cursor += 4+bytes.count
         }
         return bank
@@ -69,7 +72,9 @@ enum CherryMacroCodec {
             guard start>=cursor,start+4<=length else{throw HardwareError(message:"宏偏移重叠或越界。")}
             let steps=word(start),end=start+4+steps*4
             guard steps>0,steps<=256,end<=length else{throw HardwareError(message:"宏事件越界或数量无效。")}
-            macros.append(try decodeEvents(Array(bytes[start+4..<end]),name:"硬件宏 \(index+1)"));cursor=end
+            var macro=try decodeEvents(Array(bytes[start+4..<end]),name:"硬件宏 \(index+1)")
+            let reserved=Array(bytes[start+2..<start+4]);if reserved.contains(where:{$0 != 0}){macro.hardwareReserved=reserved}
+            macros.append(macro);cursor=end
         }
         return macros
     }

@@ -651,3 +651,16 @@ test('macro management unbinds independently, reindexes deletion and preserves f
   assert.throws(()=>removeMacro(broken,'AB'));assert.deepEqual(broken,saved);assert.throws(()=>unassignMacro(broken,102));assert.deepEqual(broken,saved);
   assert.throws(()=>unassignMacro(p,11));assert.throws(()=>removeMacro(p,'missing'));assert.deepEqual(p,before);
 });
+
+
+test('macro editor preserves opaque header and per-record bytes across edits',()=>{
+  const s=demoSnapshot();s.keymap.fill(0);s.macroData=encodeBank([macro]);s.macroData.splice(6,10,1,2,3,4,5,6,7,8,9,10);
+  const offset=s.macroData[16]|s.macroData[17]<<8;s.macroData.splice(offset+2,2,0xa5,0xf1);
+  const p=fromHardware(s);assert.deepEqual(resolveMacros(p).macroData,s.macroData);
+  p.macros[0].steps[0].delayMilliseconds=45;p.snapshot=resolveMacros(p);
+  assert.deepEqual(p.snapshot.macroData.slice(6,16),[1,2,3,4,5,6,7,8,9,10]);assert.deepEqual(p.snapshot.macroData.slice(offset+2,offset+4),[0xa5,0xf1]);
+  const copy=duplicateMacro(p,p.macros[0].name);assert.deepEqual(copy.profile.macros[1].hardwareReserved,[0xa5,0xf1]);
+  const saved=parseProfile(JSON.stringify(copy.profile));assert.deepEqual(resolveMacros(saved).macroData,copy.profile.snapshot.macroData);
+  const removed=removeMacro(saved,copy.name);assert.deepEqual(removed.snapshot.macroData,p.snapshot.macroData);
+  assert.throws(()=>validateMacro({...macro,hardwareReserved:[1]}));assert.throws(()=>encodeBank([macro],[1]));
+});

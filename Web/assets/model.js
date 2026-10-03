@@ -15,6 +15,7 @@ const macroNameKey=name=>typeof name==='string'?name.normalize('NFC'):null;
 const sameMacroName=(first,second)=>macroNameKey(first)===macroNameKey(second);
 const macroNameStem=name=>[...name.normalize('NFC')].slice(0,65).join('');
 export function validateMacro(m){
+  if(m?.hardwareReserved!=null)requireThat(bytes(m.hardwareReserved,2),'宏保留数据长度无效。');
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
   if(m?.windowsActionIndex!=null)requireThat(Number.isInteger(m.windowsActionIndex)&&m.windowsActionIndex>=0,'宏来源动作索引无效。');
   requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
@@ -28,17 +29,19 @@ export function validateMacro(m){
   }
   requireThat(held.size===0,'宏结束时必须释放全部按键。');
 }
-export function encodeBank(macros){
+export function encodeBank(macros,headerReserved=[]){
+  requireThat(Array.isArray(headerReserved)&&(headerReserved.length===0||bytes(headerReserved,10)),'宏头部保留数据长度无效。');
   requireThat(Array.isArray(macros)&&macros.length<=32,'最多支持 32 个宏。');macros.forEach(validateMacro);
   const bank=Array(3071).fill(0);if(!macros.length)return bank;
   const total=16+macros.length*6+macros.reduce((n,m)=>n+m.steps.length*4,0);
   requireThat(total<=3071,'宏超过键盘存储容量。');
   const word=(o,v)=>{bank[o]=v&255;bank[o+1]=v>>8;};bank[0]=0xaa;bank[1]=0x55;word(2,total);word(4,macros.length);
+  if(headerReserved.length)bank.splice(6,10,...headerReserved);
   let cursor=16+macros.length*2;
   macros.forEach((m,i)=>{word(16+i*2,cursor);word(cursor,m.steps.length);m.steps.forEach((s,j)=>{
     const modifier=s.kind!=='mouse'&&s.usage>=224;
     bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
-  });cursor+=4+m.steps.length*4;});return bank;
+  });if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);cursor+=4+m.steps.length*4;});return bank;
 }
 export function decodeBank(bank){
   requireThat(bytes(bank,3071),'宏区长度无效。');if(bank.every(x=>x===0)||bank.every(x=>x===255))return [];
@@ -49,6 +52,7 @@ export function decodeBank(bank){
     const start=word(16+i*2);requireThat(start>=cursor&&start+4<=length,'宏偏移重叠或越界。');
     const n=word(start),end=start+4+n*4;requireThat(n>0&&n<=256&&end<=length,'宏事件越界。');
     const m={name:`硬件宏 ${i+1}`,steps:[]};
+    const reserved=bank.slice(start+2,start+4);if(reserved.some(b=>b!==0))m.hardwareReserved=reserved;
     for(let o=start+4;o<end;o+=4){const kind=bank[o+2]&127,code=bank[o+3];let usage;
       if(kind===1&&[1,2,4,8,16].includes(code))usage=code;
       else if(kind===10&&code<224)usage=code;
@@ -92,7 +96,8 @@ export function validateProfile(p){
 export function resolveMacros(p){
   validateProfile(p);requireThat(p.macroBindings!=null,'未知宏不能覆盖，请重新读取键盘。');const s=clone(p.snapshot);
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(s.keymap[slot*3]))requireThat(Object.hasOwn(p.macroBindings,slot),'宏记录缺少绑定。');
-  s.macroData=encodeBank(p.macros);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
+  const header=s.macroData?.[0]===0xaa&&s.macroData[1]===0x55?s.macroData.slice(6,16):[];
+  s.macroData=encodeBank(p.macros,header);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
 }
 export function parseProfile(text,baseline){
   requireThat(new TextEncoder().encode(text).length<=3_000_000,'配置文件超过 3 MB。');const data=JSON.parse(text);

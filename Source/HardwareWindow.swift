@@ -604,7 +604,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let modes:[MacroPlayback.Mode]=[.count,.held,.toggle]
             guard modes.indices.contains(macroPlayback.indexOfSelectedItem) else{throw HardwareError(message:"请选择宏执行方式。")}
             let preferred=MacroPlayback(mode:modes[macroPlayback.indexOfSelectedItem],count:count);try preferred.validate()
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:preferred,windowsActionIndex:existing?.windowsActionIndex);try macro.validate()
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:preferred,windowsActionIndex:existing?.windowsActionIndex,hardwareReserved:existing?.hardwareReserved);try macro.validate()
             if let existing{
                 p.macros[selectedIndex]=macro
                 for (slot,name) in p.macroBindings ?? [:] where name==existing.name{p.macroBindings?[slot]=macro.name}

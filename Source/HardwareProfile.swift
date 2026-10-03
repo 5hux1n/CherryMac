@@ -19,8 +19,11 @@ struct KeyboardMacro: Codable, Equatable {
     var preferredPlayback:MacroPlayback? = nil
     // Index into the retained official source document, independent of edit name.
     var windowsActionIndex:Int? = nil
+    // Opaque bytes carried by each firmware record; never interpret as events.
+    var hardwareReserved:[UInt8]? = nil
     static func nameStem(_ name:String)->String{name.precomposedStringWithCanonicalMapping.unicodeScalars.prefix(65).map{String($0)}.joined()}
     func validate() throws {
+        if let hardwareReserved{guard hardwareReserved.count==2 else{throw HardwareError(message:"宏保留数据长度无效。")}}
         try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.precomposedStringWithCanonicalMapping.unicodeScalars.count <= 80,
@@ -88,7 +91,8 @@ struct HardwareProfile: Codable, Equatable {
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(result.keymap[slot*3]) {
             guard bindings[slot] != nil else{throw HardwareError(message:"配置包含未关联的硬件宏，请重新读取配置。")}
         }
-        result.macroData=try CherryMacroCodec.encode(macros)
+        let header=snapshot.macroData.flatMap{bank -> [UInt8]? in bank[0]==0xAA && bank[1]==0x55 ? Array(bank[6..<16]):nil} ?? []
+        result.macroData=try CherryMacroCodec.encode(macros,headerReserved:header)
         for (slot,name) in bindings {
             let index=macros.firstIndex{$0.name==name}!
             result.keymap.replaceSubrange(slot*3..<slot*3+3,with:try CherryMacroCodec.binding(index,playback:macroModes?[slot] ?? .once))
