@@ -597,6 +597,19 @@ func runHostTextPlanChecks(){
     precondition(transport.readCommands==[8,7,8] && transport.packets.isEmpty && prepared.binding(eventValue:0x766)?.plan.originalText=="中😀")
     precondition(routing.binding(eventValue:0x766)?.plan.originalText=="中😀" && routing.binding(eventValue:0x766)?.actionIndex==0)
     precondition(routing.binding(eventValue:0x711)==nil && routing.binding(eventValue:0x767)==nil)
+    let logDirectory=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacHostTextLog-\(UUID().uuidString)")
+    defer{try? FileManager.default.removeItem(at:logDirectory)}
+    let journal=try! HostTextDiagnostics(directory:logDirectory)
+    try! journal.phase("observing");try! journal.triggered(routing.binding(eventValue:0x766)!);try! journal.posted(3)
+    journal.finish(reason:"error",error:HardwareError(message:"injected failure"))
+    let savedLog=try! Data(contentsOf:journal.url)
+    let logText=String(data:savedLog,encoding:.utf8)!
+    precondition(!logText.contains("中😀") && !logText.contains("计算器文本"))
+    let logRoot=try! JSONSerialization.jsonObject(with:savedLog) as! [String:Any]
+    precondition(logRoot["phase"] as? String=="failed" && logRoot["triggerCount"] as? Int==1 && logRoot["postedUTF16Units"] as? Int==3)
+    do{try journal.phase("late-ready");preconditionFailure("finished log must reject stale callbacks")}catch{}
+    journal.trace("late callback");journal.finish(reason:"late-stop")
+    precondition((try! Data(contentsOf:journal.url))==savedLog)
     current.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let inactive=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
     precondition(inactive.binding(eventValue:0x766)==nil && routing.binding(eventValue:0x766)?.plan.originalText=="中😀")

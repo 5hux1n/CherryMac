@@ -88,6 +88,41 @@ final class HardwareOperationLog {
     func string(_ key:String)->String?{lock.lock();defer{lock.unlock()};return state[key] as? String}
 }
 
+// Text content and action names never enter this diagnostic record. The
+// aggregate counters keep long-running observation logs bounded.
+final class HostTextDiagnostics {
+    private let operation:HardwareOperationLog
+    private let lock=NSLock()
+    private var triggers=0,completed=0,postedUnits=0
+    private var finished=false
+    var url:URL{operation.url}
+    init(directory:URL?=nil)throws {
+        operation=try HardwareOperationLog(kind:"host-text",directory:directory)
+        operation.record("scope","host text input; configuration reads only")
+        try operation.requireHealthy()
+    }
+    private func requireActive()throws{guard !finished else{throw HardwareError(message:"文本服务已停止。")}}
+    func phase(_ value:String)throws{lock.lock();defer{lock.unlock()};try requireActive();operation.record("phase",value);try operation.requireHealthy()}
+    func requireHealthy()throws{lock.lock();defer{lock.unlock()};try requireActive();try operation.requireHealthy()}
+    func trace(_ value:String){lock.lock();defer{lock.unlock()};guard !finished else{return};operation.trace(value)}
+    func triggered(_ binding:WindowsProfile.HostTextBinding)throws {
+        lock.lock();defer{lock.unlock()};try requireActive();triggers+=1
+        operation.record("triggerCount",triggers)
+        operation.record("lastTrigger",["physicalSlot":binding.physicalSlot,"logicalIndex":binding.logicalIndex,"actionIndex":binding.actionIndex])
+        try operation.requireHealthy()
+    }
+    func posted(_ units:Int)throws {
+        lock.lock();defer{lock.unlock()};try requireActive();completed+=1;postedUnits+=units
+        operation.record("completedDispatchCount",completed);operation.record("postedUTF16Units",postedUnits)
+        try operation.requireHealthy()
+    }
+    func finish(reason:String,error:Error?=nil){
+        lock.lock();defer{lock.unlock()};guard !finished else{return};finished=true
+        if let error{operation.record("error",error.localizedDescription)}
+        operation.record("stopReason",reason);operation.record("phase",error==nil ? "stopped":"failed")
+    }
+}
+
 // Offline transaction plan. Creating this value does not authorize the USB
 // transport; macro writes remain blocked until the complete module is reviewed.
 struct MacroWriteAuthorization {

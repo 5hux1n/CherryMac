@@ -238,11 +238,12 @@ private final class HostTextUSBWorker {
     private var ticket:WindowsProfile.HostTextTicket?
     private var runLoop:CFRunLoop?
     private let officialJSON:Data
+    private let diagnostics:HostTextDiagnostics
     private let onBinding:(WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void
     private let onReady:()->Void
     private let onError:(Error)->Void
-    init(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void,onReady:@escaping ()->Void,onError:@escaping (Error)->Void){
-        self.officialJSON=officialJSON;self.onBinding=onBinding;self.onReady=onReady;self.onError=onError
+    init(officialJSON:Data,diagnostics:HostTextDiagnostics,onBinding:@escaping (WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void,onReady:@escaping ()->Void,onError:@escaping (Error)->Void){
+        self.officialJSON=officialJSON;self.diagnostics=diagnostics;self.onBinding=onBinding;self.onReady=onReady;self.onError=onError
     }
     private var isStopped:Bool{lock.lock();defer{lock.unlock()};return stopped}
     func stop(){
@@ -255,7 +256,9 @@ private final class HostTextUSBWorker {
         lock.lock();runLoop=CFRunLoopGetCurrent();lock.unlock()
         defer{lock.lock();ticket=nil;runLoop=nil;lock.unlock()}
         do{
+            try diagnostics.phase("connecting")
             let usb=try CherryUSB()
+            usb.trace=diagnostics.trace
             defer{usb.stopHostTextObservation()}
             guard !isStopped else{return}
             try usb.startHostTextObservation(officialJSON:officialJSON,onBinding:{[weak self] binding,ticket in
@@ -264,6 +267,7 @@ private final class HostTextUSBWorker {
             guard let active=usb.currentHostTextTicket else{throw HardwareError(message:"文本监听未能准备完成。")}
             lock.lock();ticket=active;let cancelled=stopped;lock.unlock()
             if cancelled{active.invalidate();return}
+            try diagnostics.requireHealthy()
             onReady()
             while !isStopped,active.isCurrent{
                 _=RunLoop.current.run(mode:.default,before:Date().addingTimeInterval(0.05))
@@ -277,25 +281,35 @@ private final class HostTextUSBWorker {
     private var worker:HostTextUSBWorker?
     private var generation=UUID()
     private let onState:(String)->Void
+    private var diagnostics:HostTextDiagnostics?
+    private var lastDiagnosticURL:URL?
+    var diagnosticURL:URL?{diagnostics?.url ?? lastDiagnosticURL}
     private lazy var dispatcher=HostTextDispatcher(onError:{[weak self] error in self?.fail(error)},onPostedUnits:{[weak self] units in
-        self?.onState("已发送 \(units) 个 UTF-16 单元；实际输入结果需在目标应用确认。")
+        guard let self else{return}
+        do{try self.diagnostics?.posted(units)}catch{self.fail(error);return}
+        self.onState("已发送 \(units) 个 UTF-16 单元；实际输入结果需在目标应用确认。")
     })
     init(onState:@escaping (String)->Void){self.onState=onState}
     func start(officialJSON:Data)throws {
-        stop()
+        stop(reason:"replaced")
         // Validate the model before opening USB; permission is checked only
         // when the user explicitly enables this service. No request prompt.
         _=try WindowsProfile.templateRoot(officialJSON)
         guard AXIsProcessTrusted() else{throw HardwareError(message:"启用文本服务需要此 App 的辅助功能权限。")}
+        let journal=try HostTextDiagnostics();diagnostics=journal;lastDiagnosticURL=journal.url
+        do{try journal.phase("preparing")}catch{stop(reason:"log-error",error:error);throw error}
         let expected=generation
-        let source=HostTextUSBWorker(officialJSON:officialJSON,onBinding:{[weak self] binding,ticket in
+        let source=HostTextUSBWorker(officialJSON:officialJSON,diagnostics:journal,onBinding:{[weak self] binding,ticket in
             Task{@MainActor [weak self] in
                 guard let self,self.generation==expected,ticket.isCurrent else{return}
+                do{try journal.triggered(binding)}catch{self.fail(error);return}
                 guard let pid=NSWorkspace.shared.frontmostApplication?.processIdentifier,pid != getpid() else{return}
                 self.dispatcher.submit(binding.plan,targetPID:pid,ticket:ticket)
             }
         },onReady:{[weak self] in Task{@MainActor [weak self] in
-            guard let self,self.generation==expected else{return};self.onState("文本服务已开启；切换到目标应用后按文本绑定键。")
+            guard let self,self.generation==expected else{return}
+            do{try journal.phase("observing")}catch{self.fail(error);return}
+            self.onState("文本服务已开启；切换到目标应用后按文本绑定键。")
         }},onError:{[weak self] error in Task{@MainActor [weak self] in
             guard let self,self.generation==expected else{return};self.fail(error)
         }})
@@ -303,7 +317,10 @@ private final class HostTextUSBWorker {
         // A state callback is allowed to stop the service before launch.
         if generation==expected{source.start()}
     }
-    func stop(){generation=UUID();worker?.stop();worker=nil;dispatcher.stop()}
-    private func fail(_ error:Error){stop();onState(error.localizedDescription)}
-    deinit{worker?.stop()}
+    func stop(reason:String="stopped",error:Error?=nil){generation=UUID();worker?.stop();worker=nil;dispatcher.stop();diagnostics?.finish(reason:reason,error:error);diagnostics=nil}
+    private func fail(_ error:Error){
+        stop(reason:"error",error:error)
+        onState(error.localizedDescription)
+    }
+    deinit{worker?.stop();diagnostics?.finish(reason:"service-released")}
 }
