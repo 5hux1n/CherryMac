@@ -12,6 +12,7 @@ export function validateSnapshot(s,complete=false){
   requireThat(Number.isFinite(s.createdAt),'备份日期无效。');
 }
 export function validateMacro(m){
+  if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
   requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
@@ -109,6 +110,22 @@ export function importWindows(root,baseline){
   p.macroBindings=Object.fromEntries(Object.entries(old).filter(([slot])=>!physical.has(Number(slot))));
   p.macroModes=Object.fromEntries(Object.entries(p.macroModes??{}).filter(([slot])=>!physical.has(Number(slot))));
   const record=v=>{v=winInt(v,'按键动作',0,0xffffff);const b=[v>>16,(v>>8)&255,v&255];requireThat([0x20,0x30].includes(b[0]),'不支持此 Windows 按键动作。');return b;};
+  const importMacro=index=>{
+    if(imported.has(index))return;const a=actions[index],c=a?.ActionContent;requireThat(c&&typeof c==='object'&&!Array.isArray(c),'Windows 宏内容无效。');
+
+    const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
+    requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
+    const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
+      if(type===1&&[1,2,4,8,16].includes(button))usage=button;
+      else if(type===10&&button>=4&&button<224)usage=button;
+      else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
+      else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
+    const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
+    const mode=winInt(c.ActionMacroType,'宏模式',0,2),preferredPlayback={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};
+    const macro={name,steps,recordingDelay,preferredPlayback};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
+
+  };
+  actions.forEach((action,index)=>{let type;try{type=winInt(action?.ActionType,'ActionType',0,4);}catch{return;}if(type===2)importMacro(index);});
   root.KeyList.forEach((k,i)=>{
     const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot===undefined||[6,71].includes(slot))return;
     let b;if(winInt(k.ActionLink??0,'ActionLink',0,1)===0)b=record(k.Assignment);
@@ -118,17 +135,7 @@ export function importWindows(root,baseline){
       if(type===1)b=record(c.ActionKey);
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
-        if(!imported.has(index)){
-          const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
-          requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
-          const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
-            if(type===1&&[1,2,4,8,16].includes(button))usage=button;
-            else if(type===10&&button>=4&&button<224)usage=button;
-            else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
-            else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
-          const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
-          const macro={name,steps,recordingDelay};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
-        }const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
+        importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>m.name===name),p.macroModes[slot]);
       }else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });

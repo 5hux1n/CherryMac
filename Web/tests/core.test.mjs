@@ -198,6 +198,20 @@ test('Windows macro playback imports all supported bindings without changing the
   }
 });
 
+test('Windows imports unbound macro library once, preserves preferences and rejects invalid libraries atomically',()=>{
+  const root=windowsFixture(),base=demoSnapshot(),before=clone(base);
+  const action=mode=>({ActionType:'02',ActionName:'Library',ActionContent:{ActionMacroType:mode,ActionMacroLoopValue:3,ActionMacroFixTimeIsSelected:1,ActionMacroFixTimeValue:77,ActionMacroEvents:[{Type:10,Button:4,Action:'down',Delay:0},{Type:10,Button:4,Action:'up',Delay:50}]}});
+  root.ActionInfo=[action(1),action(2),action(0)];
+  for(const index of [17,18])Object.assign(root.KeyList[index],{ActionLink:1,ActionLinkIndex:1});
+  const p=importWindows(root,base);
+  assert.deepEqual(p.macros.map(m=>m.name),['Library','Library (1)','Library (2)']);
+  assert.deepEqual(p.macros.map(m=>m.preferredPlayback),[{mode:'held',count:1},{mode:'toggle',count:1},{mode:'count',count:3}]);
+  assert.equal(p.macroBindings[102],'Library (1)');assert.equal(Object.values(p.macroBindings).filter(n=>n==='Library (1)').length,2);
+  assert.deepEqual(parseProfile(JSON.stringify(p)),p);assert.deepEqual(base,before);
+  root.ActionInfo[0].ActionContent.ActionMacroEvents.pop();assert.throws(()=>importWindows(root,base));assert.deepEqual(base,before);
+  root.ActionInfo=Array.from({length:33},()=>action(0));assert.throws(()=>importWindows(root,base));assert.deepEqual(base,before);
+});
+
 test('Windows fixed-interval preference preserves actual event delays and profile roundtrip',()=>{
   const root=windowsFixture(),baseline=demoSnapshot(),before=clone(baseline);
   root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;

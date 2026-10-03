@@ -16,7 +16,9 @@ struct KeyboardMacro: Codable, Equatable {
     var steps: [Step]
     // Recorder preference from Windows JSON, not a firmware delay override.
     var recordingDelay:RecordingDelay? = nil
+    var preferredPlayback:MacroPlayback? = nil
     func validate() throws {
+        try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 80,
               !steps.isEmpty, steps.count <= 256 else { throw HardwareError(message: "宏名称或步骤数量无效。") }

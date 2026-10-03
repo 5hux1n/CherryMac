@@ -27,7 +27,7 @@ enum WindowsProfile {
         let macroCount:Int
         let colorCount:Int
         let ignoredKeyCount:Int
-        var summary:String {"已导入 Windows 配置：\(keyCount) 个实体键、\(colorCount) 个颜色、\(macroCount) 个绑定宏。保留 \(ignoredKeyCount) 个内部／隐藏位置及系统参数；未绑定动作未迁移。尚未写入。"}
+        var summary:String {"已导入 Windows 配置：\(keyCount) 个实体键、\(colorCount) 个颜色、\(macroCount) 个宏（含未绑定）。保留 \(ignoredKeyCount) 个内部／隐藏位置及系统参数；其他未绑定动作未迁移。尚未写入。"}
     }
     static func integer(_ object:Any?,_ name:String,range:ClosedRange<Int>)throws->Int {
         let value:Int?
@@ -71,6 +71,34 @@ enum WindowsProfile {
         result.macroBindings=oldBindings.filter{!physicalSlots.contains($0.key)}
         result.macroModes=(result.macroModes ?? [:]).filter{!physicalSlots.contains($0.key)}
         var importedMacros:[Int:String]=[:];var keyCount=0;var colorCount=0;var ignored=0
+        func importMacro(_ index:Int)throws {
+            if importedMacros[index] != nil{return}
+            guard let content=actions[index]["ActionContent"] as? [String:Any] else{throw HardwareError(message:"Windows 宏内容无效。")}
+            let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
+            let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
+            guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
+            let steps=try events.map{event->KeyboardMacro.Step in
+                let type=try integer(event["Type"],"宏 Type",range:0...127)
+                let button=try integer(event["Button"],"宏 Button",range:0...255)
+                let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
+                let usage:UInt8
+                if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
+                else if type==10,button>=4,button<224{usage=UInt8(button)}
+                else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
+                else{throw HardwareError(message:"Windows 宏包含尚未支持的鼠标移动或其他事件。")}
+                guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
+                return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
+            }
+            let originalName=actions[index]["ActionName"] as? String ?? "导入宏"
+            var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
+            let stem=name;var suffix=1
+            while result.macros.contains(where:{$0.name==name}){name="\(stem) (\(suffix))";suffix+=1}
+            let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
+            let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
+            let preferred=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
+            let macro=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:fixed==1,milliseconds:fixedMilliseconds),preferredPlayback:preferred);try macro.validate();result.macros.append(macro);importedMacros[index]=name
+        }
+        for (index,action) in actions.enumerated() where (try? integer(action["ActionType"],"ActionType",range:0...4))==2{try importMacro(index)}
         for (index,key) in keys.enumerated(){
             guard let slot=physicalSlot(defaults[index])else{ignored+=1;continue}
             if [6,71].contains(slot){ignored+=1;continue}
@@ -85,28 +113,7 @@ enum WindowsProfile {
                 switch type {
                 case 1:bytes=try record(integer(content["ActionKey"],"ActionKey",range:0...0xFFFFFF))
                 case 2:
-                    if importedMacros[actionIndex]==nil {
-                        let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
-                        let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
-                        guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
-                        let steps=try events.map{event->KeyboardMacro.Step in
-                            let type=try integer(event["Type"],"宏 Type",range:0...127)
-                            let button=try integer(event["Button"],"宏 Button",range:0...255)
-                            let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
-                            let usage:UInt8
-                            if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
-                            else if type==10,button>=4,button<224{usage=UInt8(button)}
-                            else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
-                            else{throw HardwareError(message:"Windows 宏包含尚未支持的鼠标移动或其他事件。")}
-                            guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
-                            return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
-                        }
-                        let originalName=actions[actionIndex]["ActionName"] as? String ?? "导入宏"
-                        var name=String(originalName.prefix(65));if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
-                        let stem=name;var suffix=1
-                        while result.macros.contains(where:{$0.name==name}){name="\(stem) (\(suffix))";suffix+=1}
-                        let macro=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:fixed==1,milliseconds:fixedMilliseconds));try macro.validate();result.macros.append(macro);importedMacros[actionIndex]=name
-                    }
+                    try importMacro(actionIndex)
                     let name=importedMacros[actionIndex]!;result.macroBindings![slot]=name
                     let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
                     let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1

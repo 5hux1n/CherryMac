@@ -360,7 +360,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let selectedIndex=macroPicker.indexOfSelectedItem-1
             let existing=p.macros.first(where:{$0.name==macroName.stringValue})
             let preference=recordingPreference ?? (existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil))
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference);try macro.validate()
+            let preferred=existing?.preferredPlayback ?? (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].preferredPlayback:nil)
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:preferred);try macro.validate()
             if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
             profile=p;recordingPreference=nil;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
@@ -371,6 +372,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         recordingPreference=nil
         guard macroPicker.indexOfSelectedItem>0,let profile else{macroName.stringValue="新宏";macroText.string="";return}
         let macro=profile.macros[macroPicker.indexOfSelectedItem-1];macroName.stringValue=macro.name
+        let slot=keyboardLayout().first(where:{$0.id==selected}).flatMap{CherryMatrix.slot($0)}
+        let playback=slot.flatMap{profile.macroBindings?[$0]==macro.name ? profile.macroModes?[$0]:nil} ?? macro.preferredPlayback ?? .once
+        macroPlayback.selectItem(at:[MacroPlayback.Mode.count,.held,.toggle].firstIndex(of:playback.mode) ?? 0);macroRepeat.stringValue=String(playback.count)
         macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
     }
     @objc func recordMacro(){

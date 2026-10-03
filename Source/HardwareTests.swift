@@ -695,6 +695,23 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     let macro=try! WindowsProfile.decode(data(root),baseline:baseline)
     precondition(macro.macroCount==1 && macro.profile.macroBindings?[102]=="Control A" && macro.profile.macros[0].steps.first!.usage==224)
     precondition(try! CherryMacroCodec.decode(macro.profile.snapshot.macroData!)[0].steps==macro.profile.macros[0].steps)
+    var libraryRoot=root
+    var libraryActions=root["ActionInfo"] as! [[String:Any]]
+    var libraryAction=libraryActions[0];libraryAction["ActionType"]="02"
+    var libraryContent=libraryAction["ActionContent"] as! [String:Any]
+    libraryContent["ActionMacroType"]=1;libraryAction["ActionContent"]=libraryContent
+    libraryActions.append(libraryAction);libraryRoot["ActionInfo"]=libraryActions
+    let library=try! WindowsProfile.decode(data(libraryRoot),baseline:baseline).profile
+    precondition(library.macros.count==2 && library.macros[1].name=="Control A (1)" && library.macros[1].preferredPlayback == .init(mode:.held,count:1))
+    precondition(library.macroBindings?[102]=="Control A" && !(library.macroBindings?.values.contains("Control A (1)") ?? true))
+    precondition(try! HardwareProfile.decode(library.encoded())==library)
+    let libraryEditor=HardwareWindowController();libraryEditor.profile=library;libraryEditor.refreshMacroPicker(selected:"Control A (1)");libraryEditor.chooseMacro()
+    precondition(libraryEditor.macroPlayback.indexOfSelectedItem==1)
+    libraryContent["ActionMacroEvents"]=[["Type":10,"Button":4,"Action":"down","Delay":0]];libraryAction["ActionContent"]=libraryContent
+    libraryRoot["ActionInfo"]=[libraryActions[0],libraryAction]
+    rejected{_ = try WindowsProfile.decode(data(libraryRoot),baseline:baseline)}
+    libraryRoot["ActionInfo"]=Array(repeating:libraryActions[0],count:33)
+    rejected{_ = try WindowsProfile.decode(data(libraryRoot),baseline:baseline)}
     var fixedRoot=root
     var fixedActions=fixedRoot["ActionInfo"] as! [[String:Any]]
     var fixedContent=fixedActions[0]["ActionContent"] as! [String:Any]
