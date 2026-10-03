@@ -744,6 +744,7 @@ final class MacroRecordingArea:NSView {
     override func rightMouseUp(with event:NSEvent){owner?.mouse(event,pressed:false)}
     override func otherMouseDown(with event:NSEvent){owner?.mouse(event,pressed:true)}
     override func otherMouseUp(with event:NSEvent){owner?.mouse(event,pressed:false)}
+    override func scrollWheel(with event:NSEvent){owner?.unsupportedMouseEvent()}
 }
 final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     let name:String
@@ -778,7 +779,8 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{recorder?.cancel();recorder=nil;controls();status.stringValue=error.localizedDescription}}
     func keyboard(_ event:NSEvent,pressed:Bool){guard recorder != nil else{return};guard let usage=Self.nativeUsages[event.keyCode]else{recorder?.cancel();recorder=nil;controls();status.stringValue="此按键编码不明确，请手动添加；录制已取消。";return};observe(usage,pressed:pressed,repeatEvent:event.isARepeat)}
     func modifier(_ event:NSEvent){guard let (usage,mask)=Self.modifiers[event.keyCode]else{return};observe(usage,pressed:event.modifierFlags.rawValue & mask != 0)}
-    func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on,let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{return};observe(usage,kind:.mouse,pressed:pressed)}
+    func unsupportedMouseEvent(){guard recorder != nil,mouseOption.state == .on else{return};recorder?.cancel();recorder=nil;controls();status.stringValue="滚轮或其他鼠标事件尚未支持，录制已取消；原步骤保留。"}
+    func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on else{return};guard let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{unsupportedMouseEvent();return};observe(usage,kind:.mouse,pressed:pressed)}
     @objc func finish(){do{guard recorder != nil else{return};let macro=try recorder!.finish(name:name);complete(macro)}catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
     @objc func cancel(){recorder?.cancel();complete(nil)}
     func complete(_ macro:KeyboardMacro?){guard !closed else{return};closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}

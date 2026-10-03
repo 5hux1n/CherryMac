@@ -36,6 +36,12 @@ try{
   await page.locator('#macro-name').fill('👩‍💻'.repeat(25));await page.locator('#save-macro').click();
   assert.equal(await page.locator('#macro-name').inputValue(),'👩‍💻'.repeat(25));
   assert.match(await page.locator('#macro-summary').textContent(),/30\/3071 字节.*30 ms/);
+  await page.locator('#macro-recording').evaluate(node=>node.open=true);
+  await page.locator('#record-mouse').check();await page.locator('#record-start').click();
+  for(const id of ['copy-macro','clear-macros','unassign-macro'])assert.equal(await page.locator('#'+id).isDisabled(),true);
+  await page.locator('#record-area').hover();await page.mouse.wheel(0,120);
+  await page.waitForFunction(()=>document.getElementById('record-stop').disabled);
+  assert.match(await page.locator('#record-status').textContent(),/滚轮.*原步骤保留/);assert.equal(await page.locator('.macro-step').count(),2);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
   console.log('Macro form defaults preserved; existing trigger unchanged; invalid count rejected; no USB access.');
 }finally{await browser.close();}

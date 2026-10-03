@@ -159,7 +159,7 @@ for(let i=0;i<26;i++)physicalCodes[`Key${String.fromCharCode(65+i)}`]=4+i;
 for(let i=1;i<=9;i++){physicalCodes[`Digit${i}`]=29+i;physicalCodes[`Numpad${i}`]=88+i;}physicalCodes.Digit0=39;
 for(let i=1;i<=24;i++)physicalCodes[`F${i}`]=i<=12?57+i:91+i;
 const recordClock=()=>Math.floor(performance.now());
-function recordControls(active){for(const id of ['record-start','record-timing','record-delay','record-mouse','macro-list','macro-name','save-macro','assign-macro','delete-macro','add-pair'])$(id).disabled=active;$('record-stop').disabled=!active;$('record-cancel').disabled=!active;}
+function recordControls(active){for(const id of ['record-start','record-timing','record-delay','record-mouse','macro-list','macro-name','save-macro','assign-macro','unassign-macro','delete-macro','copy-macro','clear-macros','add-pair'])$(id).disabled=active;$('record-stop').disabled=!active;$('record-cancel').disabled=!active;}
 function cancelRecording(reason){if(!recorder)return;recorder.cancel();recorder=null;recordControls(false);render();$('record-status').textContent=reason;$('record-area').textContent='录制已取消 · 原步骤保留';}
 $('record-start').onclick=event=>{if(busy||profile.macroBindings==null)return;if(event.ctrlKey||event.shiftKey||event.altKey||event.metaKey){$('record-status').textContent='请先松开修饰键，再开始录制。';return;}try{recorder=new MacroRecorder({timing:$('record-timing').value,fixedMilliseconds:Number($('record-delay').value),startedMilliseconds:recordClock()});recordControls(true);$('record-area').textContent='正在录制 · 完全松开按键后点击停止';$('record-status').textContent='0 个事件';$('record-area').focus();}catch(error){$('record-status').textContent=error.message;}};
 $('record-stop').onclick=()=>{if(!recorder)return;try{const m=recorder.finish($('macro-name').value.trim()||'录制宏');steps=clone(m.steps);recordingPreference=m.recordingDelay;recorder=null;recordControls(false);renderSteps();render();$('record-status').textContent=`已采用 ${steps.length} 个事件，点击保存宏保留。`;}catch(error){$('record-status').textContent=error.message;$('record-area').focus();}};
@@ -169,6 +169,7 @@ for(const [type,pressed] of [['keydown',true],['keyup',false]])$('record-area').
 $('record-area').addEventListener('mousedown',event=>{if(!recorder||!$('record-mouse').checked)return;event.preventDefault();observeRecording(event,({0:1,1:4,2:2,3:8,4:16})[event.button],true,'mouse');});
 document.addEventListener('mouseup',event=>{if(!recorder||!$('record-mouse').checked)return;observeRecording(event,({0:1,1:4,2:2,3:8,4:16})[event.button],false,'mouse');});
 $('record-area').addEventListener('contextmenu',event=>{if(recorder)event.preventDefault();});
+$('record-area').addEventListener('wheel',event=>{if(!recorder||!$('record-mouse').checked||!event.isTrusted)return;event.preventDefault();cancelRecording('滚轮事件尚未支持，录制已取消；原步骤保留。');},{passive:false});
 $('record-area').addEventListener('blur',event=>{if(recorder&&!['record-stop','record-cancel'].includes(event.relatedTarget?.id))cancelRecording('录制区失去焦点，已取消；原步骤保留。');});
 window.addEventListener('blur',()=>cancelRecording('窗口失去焦点，已取消录制。'));
 document.addEventListener('visibilitychange',()=>{if(document.hidden)cancelRecording('页面已隐藏，录制已取消。');});

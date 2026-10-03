@@ -578,7 +578,12 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     rejected{try broken.assignMacro(named:"B",to:102)};precondition(broken==before)
     rejected{try broken.removeMacro(named:"A")};precondition(broken==before)
     rejected{try broken.unassignMacro(from:102)};precondition(broken==before)
-    print("PASS: macro unbinding preserves library and other triggers; deletion reindexes; failed edits preserve original draft (file-only)")
+    var adopted=false
+    let recording=MacroRecordingSheet(name:"保留原步骤"){_ in adopted=true}
+    recording.beginRecording(modifierFlags:[]);recording.unsupportedMouseEvent();precondition(recording.recorder != nil,"keyboard-only recording ignores mouse events")
+    recording.mouseOption.state = .on;recording.observe(4,pressed:true);recording.unsupportedMouseEvent()
+    precondition(recording.recorder==nil && !adopted && recording.status.stringValue.contains("原步骤保留"))
+    print("PASS: macro unbinding preserves library and other triggers; deletion reindexes; failed edits preserve original draft; unsupported mouse recording cancels without adoption (no hardware I/O)")
 }
 
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
