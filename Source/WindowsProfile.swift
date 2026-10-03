@@ -2,6 +2,16 @@ import Foundation
 import CoreFoundation
 
 enum WindowsProfile {
+    // Shared between the USB serial queue and the main-actor executor. Old
+    // callbacks keep the same ticket, which becomes invalid on stop/reconnect.
+    final class HostTextTicket {
+        let id:UUID
+        private let lock=NSLock()
+        private var valid=true
+        init(id:UUID=UUID()){self.id=id}
+        var isCurrent:Bool {lock.lock();defer{lock.unlock()};return valid}
+        func invalidate(){lock.lock();valid=false;lock.unlock()}
+    }
     struct HostTextPlan:Equatable {
         let name:String
         let originalText:String

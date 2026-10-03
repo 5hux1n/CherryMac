@@ -605,6 +605,46 @@ func runHostTextPlanChecks(){
     print("PASS: official host text marker, UTF-16 scalar boundaries, LF/NUL handling and event index bounds (no listener, permission query, text posting or hardware I/O)")
 }
 
+@MainActor func runHostTextDispatchChecks()async {
+    func plan(_ name:String)->WindowsProfile.HostTextPlan{try! WindowsProfile.HostTextPlan(action:["ActionType":3,"ActionName":name,"ActionContent":["ActionText":name]])}
+    func waitFor(_ condition:()->Bool)async{
+        for _ in 0..<1000{if condition(){return};await Task.yield()}
+        preconditionFailure("dispatcher did not reach expected state")
+    }
+    var names:[String]=[],posted:[Int]=[],errors=0,active=0,maximumActive=0
+    var release:CheckedContinuation<Void,Never>?
+    let dispatcher=HostTextDispatcher(onError:{_ in errors+=1},onPostedUnits:{posted.append($0)},execution:{plan,_,cancelled in
+        names.append(plan.name);active+=1;maximumActive=max(maximumActive,active);defer{active-=1}
+        if plan.name=="A"{await withCheckedContinuation{release=$0}}
+        if cancelled(){throw CancellationError()}
+        if plan.name=="F"{throw HardwareError(message:"injected execution failure")}
+        return plan.scalarUTF16.reduce(0){$0+$1.count}
+    })
+    let stale=WindowsProfile.HostTextTicket();stale.invalidate()
+    precondition(!dispatcher.submit(plan("旧"),targetPID:42,ticket:stale))
+    let first=WindowsProfile.HostTextTicket()
+    precondition(dispatcher.submit(plan("A"),targetPID:42,ticket:first))
+    precondition(dispatcher.submit(plan("B"),targetPID:42,ticket:first))
+    await waitFor{release != nil}
+    // Cancellation leaves the active worker in place until its executor has
+    // returned. A fresh submission must not overlap the old output.
+    first.invalidate();dispatcher.stop()
+    let fresh=WindowsProfile.HostTextTicket()
+    precondition(dispatcher.submit(plan("C"),targetPID:42,ticket:fresh))
+    precondition(names==["A"] && active==1)
+    release?.resume();release=nil
+    await waitFor{posted.count==1}
+    precondition(names==["A","C"] && posted==[1] && errors==0 && maximumActive==1)
+    precondition(dispatcher.submit(plan("D"),targetPID:42,ticket:fresh))
+    precondition(dispatcher.submit(plan("E"),targetPID:42,ticket:fresh))
+    await waitFor{posted.count==3};precondition(names==["A","C","D","E"])
+    precondition(dispatcher.submit(plan("F"),targetPID:42,ticket:fresh))
+    precondition(dispatcher.submit(plan("G"),targetPID:42,ticket:fresh))
+    await waitFor{errors==1};precondition(names.last=="F" && !names.contains("G") && posted.count==3)
+    dispatcher.stop()
+    print("PASS: host text serial dispatch, stale-ticket rejection, queued cancellation and no overlapping execution (injected executor; no HID, permissions or Unicode events)")
+}
+
 func runMacroEditorChecks(){var fixture=HardwareSnapshot.demo();fixture.keymap=Array(repeating:0,count:378);runHardwareEditorTests(fixture);runMacroManagementChecks(fixture)}
 
 private func runMacroManagementChecks(_ fixture:HardwareSnapshot){

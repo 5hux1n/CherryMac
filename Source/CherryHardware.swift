@@ -266,20 +266,22 @@ final class CherryUSB: CherryHardwareAccess {
     private var transportDead=false {didSet{if transportDead{stopHostTextObservation()}}}
     private var hostTextGeneration=UUID()
     private var hostTextRouting:WindowsProfile.HostTextBindings?
-    private var hostTextSink:((WindowsProfile.HostTextBinding,UUID)->Void)?
+    private var hostTextSink:((WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void)?
+    private var hostTextTicket:WindowsProfile.HostTextTicket?
     private(set) var hostTextObservationToken:UUID?
     func stopHostTextObservation(){
+        hostTextTicket?.invalidate();hostTextTicket=nil
         hostTextGeneration=UUID();hostTextObservationToken=nil;hostTextRouting=nil;hostTextSink=nil
     }
     // Opt-in preparation on this session's hardware queue. No Unicode output
     // is sent here. A consumer must check the token when executing later.
-    func startHostTextObservation(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,UUID)->Void)throws {
+    func startHostTextObservation(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void)throws {
         stopHostTextObservation()
         guard !transportDead,device != nil else{throw HardwareError(message:"USB 会话已失效，请重新连接。")}
         let generation=hostTextGeneration
         let routing=try readHostTextBindings(officialJSON:officialJSON)
         guard !transportDead,hostTextGeneration==generation else{throw HardwareError(message:"准备文本监听期间配置或 USB 会话发生变化，请重新读取。")}
-        hostTextRouting=routing;hostTextSink=onBinding;hostTextObservationToken=generation
+        hostTextRouting=routing;hostTextSink=onBinding;hostTextObservationToken=generation;hostTextTicket=WindowsProfile.HostTextTicket(id:generation)
     }
     private var keymapAuthorization:KeymapWriteAuthorization?
     private var keymapLog:HardwareOperationLog?
@@ -350,9 +352,9 @@ final class CherryUSB: CherryHardwareAccess {
             let owner = Unmanaged<CherryUSB>.fromOpaque(context).takeUnretainedValue()
             let bytes=Array(UnsafeBufferPointer(start:report,count:length))
             owner.observedReport?(id,bytes)
-            if !owner.transportDead,id==5,let token=owner.hostTextObservationToken,
+            if !owner.transportDead,id==5,let ticket=owner.hostTextTicket,ticket.isCurrent,
                let value=WindowsProfile.hostTextEvent(fullReport:bytes),let binding=owner.hostTextRouting?.binding(eventValue:value){
-                owner.hostTextSink?(binding,token)
+                owner.hostTextSink?(binding,ticket)
             }
             guard id == 4, length == 64 else {return}
             owner.received.append(bytes)

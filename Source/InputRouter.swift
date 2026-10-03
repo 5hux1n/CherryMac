@@ -180,3 +180,52 @@ enum HostTextExecutor {
         return postedUnits
     }
 }
+
+// Explicitly submitted jobs only. This object does not open USB, request
+// permissions, install event taps or choose another application's focus.
+@MainActor final class HostTextDispatcher {
+    typealias Execution = @MainActor (WindowsProfile.HostTextPlan,pid_t,@escaping ()->Bool) async throws -> Int
+    private struct Job {
+        let plan:WindowsProfile.HostTextPlan
+        let targetPID:pid_t
+        let ticket:WindowsProfile.HostTextTicket
+        let generation:UUID
+    }
+    private var pending:[Job]=[]
+    private var worker:Task<Void,Never>?
+    private var generation=UUID()
+    private let execution:Execution
+    private let onError:(Error)->Void
+    private let onPostedUnits:(Int)->Void
+    init(onError:@escaping (Error)->Void,onPostedUnits:@escaping (Int)->Void={_ in},
+         execution:@escaping Execution={plan,pid,cancelled in try await HostTextExecutor.execute(plan,targetPID:pid,cancelled:cancelled)}){
+        self.execution=execution;self.onError=onError;self.onPostedUnits=onPostedUnits
+    }
+    @discardableResult func submit(_ plan:WindowsProfile.HostTextPlan,targetPID:pid_t,ticket:WindowsProfile.HostTextTicket)->Bool {
+        guard ticket.isCurrent,targetPID>0,targetPID != getpid() else{return false}
+        guard pending.count<64 else{stop();onError(HardwareError(message:"文本触发过于密集，已停止待执行文本。"));return false}
+        pending.append(Job(plan:plan,targetPID:targetPID,ticket:ticket,generation:generation));startWorker();return true
+    }
+    func stop(){generation=UUID();pending.removeAll();worker?.cancel()}
+    private func startWorker(){
+        guard worker==nil,!pending.isEmpty else{return}
+        worker=Task{[weak self] in await self?.drain()}
+    }
+    private func drain()async {
+        defer{worker=nil;startWorker()}
+        while !Task.isCancelled,!pending.isEmpty {
+            let job=pending.removeFirst()
+            guard job.ticket.isCurrent,job.generation==generation else{continue}
+            do{
+                let units=try await execution(job.plan,job.targetPID,{[weak self] in
+                    !job.ticket.isCurrent || self?.generation != job.generation
+                })
+                if job.ticket.isCurrent,job.generation==generation,!Task.isCancelled{onPostedUnits(units)}
+            }catch{
+                guard job.ticket.isCurrent,job.generation==generation,!Task.isCancelled else{continue}
+                stop();onError(error)
+            }
+        }
+    }
+    deinit{worker?.cancel()}
+}

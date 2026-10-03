@@ -1182,6 +1182,10 @@ if CommandLine.arguments.contains("--calculator-key-test"){
 }
 #endif
 #if CHERRY_MACRO_PRODUCT
+if CommandLine.arguments.contains("--host-text-dispatch-self-test"){
+    Task{@MainActor in await runHostTextDispatchChecks();exit(0)}
+    RunLoop.main.run();exit(1)
+}
 if CommandLine.arguments.contains("--host-text-self-test"){
     runHostTextPlanChecks();exit(0)
 }
