@@ -229,3 +229,81 @@ enum HostTextExecutor {
     }
     deinit{worker?.cancel()}
 }
+
+// Owns USB and its run loop on one dedicated thread. Constructing the worker
+// does not open hardware; only an explicit service start launches it.
+private final class HostTextUSBWorker {
+    private let lock=NSLock()
+    private var stopped=false
+    private var ticket:WindowsProfile.HostTextTicket?
+    private var runLoop:CFRunLoop?
+    private let officialJSON:Data
+    private let onBinding:(WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void
+    private let onReady:()->Void
+    private let onError:(Error)->Void
+    init(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void,onReady:@escaping ()->Void,onError:@escaping (Error)->Void){
+        self.officialJSON=officialJSON;self.onBinding=onBinding;self.onReady=onReady;self.onError=onError
+    }
+    private var isStopped:Bool{lock.lock();defer{lock.unlock()};return stopped}
+    func stop(){
+        lock.lock();stopped=true;let active=ticket,loop=runLoop;lock.unlock()
+        active?.invalidate();if let loop{CFRunLoopWakeUp(loop)}
+    }
+    func start(){Thread{[self] in autoreleasepool{run()}}.start()}
+    private func run(){
+        guard !isStopped else{return}
+        lock.lock();runLoop=CFRunLoopGetCurrent();lock.unlock()
+        defer{lock.lock();ticket=nil;runLoop=nil;lock.unlock()}
+        do{
+            let usb=try CherryUSB()
+            defer{usb.stopHostTextObservation()}
+            guard !isStopped else{return}
+            try usb.startHostTextObservation(officialJSON:officialJSON,onBinding:{[weak self] binding,ticket in
+                guard let self,!self.isStopped,ticket.isCurrent else{return};self.onBinding(binding,ticket)
+            })
+            guard let active=usb.currentHostTextTicket else{throw HardwareError(message:"文本监听未能准备完成。")}
+            lock.lock();ticket=active;let cancelled=stopped;lock.unlock()
+            if cancelled{active.invalidate();return}
+            onReady()
+            while !isStopped,active.isCurrent{
+                _=RunLoop.current.run(mode:.default,before:Date().addingTimeInterval(0.05))
+            }
+            if !isStopped{throw HardwareError(message:"键盘连接或文本会话已失效，请重新启用文本服务。")}
+        }catch{if !isStopped{onError(error)}}
+    }
+}
+
+@MainActor final class HostTextService {
+    private var worker:HostTextUSBWorker?
+    private var generation=UUID()
+    private let onState:(String)->Void
+    private lazy var dispatcher=HostTextDispatcher(onError:{[weak self] error in self?.fail(error)},onPostedUnits:{[weak self] units in
+        self?.onState("已发送 \(units) 个 UTF-16 单元；实际输入结果需在目标应用确认。")
+    })
+    init(onState:@escaping (String)->Void){self.onState=onState}
+    func start(officialJSON:Data)throws {
+        stop()
+        // Validate the model before opening USB; permission is checked only
+        // when the user explicitly enables this service. No request prompt.
+        _=try WindowsProfile.templateRoot(officialJSON)
+        guard AXIsProcessTrusted() else{throw HardwareError(message:"启用文本服务需要此 App 的辅助功能权限。")}
+        let expected=generation
+        let source=HostTextUSBWorker(officialJSON:officialJSON,onBinding:{[weak self] binding,ticket in
+            Task{@MainActor [weak self] in
+                guard let self,self.generation==expected,ticket.isCurrent else{return}
+                guard let pid=NSWorkspace.shared.frontmostApplication?.processIdentifier,pid != getpid() else{return}
+                self.dispatcher.submit(binding.plan,targetPID:pid,ticket:ticket)
+            }
+        },onReady:{[weak self] in Task{@MainActor [weak self] in
+            guard let self,self.generation==expected else{return};self.onState("文本服务已开启；切换到目标应用后按文本绑定键。")
+        }},onError:{[weak self] error in Task{@MainActor [weak self] in
+            guard let self,self.generation==expected else{return};self.fail(error)
+        }})
+        worker=source;onState("正在读取键盘并准备文本服务。")
+        // A state callback is allowed to stop the service before launch.
+        if generation==expected{source.start()}
+    }
+    func stop(){generation=UUID();worker?.stop();worker=nil;dispatcher.stop()}
+    private func fail(_ error:Error){stop();onState(error.localizedDescription)}
+    deinit{worker?.stop()}
+}

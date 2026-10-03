@@ -269,6 +269,9 @@ final class CherryUSB: CherryHardwareAccess {
     private var hostTextSink:((WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void)?
     private var hostTextTicket:WindowsProfile.HostTextTicket?
     private(set) var hostTextObservationToken:UUID?
+    // Access only on the owning hardware queue; the returned ticket itself
+    // supports thread-safe cancellation from the main actor.
+    var currentHostTextTicket:WindowsProfile.HostTextTicket?{hostTextTicket}
     func stopHostTextObservation(){
         hostTextTicket?.invalidate();hostTextTicket=nil
         hostTextGeneration=UUID();hostTextObservationToken=nil;hostTextRouting=nil;hostTextSink=nil
