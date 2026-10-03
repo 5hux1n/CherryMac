@@ -64,6 +64,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var baseline:HardwareSnapshot?
     var macroRecordingSheet:MacroRecordingSheet?
     var recordingPreference:KeyboardMacro.RecordingDelay?
+    var currentMacroOperation:HardwareOperationLog?
+    var macroCancellationButton:NSButton?
     var busy=false
     var lastKeyBackup:URL?{UserDefaults.standard.string(forKey:"hardware.lastKeyBackup").map{URL(fileURLWithPath:$0)}}
     var controls:[NSControl]=[]
@@ -139,11 +141,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:120));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
         macroText.frame=NSRect(origin:.zero,size:macroScroll.contentSize);macroText.minSize=NSSize(width:0,height:macroScroll.contentSize.height);macroText.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
         macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
-        macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 0\nA 松开 50";macros.addSubview(macroScroll)
+        macroText.toolTip="每行：按键、按下／松开、事件后等待毫秒。";macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 50\nA 松开 0";macros.addSubview(macroScroll)
         for (index,title) in ["置顶","上移","下移","置底"].enumerated(){let move=button(title,#selector(moveMacroStep));move.tag=index;place(move,8+CGFloat(index)*82,224,76,28,in:macros)}
         place(label("添加按键"),593,12,110,24,in:macros)
         macroKey.addItems(withTitles:(hidKeys.filter{$0.1 != 0}+mouseMacroKeys).map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
-        place(label("间隔（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
+        place(label("按住（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
         place(button("添加按下与松开",#selector(appendMacroKey)),593,99,282,30,in:macros)
         place(button("保存宏",#selector(stageMacro)),593,144,282,30,in:macros)
         place(button("分配到选中的键",#selector(assignMacro)),593,189,282,30,in:macros)
@@ -176,6 +178,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与键位",#selector(writeMacros))]{
             let write=button(title,selector);write.tag=index;write.isEnabled=false;write.toolTip=HardwareWritePolicy.reason;place(write,954,752,174,30);writeButtons.append(write)
         }
+        #if CHERRY_MACRO_PRODUCT
+        let cancel=button("停止发送 · 保留恢复记录",#selector(cancelMacroOperation));place(cancel,192,752,245,30);cancel.isHidden=true;macroCancellationButton=cancel
+        #endif
         profile=try? HardwareProfile.fromHardware(HardwareSnapshot.demo())
         connection.stringValue="预览配置 · 未连接键盘";message.stringValue="先读取 USB 配置，再点选按键编辑。点击写入键位后才会修改键盘。"
         loadLighting();refreshMacroPicker();loadSelectedAssignment();update();chooseTab(tabButtons[0])
@@ -219,6 +224,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     func update(){
         playbackChanged()
+        macroCancellationButton?.isHidden=currentMacroOperation==nil
+        macroCancellationButton?.isEnabled=busy && currentMacroOperation?.isCancelled==false
         writeButtons.forEach{$0.isEnabled=false}
         if !busy,let baseline,let profile,profile.snapshot.deviceInfo==baseline.deviceInfo,let plan=try? KeymapWriteAuthorization(baseline:baseline,keymap:profile.snapshot.keymap){writeButtons.first?.isEnabled = !plan.changedSlots.isEmpty;writeButtons.first?.toolTip="仅写键位表；灯效与宏区保留。"}
         #if CHERRY_MACRO_PRODUCT
@@ -331,6 +338,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         for slot in 0..<126 where ![UInt8(0x70),0x71].contains(baseline.keymap[slot*3]) && ![UInt8(0x70),0x71].contains(target.keymap[slot*3]){target.keymap.replaceSubrange(slot*3..<slot*3+3,with:baseline.keymap[slot*3..<slot*3+3])}
         return try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:true).expected
     }
+    @objc func cancelMacroOperation(){
+        guard busy,let log=currentMacroOperation else{return};log.requestCancellation();message.stringValue="已请求停止发送，等待当前 USB 回复；原配置与恢复记录保留。";update()
+    }
     @objc func restoreLastMacros(){
         guard !busy,let owner=window else{return}
         let authorization:MacroWriteAuthorization
@@ -344,15 +354,17 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let panel=NSAlert();panel.messageText="恢复最近宏写入前配置";panel.informativeText="请保持 USB 有线连接并松开全部按键。只恢复保存记录里的宏库和宏绑定；读取到其他配置变化会停止恢复。";panel.addButton(withTitle:"全部已松开，恢复");panel.addButton(withTitle:"取消")
         panel.beginSheetModal(for:owner){[weak self] response in
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
-            self.busy=true;self.controls.forEach{$0.isEnabled=false};self.message.stringValue="正在读取并恢复宏配置…"
+            let operationLog:HardwareOperationLog
+            do{operationLog=try HardwareOperationLog(kind:"product-macro-recovery")}catch{self.message.stringValue=error.localizedDescription;return}
+            self.currentMacroOperation=operationLog;self.busy=true;self.controls.forEach{$0.isEnabled=false};self.update();self.message.stringValue="正在读取并恢复宏配置…"
             self.queue.async{[weak self] in
                 let result=Result<HardwareSnapshot,Error>{
-                    let log=try HardwareOperationLog(kind:"product-macro-recovery")
+                    let log=operationLog
                     return try CherryUSB().recoverMacro(authorization,log:log,confirmStopped:{request in
                         try MacroPhysicalStopController.confirm(request,owner:owner,directory:log.url.deletingLastPathComponent().appendingPathComponent("\(log.url.deletingPathExtension().lastPathComponent)-stop-\(UUID().uuidString)"))
                     })
                 }
-                DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true}
+                DispatchQueue.main.async{guard let self else{return};self.currentMacroOperation=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true}
                     switch result{
                     case .success(let snapshot):self.baseline=snapshot;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致。"
                     case .failure(let error):self.baseline=nil;self.message.stringValue=error.localizedDescription+" 保存的恢复记录仍保留。"
@@ -371,16 +383,18 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
             // Freeze the review scope; a changed draft/baseline requires a new review.
             do{guard try self.macroWriteTarget()==target,self.baseline==baseline else{throw HardwareError(message:"确认期间编辑区或键盘基线变化，请重新核对。")}}catch{self.message.stringValue=error.localizedDescription;return}
-            self.busy=true;self.controls.forEach{$0.isEnabled=false};self.message.stringValue="正在备份并写入宏与键位；请勿按键或拔线。"
+            let operationLog:HardwareOperationLog
+            do{operationLog=try HardwareOperationLog(kind:"product-macro-write")}catch{self.message.stringValue=error.localizedDescription;return}
+            self.currentMacroOperation=operationLog;self.busy=true;self.controls.forEach{$0.isEnabled=false};self.update();self.message.stringValue="正在备份并写入宏与键位；请勿按键或拔线。"
             self.queue.async{[weak self] in
                 let result=Result<HardwareSnapshot,Error>{
-                    let log=try HardwareOperationLog(kind:"product-macro-write")
-                    UserDefaults.standard.set(log.url.path,forKey:"hardware.lastMacroOperation")
+                    let log=operationLog
+                    defer{if log.string("before") != nil && log.string("target") != nil{UserDefaults.standard.set(log.url.path,forKey:"hardware.lastMacroOperation")}}
                     return try CherryUSB().applyMacro(target,baseline:baseline,log:log,confirmStopped:{request in
                         try MacroPhysicalStopController.confirm(request,owner:owner,directory:log.url.deletingLastPathComponent().appendingPathComponent("\(log.url.deletingPathExtension().lastPathComponent)-stop-\(UUID().uuidString)"))
                     })
                 }
-                DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
+                DispatchQueue.main.async{guard let self else{return};self.currentMacroOperation=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
                     switch result{
                     case .success(let snapshot):self.baseline=snapshot;var remaining=draft;for slot in 0..<126 where baseline.keymap[slot*3..<slot*3+3] != snapshot.keymap[slot*3..<slot*3+3]{remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3])};remaining.snapshot.macroData=snapshot.macroData;self.profile=remaining;self.update();do{try self.rememberMacroProfile(remaining,snapshot:snapshot)}catch{self.message.stringValue="宏已写入并读回一致，但本地名称保存失败：\(error.localizedDescription)";return};self.message.stringValue="宏与按键写入完成，完整读回一致；备份与日志已保存。普通键与灯效草稿保留在编辑区。"
                     case .failure(let error):self.baseline=nil;self.update();self.message.stringValue=error.localizedDescription+" 请重新连接并读取后核对；备份和日志已保留。"
@@ -508,7 +522,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func appendMacroKey(){
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
-        macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 0\n\(key) 松开 \(delay)"
+        macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 \(delay)\n\(key) 松开 0"
     }
     @objc func playbackChanged(){macroRepeat.isEnabled = !busy && macroPlayback.indexOfSelectedItem==0}
     @objc func assignMacro(){

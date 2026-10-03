@@ -32,7 +32,7 @@ func runHardwareTests() {
         try! recorder.observe(usage:4,kind:.mouse,pressed:false,milliseconds:170)
         try! recorder.observe(usage:4,pressed:false,milliseconds:180)
         let result=try! recorder.finish(name:"record")
-        precondition(result.steps.map{$0.delayMilliseconds} == (timing == .actual ? [10,20,40,10]:timing == .fixed ? [777,777,777,777]:[0,0,0,0]))
+        precondition(result.steps.map{$0.delayMilliseconds} == (timing == .actual ? [20,40,10,0]:timing == .fixed ? [777,777,777,0]:[0,0,0,0]))
         precondition(try! CherryMacroCodec.decodeEvents(CherryMacroCodec.encodeEvents(result),name:result.name).steps==result.steps)
         fails{try recorder.observe(usage:4,pressed:true,milliseconds:200)}
     }
@@ -41,7 +41,7 @@ func runHardwareTests() {
     func key(_ down:Bool)->NSEvent{NSEvent.keyEvent(with:down ? .keyDown:.keyUp,location:.zero,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,characters:"a",charactersIgnoringModifiers:"a",isARepeat:false,keyCode:0)!}
     sheet.keyboard(key(true),pressed:true);sheet.finish();precondition(!sheet.closed && captured==nil)
     sheet.keyboard(key(false),pressed:false);sheet.finish()
-    precondition(captured?.steps.map{$0.usage}==[4,4] && captured?.steps.map{$0.delayMilliseconds}==[777,777])
+    precondition(captured?.steps.map{$0.usage}==[4,4] && captured?.steps.map{$0.delayMilliseconds}==[777,0])
     var chordCaptured:KeyboardMacro?
     let chordSheet=MacroRecordingSheet(name:"chord") {chordCaptured=$0};chordSheet.beginRecording(modifierFlags:[])
     for (pressed,raw) in [(true,UInt(1)|(1<<18)),(false,UInt(0))]{
@@ -59,7 +59,7 @@ func runHardwareTests() {
     try! recorder.observe(usage:4,pressed:true,milliseconds:110)
     fails{try recorder.observe(usage:5,pressed:true,milliseconds:109)}
     precondition(recorder.steps.count==1)
-    try! recorder.observe(usage:4,pressed:false,milliseconds:100000);precondition(recorder.steps[1].delayMilliseconds==60000)
+    try! recorder.observe(usage:4,pressed:false,milliseconds:100000);precondition(recorder.steps[0].delayMilliseconds==60000)
     recorder.cancel();precondition(recorder.steps.isEmpty);fails{_ = try recorder.finish(name:"cancelled")}
 
     let mouse=KeyboardMacro(name:"Middle + A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:true,delayMilliseconds:20,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:50,kind:.mouse),.init(usage:4,pressed:false,delayMilliseconds:0)])

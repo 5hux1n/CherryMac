@@ -79,7 +79,7 @@ await page.locator('#record-start').click();await page.keyboard.down('a');await 
 assert.match(await page.locator('#record-status').textContent(),/松开/);await page.keyboard.up('a');await page.locator('#record-stop').click();await page.locator('#save-macro').click();
 await page.locator('#tab-profiles').click();const recordedDownload=page.waitForEvent('download');await page.locator('#export').click();await (await recordedDownload).saveAs(join(artifacts,'recorded.json'));
 const recorded=JSON.parse(await readFile(join(artifacts,'recorded.json'),'utf8')).macros.find(m=>m.name==='录制测试');
-assert.deepEqual(recorded.steps,[{usage:4,pressed:true,delayMilliseconds:777},{usage:4,pressed:false,delayMilliseconds:777}]);assert.deepEqual(recorded.recordingDelay,{fixed:true,milliseconds:777});
+assert.deepEqual(recorded.steps,[{usage:4,pressed:true,delayMilliseconds:777},{usage:4,pressed:false,delayMilliseconds:0}]);assert.deepEqual(recorded.recordingDelay,{fixed:true,milliseconds:777});
 await page.locator('#tab-macros').click();await page.locator('#record-start').click();await page.keyboard.down('b');await page.locator('#tab-profiles').click();await page.keyboard.up('b');await page.locator('#tab-macros').click();
 assert.equal(await page.locator('#record-stop').isDisabled(),true);assert.equal(await page.locator('.macro-step').count(),2);assert.match(await page.locator('#record-status').textContent(),/取消/);
 await page.locator('#macro-name').fill('录制鼠标');await page.locator('#record-mouse').check();await page.locator('#record-start').click();await page.locator('#record-area').click();await page.locator('#record-stop').click();await page.locator('#save-macro').click();

@@ -205,6 +205,7 @@ extension CherryHardwareAccess {
             return after
         }catch{
             let failure=error.localizedDescription
+            if operationLog?.isCancelled==true{operationLog?.record("phase","cancelled-preserving-recovery");throw HardwareError(message:"宏写入已停止发送，尚未自动恢复。请使用最近宏写入恢复入口。备份：\(backup.path)")}
             operationLog?.record("writeError",failure);operationLog?.record("phase","recovery-preflight")
             do {
                 try waitUntilKeysReleased()
@@ -277,6 +278,7 @@ final class CherryUSB: CherryHardwareAccess {
     private var macroAuthorization:MacroWriteAuthorization?
     func recoverMacro(_ authorization:MacroWriteAuthorization,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
         guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能开始恢复。")}
+        if !authorization.beforeCompletion.repeatingBindings.isEmpty || !authorization.targetCompletion.repeatingBindings.isEmpty{try MacroPhysicalStopController.requireAccess(beforeWrite:true)}
         try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
         defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
         log.record("scope","reconnected recovery of saved macro transaction only")
@@ -286,6 +288,9 @@ final class CherryUSB: CherryHardwareAccess {
     func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
         guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
         let authorization=try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:confirmStopped != nil)
+        // Check before installing a repeating target: recovery must remain
+        // available even when the original configuration contains no macro.
+        if !authorization.beforeCompletion.repeatingBindings.isEmpty || !authorization.targetCompletion.repeatingBindings.isEmpty{try MacroPhysicalStopController.requireAccess(beforeWrite:true)}
         try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
         defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
         log.record("scope","macro bank and macro bindings only");log.record("before",try HardwareProfile(snapshot:baseline).encoded().base64EncodedString());log.record("target",try HardwareProfile(snapshot:target).encoded().base64EncodedString());log.record("phase","preflight")

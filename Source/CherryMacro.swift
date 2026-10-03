@@ -127,7 +127,10 @@ struct MacroRecorder {
         if repeatEvent || (pressed ? held.contains(identity):!held.contains(identity)){return}
         guard steps.count<256 else{throw HardwareError(message:"录制最多 256 个事件，请取消或缩短操作。")}
         let delay=timing == .fixed ? fixedMilliseconds:timing == .ignore ? 0:min(60000,milliseconds-lastMilliseconds)
-        steps.append(.init(usage:usage,pressed:pressed,delayMilliseconds:delay,kind:kind))
+        // USB execution captures associate the delay with the preceding event.
+        // Ignore recorder startup latency and leave the final event at zero.
+        if !steps.isEmpty{steps[steps.count-1].delayMilliseconds=delay}
+        steps.append(.init(usage:usage,pressed:pressed,delayMilliseconds:0,kind:kind))
         if pressed{held.insert(identity)}else{held.remove(identity)}
         lastMilliseconds=milliseconds
     }

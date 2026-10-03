@@ -45,6 +45,13 @@ final class HardwareOperationLog {
     private var state:[String:Any]
     private var rows:[[String:Any]]=[]
     private var failure:String?
+    private var cancelled=false
+    var isCancelled:Bool{lock.lock();defer{lock.unlock()};return cancelled}
+    func requestCancellation(){
+        lock.lock();defer{lock.unlock()};cancelled=true;state["cancelRequested"]=true
+        rows.append(["kind":"phase","at":ISO8601DateFormatter().string(from:Date()),"field":"cancelRequested","value":true])
+        do{try persist()}catch{failure=error.localizedDescription}
+    }
     init(kind:String,directory:URL? = nil) throws {
         let id=UUID().uuidString
         let folder=directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs")
@@ -75,6 +82,7 @@ final class HardwareOperationLog {
     }
     func requireHealthy() throws {
         lock.lock();defer{lock.unlock()}
+        if cancelled{throw HardwareError(message:"用户已停止发送；原配置和恢复记录保留。日志：\(url.path)")}
         if let failure{throw HardwareError(message:"操作日志保存失败，停止后续写入：\(failure)。日志：\(url.path)")}
     }
     func string(_ key:String)->String?{lock.lock();defer{lock.unlock()};return state[key] as? String}

@@ -49,6 +49,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
     </section>
     <aside id="review-card" class="review-card"><p class="eyebrow">当前改动</p><h2 id="change-title">待写入按键</h2><div id="changes" class="changes"></div><p id="draft-note" class="help">按键写入只发送键位表，其他配置保留。</p><label class="write-scope">写入范围<select id="scope" disabled><option value="keys">仅按键 · 灯效和宏保留</option></select></label><button id="write" class="primary wide" disabled>写入按键</button><button id="discard" class="wide">撤销编辑区修改</button><p class="help">写入后直接由键盘输出，无需保持网页打开。恢复时导入备份，再写入按键；宏绑定改动暂缓。</p></aside>
   </div>
+  <button id="cancel-macro-operation" hidden>停止发送 · 保留恢复记录</button>
   <div id="status" class="status" role="status" aria-live="polite">演示模式 · 连接不会自动写入</div>
   <footer><span>CherryMac Web 0.6.0 · 按键写入版 · 与 CHERRY 官方无关联</span><span>USB 有线 · Chrome / Edge · HTTPS / localhost</span></footer>
 </main></div>

@@ -259,7 +259,10 @@ export class MacroRecorder{
     if(repeatEvent||(pressed?this.held.has(identity):!this.held.has(identity)))return;
     requireThat(this.steps.length<256,'录制最多 256 个事件，请取消或缩短操作。');
     const delayMilliseconds=this.timing==='fixed'?this.fixedMilliseconds:this.timing==='ignore'?0:Math.min(60000,milliseconds-this.lastMilliseconds);
-    this.steps.push({usage,pressed,delayMilliseconds,...(kind==='mouse'?{kind}:{})});
+    // Delay follows the event in the observed USB firmware execution.
+    // Startup latency and time spent clicking Stop are not macro actions.
+    if(this.steps.length)this.steps[this.steps.length-1].delayMilliseconds=delayMilliseconds;
+    this.steps.push({usage,pressed,delayMilliseconds:0,...(kind==='mouse'?{kind}:{})});
     if(pressed)this.held.add(identity);else this.held.delete(identity);this.lastMilliseconds=milliseconds;
   }
   finish(name){requireThat(this.active&&this.held.size===0,'请先松开全部录制按键，再停止录制。');const m={name,steps:clone(this.steps),recordingDelay:{fixed:this.timing==='fixed',milliseconds:this.fixedMilliseconds}};validateMacro(m);this.active=false;return m;}

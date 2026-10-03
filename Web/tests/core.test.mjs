@@ -314,7 +314,7 @@ test('official mouse macro bytes distinguish middle button from keyboard A',()=>
 });
 
 test('recorder timing, repeat suppression, balanced finish, cancel and capacity',()=>{
-  for(const [timing,expected] of [['actual',[10,20,40,10]],['fixed',[777,777,777,777]],['ignore',[0,0,0,0]]]){
+  for(const [timing,expected] of [['actual',[20,40,10,0]],['fixed',[777,777,777,0]],['ignore',[0,0,0,0]]]){
     const r=new MacroRecorder({timing,fixedMilliseconds:777,startedMilliseconds:100});
     r.observe({usage:4,pressed:false,milliseconds:105});
     r.observe({usage:4,pressed:true,milliseconds:110});
@@ -329,7 +329,7 @@ test('recorder timing, repeat suppression, balanced finish, cancel and capacity'
   }
   const r=new MacroRecorder({startedMilliseconds:100});r.observe({usage:4,pressed:true,milliseconds:110});
   assert.throws(()=>r.observe({usage:5,pressed:true,milliseconds:109}));assert.equal(r.steps.length,1);
-  r.observe({usage:4,pressed:false,milliseconds:100000});assert.equal(r.steps[1].delayMilliseconds,60000);
+  r.observe({usage:4,pressed:false,milliseconds:100000});assert.equal(r.steps[0].delayMilliseconds,60000);
   r.cancel();assert.equal(r.steps.length,0);assert.throws(()=>r.finish('test'));
   const limit=new MacroRecorder({startedMilliseconds:0});for(let i=0;i<256;i++)limit.observe({usage:4,pressed:i%2===0,milliseconds:i});
   assert.throws(()=>limit.observe({usage:4,pressed:true,milliseconds:257}));assert.equal(limit.steps.length,256);assert.equal(limit.held.size,0);
