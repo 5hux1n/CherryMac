@@ -135,6 +135,22 @@ struct HardwareProfile: Codable, Equatable {
         draft.macroBindings?.removeValue(forKey:slot);draft.macroModes?.removeValue(forKey:slot)
         draft.snapshot=try draft.resolvedMacros();self=draft
     }
+    static func mergeMacroRecovery(restored:HardwareProfile,previous:HardwareProfile?,before:HardwareSnapshot,target:HardwareSnapshot)throws->HardwareProfile {
+        try restored.validate();try before.validate();try target.validate()
+        guard restored.snapshot.deviceInfo==before.deviceInfo,restored.snapshot.keymap==before.keymap,restored.snapshot.parameters==before.parameters,restored.snapshot.colors==before.colors,restored.snapshot.macroData==before.macroData else{throw HardwareError(message:"宏恢复读回与原配置不一致，未合并编辑区。")}
+        guard let previous,previous.snapshot.deviceInfo==restored.snapshot.deviceInfo else{return restored}
+        try previous.validate();var result=restored
+        result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors
+        for slot in 0..<126 {
+            let offset=slot*3
+            // Drop unsent macro edits as part of the explicit macro rollback.
+            // Only ordinary drafts outside the old/new macro triggers survive.
+            if ![before,target,previous.snapshot].contains(where:{[UInt8(0x70),0x71].contains($0.keymap[offset])}){
+                result.snapshot.keymap.replaceSubrange(offset..<offset+3,with:previous.snapshot.keymap[offset..<offset+3])
+            }
+        }
+        try result.validate();return result
+    }
     mutating func duplicateMacro(named name:String)throws->String {
         guard macroBindings != nil,let original=macros.first(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
         var draft=self;let stem=KeyboardMacro.nameStem(name);var next="\(stem) 副本",number=2

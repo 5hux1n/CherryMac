@@ -5,7 +5,7 @@ import {applyConfiguration,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.
 import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
-import {macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
+import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
 import {saveLog,listLogs} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
@@ -146,8 +146,8 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
   syncLights();status((wanted.kind==='macro'?'宏与绑定键':'按键')+'写入完成，完整读回一致。备份和日志已自动保存；其他草稿尚未写入。');
 });};
 $('recover-macro').onclick=e=>{if(busy||!macroProduct)return;try{gate.acknowledge(e);}catch(error){status(error.message,true);return;}void operation(async()=>{
-  const saved=await lastMacroTransaction();macroAbort=new AbortController();render();
-  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);profile=await recalledMacroProfile(after)??safeProfile(after);refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致。');}
+  const previous=clone(profile),saved=await lastMacroTransaction();macroAbort=new AbortController();render();
+  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after)??safeProfile(after);profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
   catch(error){baseline=null;if(macroAbort.signal.aborted)throw new Error('宏恢复已停止发送。恢复记录仍保留，重连后可再次恢复。');throw error;}
   finally{macroAbort=null;}
 });};

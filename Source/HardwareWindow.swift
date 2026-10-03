@@ -449,6 +449,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
             let operationLog:HardwareOperationLog
             do{operationLog=try HardwareOperationLog(kind:"product-macro-recovery")}catch{self.message.stringValue=error.localizedDescription;return}
+            let previousDraft=self.profile
             self.currentMacroOperation=operationLog;self.busy=true;self.controls.forEach{$0.isEnabled=false};self.update();self.message.stringValue="正在读取并恢复宏配置…"
             self.queue.async{[weak self] in
                 let result=Result<HardwareSnapshot,Error>{
@@ -459,7 +460,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 }
                 DispatchQueue.main.async{guard let self else{return};self.currentMacroOperation=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true}
                     switch result{
-                    case .success(let snapshot):self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致。"
+                    case .success(let snapshot):
+                        self.baseline=snapshot;self.baselineWasRead=true
+                        let restored=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                        self.profile=(try? HardwareProfile.mergeMacroRecovery(restored:restored,previous:previousDraft,before:authorization.before,target:authorization.expected)) ?? restored
+                        self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致；普通键与灯效草稿保留。"
                     case .failure(let error):self.baseline=nil;self.message.stringValue=error.localizedDescription+" 保存的恢复记录仍保留。"
                     };self.update()
                 }

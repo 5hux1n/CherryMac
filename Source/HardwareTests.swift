@@ -578,6 +578,14 @@ private func runMacroManagementChecks(_ fixture:HardwareSnapshot){
     rejected{try broken.assignMacro(named:"B",to:102)};precondition(broken==before)
     rejected{try broken.removeMacro(named:"A")};precondition(broken==before)
     rejected{try broken.unassignMacro(from:102)};precondition(broken==before)
+    var pending=assigned;pending.snapshot.keymap.replaceSubrange(60..<63,with:[0x20,8,21]);pending.snapshot.parameters[2]=3;pending.snapshot.colors![45]=123
+    try! pending.assignMacro(named:"B",to:12)
+    let recovered=try! HardwareProfile.mergeMacroRecovery(restored:assigned,previous:pending,before:assigned.snapshot,target:assigned.snapshot)
+    precondition(recovered.snapshot.parameters==pending.snapshot.parameters && recovered.snapshot.colors==pending.snapshot.colors)
+    precondition(Array(recovered.snapshot.keymap[60..<63])==[0x20,8,21] && recovered.macroBindings==assigned.macroBindings && recovered.macros==assigned.macros)
+    precondition(Array(recovered.snapshot.keymap[36..<39])==Array(assigned.snapshot.keymap[36..<39]),"unsent macro trigger must roll back with its library")
+    var incorrect=assigned;incorrect.snapshot.macroData![20]=1
+    rejected{_ = try HardwareProfile.mergeMacroRecovery(restored:incorrect,previous:pending,before:assigned.snapshot,target:assigned.snapshot)}
     var preserved=assigned.snapshot
     preserved.macroData!.replaceSubrange(6..<16,with:Array(1...10))
     let first=Int(preserved.macroData![16]) | Int(preserved.macroData![17])<<8

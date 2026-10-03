@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,resolveMacros,validateProfile} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot} from './model.js?v=0.6.0';
 import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
 
 // Names and recording preferences live locally; firmware stores event bytes.
@@ -29,6 +29,18 @@ export function macroProductPlan(profile,before){
   }
   target.parameters=clone(before.parameters);target.colors=clone(before.colors);
   return new MacroWriteAuthorization(before,target,{allowUnbounded:true}).expected;
+}
+export function mergeMacroRecoveryDraft(restored,previous,before,target){
+  validateProfile(restored);validateSnapshot(before);validateSnapshot(target);
+  requireThat(['deviceInfo','keymap','parameters','colors','macroData'].every(key=>equal(restored.snapshot[key],before[key])),'宏恢复读回与原配置不一致，未合并编辑区。');
+  if(!previous||!equal(previous.snapshot.deviceInfo,restored.snapshot.deviceInfo))return clone(restored);
+  validateProfile(previous);const result=clone(restored);
+  result.snapshot.parameters=clone(previous.snapshot.parameters);result.snapshot.colors=clone(previous.snapshot.colors);
+  for(let slot=0;slot<126;slot++){
+    const offset=slot*3;
+    if(![before,target,previous.snapshot].some(s=>[0x70,0x71].includes(s.keymap[offset])))result.snapshot.keymap.splice(offset,3,...previous.snapshot.keymap.slice(offset,offset+3));
+  }
+  validateProfile(result);return result;
 }
 export async function rememberMacroProfile(profile,snapshot){
   const saved=clone(profile);saved.snapshot=clone(snapshot);validateProfile(saved);

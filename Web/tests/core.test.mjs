@@ -1,3 +1,4 @@
+import {mergeMacroRecoveryDraft} from '../assets/product-macros.js';
 import {macroTestPlan,testMacro,testPlayback} from '../assets/macro-test-flow.js';
 import {waitForFiniteMacroCompletion,applyMacroWithStop} from '../assets/macro-session.js';
 import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.js';
@@ -663,4 +664,15 @@ test('macro editor preserves opaque header and per-record bytes across edits',()
   const saved=parseProfile(JSON.stringify(copy.profile));assert.deepEqual(resolveMacros(saved).macroData,copy.profile.snapshot.macroData);
   const removed=removeMacro(saved,copy.name);assert.deepEqual(removed.snapshot.macroData,p.snapshot.macroData);
   assert.throws(()=>validateMacro({...macro,hardwareReserved:[1]}));assert.throws(()=>encodeBank([macro],[1]));
+});
+
+
+test('macro recovery preserves ordinary and lighting drafts without retaining unsent macro bindings',()=>{
+  const before=demoSnapshot();before.keymap.fill(0);before.macroData=encodeBank([macro]);before.keymap.splice(306,3,0x70,0,0);
+  const restored=fromHardware(before),previous=clone(restored);previous.snapshot.parameters[2]=3;previous.snapshot.colors[45]=123;previous.snapshot.keymap.splice(60,3,0x20,8,21);
+  previous.macroBindings[12]=previous.macros[0].name;previous.snapshot=resolveMacros(previous);const saved=clone(previous);
+  const result=mergeMacroRecoveryDraft(restored,previous,before,before);
+  assert.deepEqual(result.snapshot.parameters,previous.snapshot.parameters);assert.deepEqual(result.snapshot.colors,previous.snapshot.colors);assert.deepEqual(result.snapshot.keymap.slice(60,63),[0x20,8,21]);
+  assert.deepEqual(result.snapshot.keymap.slice(36,39),before.keymap.slice(36,39));assert.deepEqual(result.macroBindings,restored.macroBindings);assert.deepEqual(result.macros,restored.macros);assert.deepEqual(previous,saved);
+  const wrong=clone(restored);wrong.snapshot.macroData[20]=1;assert.throws(()=>mergeMacroRecoveryDraft(wrong,previous,before,before));
 });
