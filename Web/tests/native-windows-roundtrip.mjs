@@ -62,5 +62,22 @@ try{
  for(const field of ['deviceInfo','parameters','keymap','colors','macroData'])assert.deepEqual(importedLibrary.snapshot[field],webLibrary.snapshot[field],field);
  assert.deepEqual(importedLibrary.macros,webLibrary.macros);assert.ok(importedLibrary.macros.some(m=>m.name==='Unbound'&&m.preferredPlayback.count===3));
  assert.deepEqual(importedLibrary.macroBindings,webLibrary.macroBindings);
+ // Imported same-name actions retain distinct provenance even after renaming.
+ const duplicate=clone(template);duplicate.ActionInfo.push({...clone(action),opaque:{id:43}});
+ duplicate.KeyList[17].ActionLink=1;duplicate.KeyList[17].ActionLinkIndex=0;
+ duplicate.KeyList[18].ActionLink=1;duplicate.KeyList[18].ActionLinkIndex=1;
+ const dp=save('duplicate.json',duplicate);invoke(['--convert-windows-profile',converted,'--profile',dp,'--baseline',b]);
+ const distinct=JSON.parse(readFileSync(converted,'utf8')),webDistinct=importWindows(duplicate,baseline);
+ assert.deepEqual(distinct.macros,webDistinct.macros);
+ distinct.macros[0].name='Renamed';distinct.macroBindings[102]='Renamed';
+ const distinctPath=save('distinct.json',distinct),distinctOut=join(directory,'distinct-out.json');
+ invoke(['--export-windows-keys-macros',distinctOut,'--profile',distinctPath,'--template',dp]);
+ const distinctExport=JSON.parse(readFileSync(distinctOut,'utf8'));
+ assert.deepEqual(distinctExport,exportWindowsKeysAndMacros(distinct,duplicate));
+ assert.deepEqual(distinctExport.ActionInfo.map(a=>a.opaque.id),[42,43]);
+ const broken=clone(distinct);broken.macros[0].windowsActionIndex=999;
+ const brokenPath=save('broken-source.json',broken);
+ invoke(['--export-windows-keys-macros',rejected,'--profile',brokenPath,'--template',dp],false);
+ assert.equal(existsSync(rejected),false);assert.throws(()=>exportWindowsKeysAndMacros(broken,duplicate));
  console.log('PASS: native/Web official export equality, five-bank import equality, unbound libraries, shared bindings, hidden text references, metadata, playback variants, source protection and ambiguity rejection');
 }finally{rmSync(directory,{recursive:true,force:true});}

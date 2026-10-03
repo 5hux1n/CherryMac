@@ -13,6 +13,7 @@ export function validateSnapshot(s,complete=false){
 }
 export function validateMacro(m){
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
+  if(m?.windowsActionIndex!=null)requireThat(Number.isInteger(m.windowsActionIndex)&&m.windowsActionIndex>=0,'宏来源动作索引无效。');
   requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
@@ -79,6 +80,7 @@ export function fromHardware(snapshot){
 export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
+  p.macros.forEach(m=>officialMacroSource(p,m));
   requireThat(new Set(p.macros.map(m=>m.name)).size===p.macros.length,'宏名称不能重复。');
   if(p.macroModes!=null){requireThat(typeof p.macroModes==='object'&&!Array.isArray(p.macroModes),'宏执行方式结构无效。');for(const [slot,playback] of Object.entries(p.macroModes)){requireThat(Object.hasOwn(p.macroBindings??{},slot),'宏执行方式缺少对应绑定。');validatePlayback(playback);}}
   if(p.macroBindings!=null){requireThat(typeof p.macroBindings==='object'&&!Array.isArray(p.macroBindings),'宏绑定结构无效。');
@@ -145,19 +147,27 @@ function hasOfficialMacroExtras(action){
   const content=action.ActionContent;requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
   return Object.keys(action).some(k=>!['ActionType','ActionName','ActionContent'].includes(k))||Object.keys(content).some(k=>!['ActionMacroType','ActionMacroLoopValue','ActionMacroFixTimeIsSelected','ActionMacroFixTimeValue','ActionMacroEvents'].includes(k))||content.ActionMacroEvents.some(e=>Object.keys(e??{}).some(k=>!['Type','Button','Action','Delay'].includes(k)));
 }
+function officialMacroSource(profile,macro){
+  if(macro.windowsActionIndex==null)return null;
+  requireThat(typeof profile.windowsTemplateJSON==='string','宏来源缺少官方模板。');
+  const root=JSON.parse(profile.windowsTemplateJSON),action=root.ActionInfo?.[macro.windowsActionIndex];
+  requireThat(action&&winInt(action.ActionType,'ActionType',0,4)===2,'宏来源动作索引无效。');
+  hasOfficialMacroExtras(action);return action;
+}
 // Template-based building block. Lighting/device fields are copied unchanged;
 // the full exporter must update and validate those separately before UI use.
 export function exportWindowsKeysAndMacros(profile,template){
   validateProfile(profile);const snapshot=resolveMacros(profile),root=clone(template);
   validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
+  const sources=profile.macros.map(m=>officialMacroSource(profile,m));
   const old=root.ActionInfo??[],actions=[],emitted=[],remap=new Map(),variants=new Map(),templates=new Map();
   old.forEach((a,i)=>{const type=winInt(a?.ActionType,'ActionType',0,4);if(type!==2){remap.set(i,actions.length);actions.push(a);}else{
-    requireThat(profile.macros.some(m=>m.name===a.ActionName)||!hasOfficialMacroExtras(a),'旧宏包含无法关联到当前宏库的未知字段，不能无损导出。');
+    requireThat(sources.some(s=>s&&canonicalJSON(s)===canonicalJSON(a))||profile.macros.some(m=>m.name===a.ActionName)||!hasOfficialMacroExtras(a),'旧宏包含无法关联到当前宏库的未知字段，不能无损导出。');
     const list=templates.get(a.ActionName)??[];list.push(a);templates.set(a.ActionName,list);
   }});
   const add=(index,playback)=>{validatePlayback(playback);const identity=`${index}:${playback.mode}:${playback.count}`;
-    if(!variants.has(identity)){const macro=profile.macros[index],next=officialMacroAction(macro,playback),sources=templates.get(macro.name)??[],merged=sources.map(a=>mergeOfficialMacro(a,next));
+    if(!variants.has(identity)){const macro=profile.macros[index],next=officialMacroAction(macro,playback),candidates=sources[index]&&old.some(a=>canonicalJSON(a)===canonicalJSON(sources[index]))?[sources[index]]:templates.get(macro.name)??[],merged=candidates.map(a=>mergeOfficialMacro(a,next));
       requireThat(merged.every(a=>canonicalJSON(a)===canonicalJSON(merged[0])),'同名官方宏的附加字段不同，无法确定导出对应关系。');
       variants.set(identity,actions.length);actions.push(merged[0]??next);emitted.push(macro);}return variants.get(identity);};
   // Emit every library item, including unbound macros; a shared binding reuses
@@ -199,7 +209,7 @@ export function importWindows(root,baseline){
       else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
     const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?[...a.ActionName].slice(0,65).join(''):'导入宏';let name=stem,j=1;while(p.macros.some(m=>m.name===name))name=`${stem} (${j++})`;
     const mode=winInt(c.ActionMacroType,'宏模式',0,2),preferredPlayback={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};
-    const macro={name,steps,recordingDelay,preferredPlayback};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
+    const macro={name,steps,recordingDelay,preferredPlayback,windowsActionIndex:index};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
 
   };
   actions.forEach((action,index)=>{let type;try{type=winInt(action?.ActionType,'ActionType',0,4);}catch{return;}if(type===2)importMacro(index);});

@@ -699,7 +699,7 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
     for playback in [MacroPlayback(count:255),.init(mode:.held,count:1),.init(mode:.toggle,count:1)]{
         var exportRoot=root;let action=try! WindowsProfile.macroAction(mixed,playback:playback);exportRoot["ActionInfo"]=[action]
         let exported=try! WindowsProfile.decode(data(exportRoot),baseline:baseline).profile.macros[0]
-        var expected=mixed;expected.preferredPlayback=playback;precondition(exported==expected)
+        var expected=mixed;expected.preferredPlayback=playback;expected.windowsActionIndex=0;precondition(exported==expected)
         let events=(action["ActionContent"] as! [String:Any])["ActionMacroEvents"] as! [[String:Any]]
         precondition(events[0]["Button"] as! Int==128 && events[1]["Type"] as! Int==1)
         precondition(try! data(["action":WindowsProfile.macroAction(exported)])==data(["action":action]))

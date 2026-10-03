@@ -262,7 +262,7 @@ test('official macro actions roundtrip modifier masks, mouse identity, timing an
   for(const playback of [{mode:'count',count:255},{mode:'held',count:1},{mode:'toggle',count:1}]){
     const root=windowsFixture(),a=officialMacroAction(original,playback);root.ActionInfo=[a];
     assert.equal(a.ActionContent.ActionMacroEvents[0].Button,128);assert.equal(a.ActionContent.ActionMacroEvents[1].Type,1);
-    const p=importWindows(root,demoSnapshot());assert.deepEqual(p.macros[0],{...original,preferredPlayback:playback});
+    const p=importWindows(root,demoSnapshot());assert.deepEqual(p.macros[0],{...original,preferredPlayback:playback,windowsActionIndex:0});
     assert.deepEqual(officialMacroAction(p.macros[0]),a);
   }
   assert.equal(officialMacroAction(original).ActionContent.ActionMacroType,1);

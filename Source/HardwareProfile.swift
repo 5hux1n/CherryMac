@@ -17,6 +17,8 @@ struct KeyboardMacro: Codable, Equatable {
     // Recorder preference from Windows JSON, not a firmware delay override.
     var recordingDelay:RecordingDelay? = nil
     var preferredPlayback:MacroPlayback? = nil
+    // Index into the retained official source document, independent of edit name.
+    var windowsActionIndex:Int? = nil
     func validate() throws {
         try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
@@ -51,7 +53,7 @@ struct HardwareProfile: Codable, Equatable {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
-        for macro in macros { try macro.validate() }
+        for macro in macros { try macro.validate(); _ = try WindowsProfile.macroSource(self,macro:macro) }
         guard Set(macros.map { $0.name }).count == macros.count else { throw HardwareError(message: "宏名称不能重复。") }
         for (slot,playback) in macroModes ?? [:]{
             guard macroBindings?[slot] != nil else{throw HardwareError(message:"宏执行方式缺少对应绑定。")};try playback.validate()

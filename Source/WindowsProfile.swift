@@ -103,6 +103,13 @@ enum WindowsProfile {
         content.merge(updated){_,new in new};content["ActionMacroEvents"]=steps
         var result=original.merging(next){_,new in new};result["ActionContent"]=content;return result
     }
+    static func macroSource(_ profile:HardwareProfile,macro:KeyboardMacro)throws->[String:Any]? {
+        guard let index=macro.windowsActionIndex else{return nil}
+        guard let text=profile.windowsTemplateJSON else{throw HardwareError(message:"宏来源缺少官方模板。")}
+        let root=try templateRoot(Data(text.utf8))
+        guard let actions=root["ActionInfo"] as? [[String:Any]],actions.indices.contains(index),try integer(actions[index]["ActionType"],"ActionType",range:0...4)==2 else{throw HardwareError(message:"宏来源动作索引无效。")}
+        _ = try hasMacroExtras(actions[index]);return actions[index]
+    }
     // Intermediate exporter: update keys/macros in an official template while
     // preserving lighting, device settings and unrelated/unknown fields.
     static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data)throws->Data {
@@ -110,12 +117,15 @@ enum WindowsProfile {
         var root=try templateRoot(template),keys=root["KeyList"] as! [[String:Any]]
         if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
         let old=root["ActionInfo"] as? [[String:Any]] ?? []
+        let sources=try profile.macros.map{try macroSource(profile,macro:$0)}
         var actions:[[String:Any]]=[],remap:[Int:Int]=[:],variants:[String:Int]=[:],emitted:[KeyboardMacro]=[],templates:[String:[[String:Any]]]=[:]
         for (i,action) in old.enumerated(){
             if try integer(action["ActionType"],"ActionType",range:0...4) != 2{remap[i]=actions.count;actions.append(action)}
             else{
                 let name=action["ActionName"] as? String ?? ""
-                if !profile.macros.contains(where:{$0.name==name}){guard !(try hasMacroExtras(action)) else{throw HardwareError(message:"旧宏包含无法关联到当前宏库的未知字段，不能无损导出。")}}
+                let canonical=try JSONSerialization.data(withJSONObject:action,options:.sortedKeys)
+                let associated=try sources.compactMap{$0}.contains{try JSONSerialization.data(withJSONObject:$0,options:.sortedKeys)==canonical}
+                if !associated && !profile.macros.contains(where:{$0.name==name}){guard !(try hasMacroExtras(action)) else{throw HardwareError(message:"旧宏包含无法关联到当前宏库的未知字段，不能无损导出。")}}
                 templates[name,default:[]].append(action)
             }
         }
@@ -123,7 +133,13 @@ enum WindowsProfile {
             try playback.validate();let identity="\(index):\(playback.mode.rawValue):\(playback.count)"
             if let existing=variants[identity]{return existing}
             let macro=profile.macros[index],generated=try macroAction(macro,playback:playback)
-            let merged=try (templates[macro.name] ?? []).map{try mergeMacro($0,generated)}
+            let source=sources[index]
+            let sourceExists=try source.map{source in
+                let canonical=try JSONSerialization.data(withJSONObject:source,options:.sortedKeys)
+                return try old.contains{try JSONSerialization.data(withJSONObject:$0,options:.sortedKeys)==canonical}
+            } ?? false
+            let candidates=sourceExists ? [source!] : (templates[macro.name] ?? [])
+            let merged=try candidates.map{try mergeMacro($0,generated)}
             if let first=merged.first{
                 let canonical=try JSONSerialization.data(withJSONObject:first,options:.sortedKeys)
                 for candidate in merged.dropFirst(){guard try JSONSerialization.data(withJSONObject:candidate,options:.sortedKeys)==canonical else{throw HardwareError(message:"同名官方宏的附加字段不同，无法确定导出对应关系。")}}
@@ -200,7 +216,7 @@ enum WindowsProfile {
             let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
             let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
             let preferred=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
-            let macro=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:fixed==1,milliseconds:fixedMilliseconds),preferredPlayback:preferred);try macro.validate();result.macros.append(macro);importedMacros[index]=name
+            let macro=KeyboardMacro(name:name,steps:steps,recordingDelay:.init(fixed:fixed==1,milliseconds:fixedMilliseconds),preferredPlayback:preferred,windowsActionIndex:index);try macro.validate();result.macros.append(macro);importedMacros[index]=name
         }
         for (index,action) in actions.enumerated() where (try? integer(action["ActionType"],"ActionType",range:0...4))==2{try importMacro(index)}
         for (index,key) in keys.enumerated(){
