@@ -561,6 +561,8 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
     print("PASS: hardware writes with current-map backup, stale baseline and failed-backup rejection; per-packet release checks; lost acknowledgement/readback failure rollback; held-key rollback blocked; lighting rollback preserves mappings (simulated firmware only)")
 }
 
+func runMacroEditorChecks(){var fixture=HardwareSnapshot.demo();fixture.keymap=Array(repeating:0,count:378);runHardwareEditorTests(fixture)}
+
 private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let editor=HardwareWindowController()
     precondition(editor.tabButtons.count==5 && editor.lightTabButtons.count==2)
@@ -587,10 +589,25 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(editor.actionPicker.indexOfSelectedItem==0,"selection must not reuse another key's preset")
     editor.macroText.string="";editor.macroName.stringValue="测试宏"
     editor.macroKey.selectItem(withTitle:"A");editor.macroDelay.stringValue="50"
+    let keysBeforeSave=editor.profile!.snapshot.keymap
+    editor.macroPlayback.selectItem(at:0);editor.macroRepeat.stringValue="5"
     editor.appendMacroKey();editor.stageMacro()
+    precondition(editor.profile!.macros[0].preferredPlayback == .init(mode:.count,count:5))
+    precondition(editor.profile!.snapshot.keymap==keysBeforeSave,"saving a default must not assign a trigger")
     precondition(editor.profile!.macros.count==1 && editor.profile!.macros[0].steps.map{$0.usage}==[4,4])
     editor.macroText.string="";editor.chooseMacro()
-    precondition(editor.macroText.string=="A 按下 0\nA 松开 50")
+    precondition(editor.macroText.string=="A 按下 50\nA 松开 0")
+    editor.macroRepeat.stringValue="1"
+    var graphResult:[KeyboardMacro.Step]?
+    let graph=MacroStepEditor(steps:[.init(usage:4,pressed:true,delayMilliseconds:50),.init(usage:4,pressed:false,delayMilliseconds:0)],choices:[.init(name:"A",usage:4,kind:nil)]){graphResult=$0}
+    graph.delays[0]="-1";graph.apply();precondition(!graph.finished && graphResult==nil)
+    graph.delays[0]="75";graph.apply();precondition(graphResult?.map{$0.delayMilliseconds}==[75,0])
+    var cancelledGraph=[KeyboardMacro.Step]()
+    let cancelledEditor=MacroStepEditor(steps:[],choices:[]){cancelledGraph=$0 ?? []};cancelledEditor.addPair();cancelledEditor.cancel();precondition(cancelledGraph.isEmpty)
+    if let path=ProcessInfo.processInfo.environment["CHERRY_MACRO_EDITOR_PREVIEW"],let view=graph.window?.contentView{
+        graph.table.reloadData();view.layoutSubtreeIfNeeded();view.displayIfNeeded()
+        if let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds){view.cacheDisplay(in:view.bounds,to:bitmap);try! bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:path))}
+    }
     let reorder=HardwareWindowController();reorder.macroText.string="A 按下 0\nA 松开 50\nB 按下 0\nB 松开 50"
     reorder.macroText.setSelectedRange(NSRange(location:0,length:0));let move=NSButton();move.tag=3;reorder.moveMacroStep(move)
     precondition(reorder.macroText.string=="A 松开 50\nB 按下 0\nB 松开 50\nA 按下 0")
@@ -604,7 +621,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     editor.macroPicker.selectItem(withTitle:"测试宏");editor.chooseMacro()
     editor.selected="calculator";editor.assignMacro()
     precondition(editor.profile!.macroBindings?[102]=="测试宏")
-    precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x70,0,0])
+    precondition(Array(editor.profile!.snapshot.keymap[306..<309])==[0x71,0,5],"assigning must use the saved default playback")
     let assigned=editor.profile
     editor.writeKeys()
     precondition(!editor.busy && editor.profile==assigned && editor.message.stringValue.contains("宏绑定改动暂缓"),"key-only write must refuse an unwritten macro binding without opening USB")

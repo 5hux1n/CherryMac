@@ -36,6 +36,13 @@ export async function rememberMacroProfile(profile,snapshot){
   requireThat(['deviceInfo','keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称与设备数据不一致，未保存名称。');
   await save({id:'metadata-'+crypto.randomUUID(),kind:'metadata',date:new Date().toISOString(),profile:saved});
 }
+export async function rememberMacroProfileIfMatching(profile,snapshot){
+  if(!snapshot||!equal(profile.snapshot.deviceInfo,snapshot.deviceInfo))return false;
+  const candidate=clone(profile);candidate.snapshot=clone(snapshot);let resolved;
+  try{resolved=resolveMacros(candidate);}catch{return false;}
+  if(!['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])))return false;
+  await rememberMacroProfile(candidate,snapshot);return true;
+}
 export async function recalledMacroProfile(snapshot){
   const records=await record('readonly',store=>store.getAll());
   for(const saved of records.filter(row=>row.kind==='metadata').sort((a,b)=>b.date.localeCompare(a.date))){

@@ -1,5 +1,75 @@
 import AppKit
 
+// Local editing only: no HID handle, global input hooks or permission requests.
+final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSWindowDelegate {
+    struct KeyChoice{let name:String;let usage:UInt8;let kind:KeyboardMacro.Step.Kind?}
+    var steps:[KeyboardMacro.Step]
+    var delays:[String]
+    let choices:[KeyChoice]
+    let completion:([KeyboardMacro.Step]?)->Void
+    let table=NSTableView()
+    let message=NSTextField(wrappingLabelWithString:"每步等待在该事件执行后发生。完成编辑后采用，再保存宏；不会写入键盘。")
+    var finished=false
+    init(steps:[KeyboardMacro.Step],choices:[KeyChoice],completion:@escaping([KeyboardMacro.Step]?)->Void){
+        self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.choices=choices;self.completion=completion
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:510),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        super.init(window:window);window.title="编辑宏步骤";window.delegate=self
+        let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:780,height:510));window.contentView=view
+        for (id,title,width) in [("number","步骤",48.0),("key","按键",305.0),("state","动作",130.0),("delay","事件后等待（毫秒）",210.0)]{
+            let column=NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)
+        }
+        table.delegate=self;table.dataSource=self;table.rowHeight=32;table.intercellSpacing=NSSize(width:8,height:3);table.allowsMultipleSelection=false
+        let scroll=NSScrollView(frame:NSRect(x:18,y:18,width:744,height:346));scroll.hasVerticalScroller=true;scroll.borderType = .bezelBorder;scroll.documentView=table;view.addSubview(scroll)
+        func button(_ title:String,_ action:Selector,_ x:CGFloat,_ width:CGFloat,tag:Int=0){let b=NSButton(title:title,target:self,action:action);b.frame=NSRect(x:x,y:378,width:width,height:30);b.tag=tag;view.addSubview(b)}
+        button("添加按下／松开",#selector(addPair),18,160);button("删除",#selector(deleteStep),188,64)
+        for (index,title) in ["置顶","上移","下移","置底"].enumerated(){button(title,#selector(moveStep),268+CGFloat(index)*76,68,tag:index)}
+        message.frame=NSRect(x:18,y:424,width:470,height:66);message.font = .systemFont(ofSize:12);view.addSubview(message)
+        let cancel=NSButton(title:"取消",target:self,action:#selector(cancel));cancel.frame=NSRect(x:506,y:448,width:90,height:32);view.addSubview(cancel)
+        let apply=NSButton(title:"采用步骤",target:self,action:#selector(apply));apply.frame=NSRect(x:608,y:448,width:152,height:32);view.addSubview(apply)
+        table.reloadData()
+    }
+    required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
+    func numberOfRows(in tableView:NSTableView)->Int{steps.count}
+    func tableView(_ tableView:NSTableView,viewFor column:NSTableColumn?,row:Int)->NSView?{
+        guard steps.indices.contains(row),let id=column?.identifier.rawValue else{return nil}
+        let step=steps[row]
+        if id=="number"{let field=NSTextField(labelWithString:String(row+1));field.font = .monospacedDigitSystemFont(ofSize:13,weight:.regular);return field}
+        if id=="key"{
+            let picker=NSPopUpButton();picker.addItems(withTitles:choices.map{$0.name});picker.tag=row;picker.target=self;picker.action=#selector(keyChanged)
+            if let index=choices.firstIndex(where:{$0.usage==step.usage && $0.kind==step.kind}){picker.selectItem(at:index)}else{picker.addItem(withTitle:"HID \(step.usage)");picker.selectItem(at:choices.count)}
+            picker.setAccessibilityLabel("步骤 \(row+1) 按键");return picker
+        }
+        if id=="state"{let picker=NSPopUpButton();picker.addItems(withTitles:["按下","松开"]);picker.selectItem(at:step.pressed ? 0:1);picker.tag=row;picker.target=self;picker.action=#selector(stateChanged);picker.setAccessibilityLabel("步骤 \(row+1) 动作");return picker}
+        let field=NSTextField(string:delays[row]);field.tag=row;field.delegate=self;field.setAccessibilityLabel("步骤 \(row+1) 事件后等待毫秒");return field
+    }
+    func controlTextDidChange(_ notification:Notification){guard let field=notification.object as? NSTextField,delays.indices.contains(field.tag) else{return};delays[field.tag]=field.stringValue;message.stringValue="编辑完成后采用步骤；保存时检查按下与松开是否配对。"}
+    @objc func keyChanged(_ picker:NSPopUpButton){guard steps.indices.contains(picker.tag),choices.indices.contains(picker.indexOfSelectedItem) else{return};let key=choices[picker.indexOfSelectedItem];steps[picker.tag].usage=key.usage;steps[picker.tag].kind=key.kind}
+    @objc func stateChanged(_ picker:NSPopUpButton){guard steps.indices.contains(picker.tag) else{return};steps[picker.tag].pressed=picker.indexOfSelectedItem==0}
+    func select(_ index:Int){table.reloadData();if steps.indices.contains(index){table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false);table.scrollRowToVisible(index)}}
+    @objc func addPair(){
+        window?.makeFirstResponder(nil)
+        guard steps.count<=254 else{message.stringValue="最多 256 个事件，请先删除部分步骤。";return}
+        let key=steps.indices.contains(table.selectedRow) ? steps[table.selectedRow]:.init(usage:4,pressed:true,delayMilliseconds:50)
+        let index=steps.count;steps.append(.init(usage:key.usage,pressed:true,delayMilliseconds:50,kind:key.kind));steps.append(.init(usage:key.usage,pressed:false,delayMilliseconds:0,kind:key.kind));delays.append(contentsOf:["50","0"]);select(index)
+    }
+    @objc func deleteStep(){window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row) else{return};steps.remove(at:row);delays.remove(at:row);select(min(row,steps.count-1))}
+    @objc func moveStep(_ sender:NSButton){
+        window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row),(0...3).contains(sender.tag) else{return}
+        let next=[0,max(0,row-1),min(steps.count-1,row+1),steps.count-1][sender.tag]
+        guard next != row else{return};steps.insert(steps.remove(at:row),at:next);delays.insert(delays.remove(at:row),at:next);select(next)
+    }
+    @objc func apply(){
+        window?.makeFirstResponder(nil)
+        do{var result=steps
+            for index in result.indices{guard let delay=Int(delays[index]),(0...60000).contains(delay) else{throw HardwareError(message:"步骤 \(index+1) 的等待须为 0…60000 毫秒整数。")};result[index].delayMilliseconds=delay}
+            try KeyboardMacro(name:"步骤编辑",steps:result).validate();finish(result)
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    func finish(_ result:[KeyboardMacro.Step]?){guard !finished else{return};finished=true;if let window{window.sheetParent?.endSheet(window);window.orderOut(nil)};completion(result)}
+    @objc func cancel(){finish(nil)}
+    func windowShouldClose(_ sender:NSWindow)->Bool{cancel();return false}
+}
+
 final class HardwareCanvas: NSView {
     override var isFlipped:Bool {true}
     override func draw(_ dirtyRect:NSRect){NSColor.windowBackgroundColor.setFill();bounds.fill()}
@@ -62,7 +132,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var selected = "calculator"
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
+    var baselineWasRead=false
     var macroRecordingSheet:MacroRecordingSheet?
+    var macroStepEditor:MacroStepEditor?
     var recordingPreference:KeyboardMacro.RecordingDelay?
     var currentMacroOperation:HardwareOperationLog?
     var macroCancellationButton:NSButton?
@@ -143,6 +215,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
         macroText.toolTip="每行：按键、按下／松开、事件后等待毫秒。";macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 50\nA 松开 0";macros.addSubview(macroScroll)
         for (index,title) in ["置顶","上移","下移","置底"].enumerated(){let move=button(title,#selector(moveMacroStep));move.tag=index;place(move,8+CGFloat(index)*82,224,76,28,in:macros)}
+        place(button("点选编辑步骤…",#selector(editMacroSteps)),346,224,210,28,in:macros)
         place(label("添加按键"),593,12,110,24,in:macros)
         macroKey.addItems(withTitles:(hidKeys.filter{$0.1 != 0}+mouseMacroKeys).map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
         place(label("按住（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
@@ -170,12 +243,17 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
-        place(label("仅开放按键写入，自动备份、逐包检查释放并完整读回。灯效与宏写入暂缓。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。",13),8,148,850,70,in:device)
+        #if CHERRY_MACRO_PRODUCT
+        let scopeDescription="宏模块开发预览：按键与宏分别写入，自动备份并完整读回。灯效写入暂缓。\n宏产品流程尚待统一实机验收；Win 锁、回报率等设备设置继续核对。"
+        #else
+        let scopeDescription="仅开放按键写入，自动备份、逐包检查释放并完整读回。灯效与宏写入暂缓。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。"
+        #endif
+        place(label(scopeDescription,13),8,148,850,70,in:device)
         place(button("打开操作日志",#selector(openLogs)),261,253,180,32,in:device)
         place(button("Mac 端按键适配设置",#selector(openMacSettings)),8,253,230,32,in:device)
         place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。",12),8,299,850,36,in:device)
         place(message,192,787,925,58)
-        for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与键位",#selector(writeMacros))]{
+        for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与绑定键",#selector(writeMacros))]{
             let write=button(title,selector);write.tag=index;write.isEnabled=false;write.toolTip=HardwareWritePolicy.reason;place(write,954,752,174,30);writeButtons.append(write)
         }
         #if CHERRY_MACRO_PRODUCT
@@ -208,7 +286,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     func loadSelectedAssignment(){
         guard let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),let profile else{return}
         if let name=profile.macroBindings?[slot],macroPicker.itemTitles.contains(name){macroPicker.selectItem(withTitle:name);chooseMacro()}
-        let playback=profile.macroModes?[slot] ?? .once
+        let chosenMacro=profile.macros.first(where:{$0.name==macroPicker.titleOfSelectedItem})
+        let playback=profile.macroBindings?[slot] != nil ? (profile.macroModes?[slot] ?? .once):(chosenMacro?.preferredPlayback ?? .once)
         macroPlayback.selectItem(at:playback.mode == .count ? 0:playback.mode == .held ? 1:2);macroRepeat.stringValue=String(playback.count);playbackChanged()
         let bytes=Array(profile.snapshot.keymap[slot*3..<slot*3+3])
         let presets:[[UInt8]]=[[0x20,13,6],[0x20,10,33],[0x20,8,21],[0x30,182,0],[0x30,205,0],[0x30,181,0],[0x20,0,0]]
@@ -286,7 +365,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             }
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let snapshot):
-                    self.baseline=snapshot;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                    self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
@@ -366,7 +445,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 }
                 DispatchQueue.main.async{guard let self else{return};self.currentMacroOperation=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true}
                     switch result{
-                    case .success(let snapshot):self.baseline=snapshot;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致。"
+                    case .success(let snapshot):self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致。"
                     case .failure(let error):self.baseline=nil;self.message.stringValue=error.localizedDescription+" 保存的恢复记录仍保留。"
                     };self.update()
                 }
@@ -378,7 +457,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let target:HardwareSnapshot
         do{target=try macroWriteTarget()}catch{message.stringValue=error.localizedDescription;return}
         guard target.keymap != baseline.keymap || target.macroData != baseline.macroData else{message.stringValue="没有待写入的宏或键位改动。";return}
-        let panel=NSAlert();panel.messageText="写入宏与按键";panel.informativeText="仅更新宏库和键位，灯效与设备参数保留。请先停止正在运行的宏并松开全部键；将保存完整备份，写入后完整读回。";panel.addButton(withTitle:"全部已松开，开始写入");panel.addButton(withTitle:"返回编辑")
+        let panel=NSAlert();panel.messageText="写入宏与绑定键";panel.informativeText="仅更新宏库和宏绑定键，普通键与灯效草稿保留。请先停止正在运行的宏并松开全部键；将保存完整备份，写入后完整读回。";panel.addButton(withTitle:"全部已松开，开始写入");panel.addButton(withTitle:"返回编辑")
         panel.beginSheetModal(for:owner){[weak self] response in
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
             // Freeze the review scope; a changed draft/baseline requires a new review.
@@ -475,10 +554,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroText.setSelectedRange(NSRange(location:offset,length:(line as NSString).length));macroText.scrollRangeToVisible(macroText.selectedRange())
         message.stringValue="步骤顺序已调整；保存宏时检查按下与松开是否配对。"
     }
-    @objc func stageMacro(){
-        do{guard var p=profile else{throw HardwareError(message:"请先读取或导入配置。")}
-            let lines=macroText.string.split(separator:"\n",omittingEmptySubsequences:true)
-            let steps=try lines.map{line -> KeyboardMacro.Step in
+    func parsedMacroSteps()throws->[KeyboardMacro.Step]{
+        let lines=macroText.string.split(separator:"\n",omittingEmptySubsequences:true)
+        return try lines.map{line -> KeyboardMacro.Step in
                 let parts=line.split(whereSeparator:{$0.isWhitespace});guard parts.count>=3,let delay=Int(parts.last!),["按下","松开","down","up"].contains(String(parts[parts.count-2]))else{throw HardwareError(message:"宏格式错误：\(line)")}
                 let name=parts.dropLast(2).joined(separator:" ")
                 let mouse=self.mouseMacroKeys.first(where:{$0.0==name})
@@ -486,23 +564,55 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 if let mouse{usage=mouse.1}else if name.hasPrefix("HID:"){usage=UInt8(name.dropFirst(4))}else{usage=self.hidKeys.first(where:{$0.0.caseInsensitiveCompare(name) == .orderedSame})?.1}
                 guard let usage else{throw HardwareError(message:"无法识别宏按键：\(name)")}
                 return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay,kind:mouse != nil ? .mouse:nil)}
+    }
+    @objc func editMacroSteps(){
+        guard !busy,macroStepEditor==nil,macroRecordingSheet==nil,let parent=window else{return}
+        do{
+            let steps=try parsedMacroSteps()
+            let choices=hidKeys.filter{$0.1 != 0}.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:nil)}+mouseMacroKeys.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:.mouse)}
+            let editor=MacroStepEditor(steps:steps,choices:choices){[weak self] result in
+                guard let self else{return};self.macroStepEditor=nil
+                guard let result else{self.message.stringValue="步骤编辑已取消，原步骤保留。";return}
+                self.macroText.string=result.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+                self.message.stringValue="已采用 \(result.count) 个步骤，请点击保存宏。"
+            }
+            macroStepEditor=editor;parent.beginSheet(editor.window!)
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    @objc func stageMacro(){
+        do{guard var p=profile else{throw HardwareError(message:"请先读取或导入配置。")}
+            let steps=try parsedMacroSteps()
+            if p.macroBindings==nil{
+                let previous=try p.snapshot.macroData.map{try CherryMacroCodec.decode($0)} ?? []
+                guard previous.isEmpty,!(0..<126).contains(where:{[UInt8(0x70),0x71].contains(p.snapshot.keymap[$0*3])}) else{throw HardwareError(message:"原硬件宏尚未解码，请先重新读取键盘后编辑。")}
+                p.macroBindings=[:]
+            }
             let selectedIndex=macroPicker.indexOfSelectedItem-1
             let existing=p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex]:nil
             guard !p.macros.enumerated().contains(where:{$0.offset != selectedIndex && $0.element.name==macroName.stringValue}) else{throw HardwareError(message:"宏名称已存在。")}
             let preference=recordingPreference ?? existing?.recordingDelay
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:existing?.preferredPlayback,windowsActionIndex:existing?.windowsActionIndex);try macro.validate()
+            guard let count=macroPlayback.indexOfSelectedItem==0 ? Int(macroRepeat.stringValue):1 else{throw HardwareError(message:"请输入宏执行次数。")}
+            let modes:[MacroPlayback.Mode]=[.count,.held,.toggle]
+            guard modes.indices.contains(macroPlayback.indexOfSelectedItem) else{throw HardwareError(message:"请选择宏执行方式。")}
+            let preferred=MacroPlayback(mode:modes[macroPlayback.indexOfSelectedItem],count:count);try preferred.validate()
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:preferred,windowsActionIndex:existing?.windowsActionIndex);try macro.validate()
             if let existing{
                 p.macros[selectedIndex]=macro
                 for (slot,name) in p.macroBindings ?? [:] where name==existing.name{p.macroBindings?[slot]=macro.name}
             }else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
-            profile=p;recordingPreference=nil;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
+            profile=p;recordingPreference=nil;refreshMacroPicker(selected:macro.name);update()
+            if baselineWasRead,let baseline,p.snapshot.deviceInfo==baseline.deviceInfo{
+                var candidate=p;candidate.snapshot=baseline
+                if let resolved=try? candidate.resolvedMacros(),resolved.keymap==baseline.keymap,resolved.macroData==baseline.macroData{do{try rememberMacroProfile(p,snapshot:baseline)}catch{message.stringValue="编辑区已保存，但本地宏名称／默认方式保存失败：\(error.localizedDescription)";return}}
+            }
+            message.stringValue="宏与默认执行方式已保存到编辑区，共 \(steps.count) 步。已有绑定不变，点击分配后应用到所选键。"
         }catch{message.stringValue=error.localizedDescription}
     }
     func refreshMacroPicker(selected:String?=nil){macroPicker.removeAllItems();macroPicker.addItem(withTitle:"新建宏");macroPicker.addItems(withTitles:profile?.macros.map{$0.name} ?? []);if let selected{macroPicker.selectItem(withTitle:selected)}}
     @objc func chooseMacro(){
         recordingPreference=nil
-        guard macroPicker.indexOfSelectedItem>0,let profile else{macroName.stringValue="新宏";macroText.string="";return}
+        guard macroPicker.indexOfSelectedItem>0,let profile else{macroName.stringValue="新宏";macroText.string="";macroPlayback.selectItem(at:0);macroRepeat.stringValue="1";playbackChanged();return}
         let macro=profile.macros[macroPicker.indexOfSelectedItem-1];macroName.stringValue=macro.name
         let slot=keyboardLayout().first(where:{$0.id==selected}).flatMap{CherryMatrix.slot($0)}
         let playback=slot.flatMap{profile.macroBindings?[$0]==macro.name ? profile.macroModes?[$0]:nil} ?? macro.preferredPlayback ?? .once
