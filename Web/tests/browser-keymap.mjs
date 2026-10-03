@@ -42,6 +42,9 @@ await page.screenshot({path:join(artifacts,'macro-playback.png'),fullPage:true})
 // This part runs before installing Fake: it has no keyboard connection.
 const fixedProfile=JSON.parse(await readFile(join(artifacts,'playback-toggle.json'),'utf8'));
 fixedProfile.macros[0].recordingDelay={fixed:true,milliseconds:777};
+const model=await import('../assets/model.js'),{WINDOWS_DEFAULTS}=await import('../assets/tables.js');
+const official={'//':'47',KeyList:WINDOWS_DEFAULTS.map(v=>({DefaultAssignment:v,Assignment:v,ActionLink:0})),ActionInfo:[model.officialMacroAction(fixedProfile.macros[0])]};
+official.ActionInfo[0].opaque={id:42};fixedProfile.windowsTemplateJSON=JSON.stringify(official);fixedProfile.macros[0].windowsActionIndex=0;
 await page.locator('#tab-profiles').click();
 await page.locator('#file').setInputFiles({name:'fixed-profile.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixedProfile))});
 await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('导入'));
@@ -54,6 +57,8 @@ assert.deepEqual(edited.macros[0].recordingDelay,fixedProfile.macros[0].recordin
 assert.deepEqual(edited.macros[0].steps,fixedProfile.macros[0].steps);
 assert.deepEqual(edited.snapshot.macroData,fixedProfile.snapshot.macroData);
 assert.equal(edited.macroBindings['102'],'固定选项保留');
+assert.equal(edited.macros[0].windowsActionIndex,0);
+assert.deepEqual(model.exportWindowsKeysAndMacros(edited,official).ActionInfo[0].opaque,{id:42});
 // Create and edit a mouse event through the visible macro form, without HID.
 await page.locator('#tab-macros').click();await page.locator('#macro-list').selectOption('');
 await page.locator('#macro-name').fill('鼠标中键测试');await page.locator('#macro-key').selectOption('mouse:4');await page.locator('#add-pair').click();await page.locator('#save-macro').click();

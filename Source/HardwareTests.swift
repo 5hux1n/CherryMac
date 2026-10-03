@@ -594,7 +594,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     let saved=editor.profile
     editor.macroText.string="A 按下 0";editor.stageMacro()
     precondition(editor.profile==saved,"invalid macro must preserve the saved draft")
-    editor.macroName.stringValue="数字键";editor.macroText.string="4 按下 0\n4 松开 50";editor.stageMacro()
+    editor.macroPicker.selectItem(at:0);editor.macroName.stringValue="数字键";editor.macroText.string="4 按下 0\n4 松开 50";editor.stageMacro()
     precondition(editor.profile!.macros.last!.steps.map{$0.usage}==[33,33],"digit names are keyboard digits, not raw HID codes")
     editor.deleteMacro();precondition(editor.profile!.macros.count==1)
     editor.macroPicker.selectItem(withTitle:"测试宏");editor.chooseMacro()
@@ -794,8 +794,10 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
         precondition(try! HardwareProfile.decode(imported.encoded())==imported)
         let edit=HardwareWindowController();edit.profile=imported;edit.refreshMacroPicker(selected:"Control A");edit.chooseMacro()
         edit.macroText.string="HID:224 按下 0\nA 按下 20\nA 松开 75\nHID:224 松开 0";edit.stageMacro()
-        precondition(edit.profile!.macros[0].recordingDelay==imported.macros[0].recordingDelay)
+        precondition(edit.profile!.macros[0].recordingDelay==imported.macros[0].recordingDelay && edit.profile!.macros[0].windowsActionIndex==0)
         precondition(edit.profile!.macros[0].steps[2].delayMilliseconds==75)
+        edit.macroName.stringValue="Renamed";edit.stageMacro()
+        precondition(edit.profile!.macros.count==1 && edit.profile!.macros[0].name=="Renamed" && edit.profile!.macroBindings?[102]=="Renamed" && edit.profile!.macros[0].windowsActionIndex==0)
     }
     for invalid in [-1,60001]{
         fixedContent["ActionMacroFixTimeValue"]=invalid;fixedActions[0]["ActionContent"]=fixedContent;fixedRoot["ActionInfo"]=fixedActions

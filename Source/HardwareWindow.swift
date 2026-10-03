@@ -358,11 +358,14 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard let usage else{throw HardwareError(message:"无法识别宏按键：\(name)")}
                 return KeyboardMacro.Step(usage:usage,pressed:["按下","down"].contains(String(parts[parts.count-2])),delayMilliseconds:delay,kind:mouse != nil ? .mouse:nil)}
             let selectedIndex=macroPicker.indexOfSelectedItem-1
-            let existing=p.macros.first(where:{$0.name==macroName.stringValue})
-            let preference=recordingPreference ?? (existing != nil ? existing!.recordingDelay : (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].recordingDelay:nil))
-            let preferred=existing?.preferredPlayback ?? (p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex].preferredPlayback:nil)
-            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:preferred);try macro.validate()
-            if let index=p.macros.firstIndex(where:{$0.name==macro.name}){p.macros[index]=macro}else{p.macros.append(macro)}
+            let existing=p.macros.indices.contains(selectedIndex) ? p.macros[selectedIndex]:nil
+            guard !p.macros.enumerated().contains(where:{$0.offset != selectedIndex && $0.element.name==macroName.stringValue}) else{throw HardwareError(message:"宏名称已存在。")}
+            let preference=recordingPreference ?? existing?.recordingDelay
+            let macro=KeyboardMacro(name:macroName.stringValue,steps:steps,recordingDelay:preference,preferredPlayback:existing?.preferredPlayback,windowsActionIndex:existing?.windowsActionIndex);try macro.validate()
+            if let existing{
+                p.macros[selectedIndex]=macro
+                for (slot,name) in p.macroBindings ?? [:] where name==existing.name{p.macroBindings?[slot]=macro.name}
+            }else{p.macros.append(macro)}
             try p.validate();if p.macroBindings != nil{p.snapshot=try p.resolvedMacros()}
             profile=p;recordingPreference=nil;refreshMacroPicker(selected:macro.name);message.stringValue="宏已保存到编辑区，共 \(steps.count) 步。可分配到按键；当前宏实体写入暂缓。";update()
         }catch{message.stringValue=error.localizedDescription}
