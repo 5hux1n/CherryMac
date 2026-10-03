@@ -1212,6 +1212,17 @@ if CommandLine.arguments.contains("--self-test") {
         let imported=try WindowsProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[input+1])),baseline:before)
         try imported.profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[output+1]),options:.atomic);print(imported.summary)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+} else if let output=CommandLine.arguments.firstIndex(of:"--export-windows-keys-macros"),CommandLine.arguments.count>output+1{
+    do{
+        guard let input=CommandLine.arguments.firstIndex(of:"--profile"),let template=CommandLine.arguments.firstIndex(of:"--template"),CommandLine.arguments.count>input+1,CommandLine.arguments.count>template+1 else{throw HardwareError(message:"需要 --profile CherryMac.json 和 --template Windows.json。")}
+        let source=URL(fileURLWithPath:CommandLine.arguments[input+1]),original=URL(fileURLWithPath:CommandLine.arguments[template+1]),destination=URL(fileURLWithPath:CommandLine.arguments[output+1])
+        let target=destination.resolvingSymlinksInPath().standardizedFileURL
+        guard [source,original].allSatisfy({$0.resolvingSymlinksInPath().standardizedFileURL != target}) else{throw HardwareError(message:"导出文件不能覆盖源配置或官方模板。")}
+        let profile=try HardwareProfile.decode(Data(contentsOf:source))
+        let data=try WindowsProfile.encodeKeysAndMacros(profile,template:Data(contentsOf:original))
+        try data.write(to:destination,options:.atomic)
+        print("已离线导出官方格式键位与宏；灯效和设备设置沿用模板。未连接或写入键盘。")
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-read"), CommandLine.arguments.count > index+1 {
     do { let snapshot=try CherryUSB().completeSnapshot();let profile=(try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot);try profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+1]),options:.atomic);print("PASS: USB keymap, lighting parameters, 126 RGB values and 3071-byte macro bank read") }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 } else if let index = CommandLine.arguments.firstIndex(of: "--hardware-preview"), CommandLine.arguments.count > index+1 {
