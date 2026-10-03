@@ -111,6 +111,33 @@ export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'coun
       return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};})
   }};
 }
+// Template-based building block. Lighting/device fields are copied unchanged;
+// the full exporter must update and validate those separately before UI use.
+export function exportWindowsKeysAndMacros(profile,template){
+  validateProfile(profile);const snapshot=resolveMacros(profile),root=clone(template);
+  requireThat(root?.['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'需要本型号的官方配置模板。');
+  root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
+  requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
+  const old=root.ActionInfo??[],actions=[],emitted=[],remap=new Map(),variants=new Map();
+  old.forEach((a,i)=>{const type=winInt(a?.ActionType,'ActionType',0,4);if(type!==2){remap.set(i,actions.length);actions.push(a);}});
+  const add=(index,playback)=>{validatePlayback(playback);const identity=`${index}:${playback.mode}:${playback.count}`;
+    if(!variants.has(identity)){variants.set(identity,actions.length);actions.push(officialMacroAction(profile.macros[index],playback));emitted.push(profile.macros[index]);}return variants.get(identity);};
+  // Emit every library item, including unbound macros; a shared binding reuses
+  // one action, while different modes need distinct official ActionContent.
+  profile.macros.forEach((m,i)=>add(i,m.preferredPlayback??{mode:'count',count:1}));
+  root.KeyList.forEach((k,i)=>{const slot=physicalSlot(WINDOWS_DEFAULTS[i]);
+    if(slot===undefined||[6,71].includes(slot)){
+      if(winInt(k.ActionLink??0,'ActionLink',0,1)===1){const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,old.length-1);requireThat(remap.has(index),'内部位置引用旧宏，无法无损导出。');k.ActionLinkIndex=remap.get(index);}return;
+    }
+    const b=snapshot.keymap.slice(slot*3,slot*3+3);
+    if([0x70,0x71].includes(b[0])){const playback=decodeMacroBinding(b,profile.macros.length);k.ActionLink=1;k.ActionLinkIndex=add(b[1],playback);k.Assignment=k.DefaultAssignment;}
+    else{requireThat([0x20,0x30].includes(b[0]),'此按键动作尚不能导出到官方格式。');k.Assignment=b[0]*65536+b[1]*256+b[2];k.ActionLink=0;k.ActionLinkIndex=-1;}
+  });
+  // Official actions with different modes import as separate library items.
+  // Check that representation still fits before returning a usable document.
+  encodeBank(emitted);root.ActionInfo=actions;
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
+}
 export function importWindows(root,baseline){
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));

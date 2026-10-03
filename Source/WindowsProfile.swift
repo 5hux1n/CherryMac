@@ -70,6 +70,45 @@ enum WindowsProfile {
             "ActionMacroFixTimeValue":macro.recordingDelay?.milliseconds ?? 0,
             "ActionMacroEvents":events]]
     }
+    // Intermediate exporter: update keys/macros in an official template while
+    // preserving lighting, device settings and unrelated/unknown fields.
+    static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data)throws->Data {
+        try profile.validate();let snapshot=try profile.resolvedMacros()
+        guard template.count<=1_000_000,var root=try JSONSerialization.jsonObject(with:template) as? [String:Any],
+              root["//"] as? String=="47",var keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"需要本型号的官方配置模板。")}
+        for (i,key) in keys.enumerated(){guard try integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF)==defaults[i] else{throw HardwareError(message:"Windows 键盘布局不匹配。")}}
+        if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
+        let old=root["ActionInfo"] as? [[String:Any]] ?? []
+        var actions:[[String:Any]]=[],remap:[Int:Int]=[:],variants:[String:Int]=[:],emitted:[KeyboardMacro]=[]
+        for (i,action) in old.enumerated(){if try integer(action["ActionType"],"ActionType",range:0...4) != 2{remap[i]=actions.count;actions.append(action)}}
+        func add(_ index:Int,_ playback:MacroPlayback)throws->Int {
+            try playback.validate();let identity="\(index):\(playback.mode.rawValue):\(playback.count)"
+            if let existing=variants[identity]{return existing}
+            let next=actions.count;actions.append(try macroAction(profile.macros[index],playback:playback));emitted.append(profile.macros[index]);variants[identity]=next;return next
+        }
+        for (index,macro) in profile.macros.enumerated(){_ = try add(index,macro.preferredPlayback ?? .once)}
+        for i in keys.indices {
+            guard let slot=physicalSlot(defaults[i]),![6,71].contains(slot) else{
+                if try integer(keys[i]["ActionLink"] ?? 0,"ActionLink",range:0...1)==1{
+                    let index=try integer(keys[i]["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,old.count-1))
+                    guard let mapped=remap[index] else{throw HardwareError(message:"内部位置引用旧宏，无法无损导出。")};keys[i]["ActionLinkIndex"]=mapped
+                };continue
+            }
+            let bytes=Array(snapshot.keymap[slot*3..<slot*3+3])
+            if [UInt8(0x70),0x71].contains(bytes[0]){
+                let playback=try CherryMacroCodec.playback(bytes,macroCount:profile.macros.count)
+                keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=try add(Int(bytes[1]),playback);keys[i]["Assignment"]=keys[i]["DefaultAssignment"]
+            }else{
+                guard [UInt8(0x20),0x30].contains(bytes[0]) else{throw HardwareError(message:"此按键动作尚不能导出到官方格式。")}
+                keys[i]["Assignment"]=Int(bytes[0])*65536+Int(bytes[1])*256+Int(bytes[2]);keys[i]["ActionLink"]=0;keys[i]["ActionLinkIndex"] = -1
+            }
+        }
+        // Distinct playback variants become separate macros on official import.
+        _ = try CherryMacroCodec.encode(emitted)
+        root["KeyList"]=keys;root["ActionInfo"]=actions
+        let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
+        guard output.count<=1_000_000 else{throw HardwareError(message:"导出的配置文件过大。")};return output
+    }
     static func decode(_ data:Data,baseline:HardwareSnapshot)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
         try baseline.validate()

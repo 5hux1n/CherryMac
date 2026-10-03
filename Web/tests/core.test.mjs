@@ -4,7 +4,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -196,6 +196,26 @@ test('Windows macro playback imports all supported bindings without changing the
     const p=importWindows(root,base);assert.deepEqual(p.snapshot.keymap.slice(306,309),record);assert.deepEqual(base,old);
     root.ActionInfo[0].ActionContent.ActionMacroType=3;assert.throws(()=>importWindows(root,base));assert.deepEqual(base,old);
   }
+});
+
+test('official template export preserves unknown fields and shared or differing macro modes',()=>{
+  const base=demoSnapshot(),p=fromHardware(base),template=windowsFixture();
+  template.DeviceBasicInfo={opaque:'unchanged'};template.ActionInfo=[officialMacroAction(macro),{ActionType:3,ActionName:'Text',ActionContent:{ActionText:'untouched'}}];
+  template.KeyList[79].ActionLink=1;template.KeyList[79].ActionLinkIndex=1;template.KeyList[17].opaque=42;
+  p.macros=[{...macro,preferredPlayback:{mode:'count',count:1}}];
+  p.macroBindings={102:'AB',108:'AB',114:'AB'};p.macroModes={102:{mode:'count',count:1},108:{mode:'count',count:1},114:{mode:'toggle',count:1}};
+  p.snapshot=resolveMacros(p);p.snapshot.keymap.splice(0,3,0x20,13,6);
+  const before=clone(p),old=clone(template),out=exportWindowsKeysAndMacros(p,template);
+  assert.deepEqual(p,before);assert.deepEqual(template,old);assert.deepEqual(out.DeviceBasicInfo,template.DeviceBasicInfo);assert.deepEqual(out.LightInfo,template.LightInfo);
+  assert.equal(out.KeyList[79].ActionLinkIndex,0);assert.equal(out.KeyList[17].opaque,42);
+  assert.equal(out.KeyList[17].ActionLinkIndex,out.KeyList[18].ActionLinkIndex);assert.notEqual(out.KeyList[17].ActionLinkIndex,out.KeyList[19].ActionLinkIndex);
+  assert.deepEqual(exportWindowsKeysAndMacros(p,out),out);
+  const imported=importWindows(out,base);
+  for(const slot of [102,108,114]){assert.deepEqual(imported.macros.find(m=>m.name===imported.macroBindings[slot]).steps,macro.steps);assert.deepEqual(imported.macroModes[slot],p.macroModes[slot]);}
+  assert.deepEqual(imported.snapshot.keymap.slice(0,3),[0x20,13,6]);
+  template.KeyList[79].ActionLinkIndex=0;assert.throws(()=>exportWindowsKeysAndMacros(p,template));
+  p.snapshot.keymap[0]=0xa1;assert.throws(()=>exportWindowsKeysAndMacros(p,old));
+  const full=fromHardware(base);full.macros=Array.from({length:32},(_,i)=>({...macro,name:`M${i}`}));full.macroBindings={102:'M0'};full.macroModes={102:{mode:'count',count:2}};full.snapshot=resolveMacros(full);assert.throws(()=>exportWindowsKeysAndMacros(full,old));
 });
 
 test('official macro actions roundtrip modifier masks, mouse identity, timing and per-binding playback',()=>{

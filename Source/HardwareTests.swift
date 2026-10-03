@@ -705,6 +705,29 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
         precondition(try! data(["action":WindowsProfile.macroAction(exported)])==data(["action":action]))
     }
     rejected{_ = try WindowsProfile.macroAction(mixed,playback:.init(count:0))}
+    var exportTemplate=root
+    var exportKeys=keys;exportKeys[79]["ActionLink"]=1;exportKeys[79]["ActionLinkIndex"]=1;exportKeys[17]["opaque"]=42
+    exportTemplate["KeyList"]=exportKeys;exportTemplate["DeviceBasicInfo"]=["opaque":"unchanged"]
+    exportTemplate["ActionInfo"]=[try! WindowsProfile.macroAction(mixed),["ActionType":3,"ActionName":"Text","ActionContent":["ActionText":"untouched"]]]
+    var exportProfile=macro.profile
+    try! exportProfile.assignMacro(named:"Control A",to:108)
+    try! exportProfile.assignMacro(named:"Control A",to:114,playback:.init(mode:.toggle,count:1))
+    let official=try! WindowsProfile.encodeKeysAndMacros(exportProfile,template:data(exportTemplate))
+    precondition(try! WindowsProfile.encodeKeysAndMacros(exportProfile,template:official)==official)
+    let exportedRoot=try! JSONSerialization.jsonObject(with:official) as! [String:Any]
+    let outputKeys=exportedRoot["KeyList"] as! [[String:Any]]
+    precondition(outputKeys[17]["ActionLinkIndex"] as! Int==outputKeys[18]["ActionLinkIndex"] as! Int && outputKeys[19]["ActionLinkIndex"] as! Int != outputKeys[17]["ActionLinkIndex"] as! Int)
+    precondition(outputKeys[79]["ActionLinkIndex"] as! Int==0 && outputKeys[17]["opaque"] as! Int==42)
+    precondition((exportedRoot["DeviceBasicInfo"] as! [String:String])["opaque"]=="unchanged")
+    precondition(try! data(["lighting":exportedRoot["LightInfo"]!])==data(["lighting":exportTemplate["LightInfo"]!]))
+    let roundtrip=try! WindowsProfile.decode(official,baseline:baseline).profile
+    for slot in [102,108,114]{let name=roundtrip.macroBindings![slot]!;precondition(roundtrip.macros.first{$0.name==name}!.steps==macro.profile.macros[0].steps && roundtrip.macroModes![slot]==(exportProfile.macroModes?[slot] ?? .once))}
+    var fullExport=try! HardwareProfile.fromHardware(baseline)
+    fullExport.macros=(0..<32).map{KeyboardMacro(name:"M\($0)",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:50)])}
+    try! fullExport.assignMacro(named:"M0",to:102,playback:.init(count:2))
+    rejected{_ = try WindowsProfile.encodeKeysAndMacros(fullExport,template:data(exportTemplate))}
+    exportKeys[79]["ActionLinkIndex"]=0;exportTemplate["KeyList"]=exportKeys
+    rejected{_ = try WindowsProfile.encodeKeysAndMacros(exportProfile,template:data(exportTemplate))}
     var libraryRoot=root
     var libraryActions=root["ActionInfo"] as! [[String:Any]]
     var libraryAction=libraryActions[0];libraryAction["ActionType"]="02"
