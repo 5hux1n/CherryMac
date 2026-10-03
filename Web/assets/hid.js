@@ -1,4 +1,5 @@
 import {requireThat,validateSnapshot} from './model.js?v=0.6.0';
+import {prepareHostTextBindings,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
@@ -22,6 +23,7 @@ export function supportsDevice(device){
 }
 export class CherryHID{
   #keyAuthorization=null;#macroAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
+  #configurationGeneration=0;
   constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
@@ -54,6 +56,9 @@ export class CherryHID{
   exchange(request){
     // Copy before queueing: callers cannot alter a previously validated packet.
     request=Array.from(request);
+    // Invalidate prepared text data when a mutation is queued, before it can
+    // affect the keyboard. A failed/blocked mutation also requires rereading.
+    if([6,9,11,0x15].includes(request[3]))this.#configurationGeneration++;
     const task=this.tail.then(async()=>{
       requireThat(request.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'USB 包包含无效字节。');
       const authorization=(request[3]===9&&this.#keyAuthorization)||([9,0x15].includes(request[3])&&this.#macroAuthorization);
@@ -79,6 +84,24 @@ export class CherryHID{
   async read(command,count){const result=[];
     for(let offset=0;offset<count;offset+=54){const length=Math.min(54,count-offset),b=await this.exchange(packet(command,offset,length));result.push(...b.slice(8,8+length));}
     return result;
+  }
+  async readHostTextBindings(root){
+    requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
+    const supported=(this.device.collections??[]).some(c=>c.usagePage===0xff1c&&c.usage===0x92&&descendants(c).some(d=>(d.inputReports??[]).some(r=>r.reportId===5&&(r.items??[]).reduce((n,i)=>n+i.reportSize*i.reportCount,0)===64)));
+    requireThat(supported,'浏览器没有提供文本触发所需的 Report 5 输入接口。');
+    // Freeze the official JSON before asynchronous reads; draft edits must not
+    // change the prepared action references midway through this operation.
+    root=structuredClone(root);
+    const generation=this.#configurationGeneration;
+    const before=await this.read(8,378),factory=await this.read(7,378),after=await this.read(8,378);
+    requireThat(!this.dead&&this.device.opened&&generation===this.#configurationGeneration&&before.every((v,i)=>v===after[i]),'准备文本监听期间配置或 USB 会话发生变化，请重新读取。');
+    const binding=prepareHostTextBindings(root,factory,after);
+    // Caller supplies a complete report from this device's input event. This
+    // is a resolver only: no listener or cross-application execution installed.
+    return fullReport=>{
+      if(this.dead||!this.device.opened||generation!==this.#configurationGeneration)return null;
+      const value=officialHostTextEvent(fullReport);return value===null?null:binding(value);
+    };
   }
   async snapshot(){
     this.progress('读取设备信息');const deviceInfo=await this.read(3,34);

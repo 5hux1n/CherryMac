@@ -25,7 +25,7 @@ class FakeDevice extends EventTarget{
   async open(){this.opened=true;}async close(){this.opened=false;}
   async sendReport(id,data){
     assert.equal(id,4);assert.equal(data.byteLength,63);const b=new Uint8Array([id,...data]);this.requests.push(b);const cmd=b[3],o=b[5]|b[6]<<8,n=b[4],r=b.slice();
-    const field=({3:'deviceInfo',5:'parameters',8:'keymap',10:'colors',20:'macroData'})[cmd];
+    const field=({3:'deviceInfo',5:'parameters',7:'factoryKeymap',8:'keymap',10:'colors',20:'macroData'})[cmd];
     if(field){r.set(this.s[field].slice(o,o+n),8);if(this.wrongReadback&&this.writeCount>=7&&cmd===8){r[8]^=1;this.wrongReadback=false;}}
     else{
       this.writeCount++;const target=({9:'keymap',11:'colors',21:'macroData',6:'parameters'})[cmd];assert.ok(target,`Unexpected command ${cmd}`);
@@ -742,4 +742,18 @@ test('host text binding routing requires installed text marker and freezes offic
   current.splice(306,3,48,146,1);assert.equal(prepareHostTextBindings(root,factory,current)(0x766),null);
   current.splice(306,3,161,0,0);root.KeyList[17].ActionLinkIndex=7;
   assert.throws(()=>prepareHostTextBindings(root,factory,current));
+});
+
+test('host text transport reads factory separately and invalidates prepared routes',async()=>{
+  const root=windowsFixture(),s=demoSnapshot();s.factoryKeymap=Array(378).fill(0);s.factoryKeymap.splice(306,3,48,146,1);s.keymap.splice(306,3,161,0,0);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  root.ActionInfo=[{ActionType:3,ActionTextFlag:1,ActionContent:{ActionText:'中😀'}}];
+  const {hid,device}=await transport(s);
+  await assert.rejects(hid.readHostTextBindings(root),/Report 5/);assert.equal(device.requests.length,0);
+  device.collections[0].inputReports.push({reportId:5,items:[{reportSize:8,reportCount:8}]});
+  const route=await hid.readHostTextBindings(root),report=[5,0x66,7,0,0,0,0,0,0];
+  assert.equal(route(report).plan.originalText,'中😀');assert.equal(route([4,...report.slice(1)]),null);
+  assert.deepEqual([...new Set(device.requests.map(b=>b[3]))],[8,7]);assert.equal(device.writeCount,0);
+  await assert.rejects(hid.exchange(packet(9,0,1,[0])));assert.equal(route(report),null);assert.equal(device.writeCount,0);
+  const fresh=await hid.readHostTextBindings(root);assert.ok(fresh(report));await hid.close();assert.equal(fresh(report),null);
 });

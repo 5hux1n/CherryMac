@@ -5,7 +5,7 @@ const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slo
 // Key writes need an immutable authorization for this exact baseline/target.
 export const WRITE_BLOCK_REASON='此功能写入暂缓：灯效、宏和其他设备设置没有开放，仅允许独立键位写入。';
 export function assertHardwareWriteAllowed(){throw new Error(WRITE_BLOCK_REASON);}
-const READ_LIMITS=new Map([[3,34],[5,56],[8,378],[0x0a,378],[0x14,3071],[0x1b,126]]);
+const READ_LIMITS=new Map([[3,34],[5,56],[7,378],[8,378],[0x0a,378],[0x14,3071],[0x1b,126]]);
 export function assertReadOnlyRequest(request){
   const limit=READ_LIMITS.get(request?.[3]);
   if(!limit)assertHardwareWriteAllowed();

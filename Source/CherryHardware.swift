@@ -65,7 +65,7 @@ enum HardwareWritePolicy {
     static func requireWrites() throws {throw HardwareError(message:reason)}
     static func validateReadRequest(_ request:[UInt8]) throws {
         guard request.count==64,request[0]==4 else{throw HardwareError(message:"只读查询长度无效。")}
-        let limits:[UInt8:Int]=[3:34,5:56,8:378,0x0A:378,0x14:3071,0x1B:126]
+        let limits:[UInt8:Int]=[3:34,5:56,7:378,8:378,0x0A:378,0x14:3071,0x1B:126]
         guard let limit=limits[request[3]] else{try requireWrites();return}
         let count=Int(request[4]),offset=Int(request[5]) | Int(request[6])<<8
         let checksum=Int(request[1]) | Int(request[2])<<8
@@ -103,6 +103,15 @@ protocol CherryHardwareAccess: AnyObject {
 }
 
 extension CherryHardwareAccess {
+    // Preparation only: no input listener, text posting or configuration write.
+    // The owner must discard this routing after a write or USB reconnection.
+    func readHostTextBindings(officialJSON:Data)throws->WindowsProfile.HostTextBindings {
+        let before=try read(8,count:378)
+        let factory=try read(7,count:378)
+        let after=try read(8,count:378)
+        guard before==after else{throw HardwareError(message:"准备文本监听期间键位发生变化，请重新读取。")}
+        return try WindowsProfile.HostTextBindings(officialJSON:officialJSON,factoryKeymap:factory,currentKeymap:after)
+    }
     func completeSnapshot() throws -> HardwareSnapshot {
         var snapshot=try snapshot(includeColors:true)
         guard snapshot.deviceInfo[6]==24 else {throw HardwareError(message:"宏容量与已验证固件不同，停止读取。")}

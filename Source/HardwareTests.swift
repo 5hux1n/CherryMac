@@ -173,6 +173,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
     var backupFails = false
     var unexpectedChangeAt:Int?
     var drains: [TimeInterval] = []
+    var factoryKeymap:[UInt8]?
     init(_ state: HardwareSnapshot) { self.state = state }
     func snapshot(includeColors: Bool) throws -> HardwareSnapshot {
         reads += 1
@@ -187,7 +188,7 @@ private final class SimulatedCherry: CherryHardwareAccess {
         let bytes: [UInt8]
         switch command {
         case 8: bytes=state.keymap
-        case 7: bytes=Array(repeating:0,count:378) // Deliberately distinct factory table.
+        case 7: bytes=factoryKeymap ?? Array(repeating:0,count:378) // Deliberately distinct factory table.
         case 0x14: bytes=state.macroData!
         default: throw HardwareError(message:"unexpected read")
         }
@@ -562,6 +563,8 @@ private func runHardwareWriteTests(_ fixture:HardwareSnapshot) {
 }
 
 func runHostTextPlanChecks(){
+    try! HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(7,offset:336,length:42))
+    do{try HardwareWritePolicy.validateReadRequest(CherryPacket.chunk(7,offset:377,length:2));preconditionFailure("factory read must stay within 378 bytes")}catch{}
     func plan(_ text:String)throws->WindowsProfile.HostTextPlan {try WindowsProfile.HostTextPlan(action:["ActionType":3,"ActionName":"中文文本","ActionTextFlag":1,"ActionContent":["ActionText":text]])}
     let mixed=try! plan("中😀\r\nA\0后文")
     precondition(mixed.originalText=="中😀\r\nA\0后文" && mixed.marker==[0xA1,0,0] && mixed.windowsFlag==1)
@@ -588,6 +591,10 @@ func runHostTextPlanChecks(){
     var root:[String:Any]=["//":"47","KeyList":keys,"ActionInfo":[["ActionType":3,"ActionName":"计算器文本","ActionTextFlag":1,"ActionContent":["ActionText":"中😀"]]]]
     var current=Array(repeating:UInt8(0),count:378);current.replaceSubrange(306..<309,with:[0xA1,0,0])
     let routing=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
+    var snapshot=HardwareSnapshot.demo();snapshot.keymap=current
+    let transport=SimulatedCherry(snapshot);transport.factoryKeymap=factory
+    let prepared=try! transport.readHostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root))
+    precondition(transport.readCommands==[8,7,8] && transport.packets.isEmpty && prepared.binding(eventValue:0x766)?.plan.originalText=="中😀")
     precondition(routing.binding(eventValue:0x766)?.plan.originalText=="中😀" && routing.binding(eventValue:0x766)?.actionIndex==0)
     precondition(routing.binding(eventValue:0x711)==nil && routing.binding(eventValue:0x767)==nil)
     current.replaceSubrange(306..<309,with:[0x30,0x92,1])
