@@ -1162,7 +1162,7 @@ if CommandLine.arguments.contains("--macro-hardware-test") || (CommandLine.argum
             fputs("未知宏测试场景；尚未连接或写入键盘。\n",stderr);exit(2)
         };scenario=selected
     }
-    let tester=MacroHardwareTestController(directory:directory,scenario:scenario);app.delegate=tester;app.run();exit(0)
+    let tester=MacroHardwareTestController(directory:directory,scenario:scenario,includePowerCycle:CommandLine.arguments.contains("--macro-power-cycle") ? true:nil);app.delegate=tester;app.run();exit(0)
 }
 if CommandLine.arguments.contains("--macro-output-observer"){
     let tester=MacroObserverTestController();app.delegate=tester;app.run();exit(0)

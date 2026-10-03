@@ -156,11 +156,12 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
         place(button("导入配置…",#selector(importProfile)),8,94,180,32,in:files)
         place(button("导出配置…",#selector(exportProfile)),208,94,180,32,in:files)
+        place(button("导出 Windows 键位与宏…",#selector(exportWindowsProfile)),408,94,280,32,in:files)
         place(label("备份与撤销",17,.semibold),8,160,850,27,in:files)
         place(button("打开自动备份",#selector(openBackups)),8,205,180,32,in:files)
         place(button("撤销编辑区修改",#selector(discardDraft)),208,205,210,32,in:files)
         place(button("恢复最近按键备份",#selector(restoreLastKeys)),438,205,222,32,in:files)
-        place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导入前先读取键盘。导入和撤销均不修改实体键盘。",12),8,261,850,62,in:files)
+        place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导出先导入官方模板，只更新键位与宏；灯效和设备设置沿用模板。导入和撤销不修改键盘。",12),8,261,850,62,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -424,6 +425,19 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func copyMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name,newName=try p.duplicateMacro(named:name);profile=p;refreshMacroPicker();macroPicker.selectItem(withTitle:newName);chooseMacro();update();message.stringValue="已复制宏；原绑定保留，副本尚未绑定或写入。"}catch{message.stringValue=error.localizedDescription}}
     @objc func clearMacros(){guard var p=profile else{return};do{try p.clearMacros();profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。"}catch{message.stringValue=error.localizedDescription}}
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func exportWindowsProfile(){
+        guard !busy,let p=profile else{message.stringValue="请先读取或导入配置。";return}
+        do{
+            guard let template=p.windowsTemplateJSON else{throw HardwareError(message:"请先导入本型号的 Windows 官方 JSON，作为导出模板。")}
+            let data=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8))
+            let panel=NSSavePanel();panel.nameFieldStringValue="CHERRY-键位与宏.json"
+            panel.beginSheetModal(for:window!){[weak self] result in
+                guard result == .OK,let url=panel.url else{return}
+                do{try data.write(to:url,options:.atomic);self?.message.stringValue="已导出 Windows 格式键位与宏；灯效和设备设置沿用导入模板。"}
+                catch{self?.message.stringValue=error.localizedDescription}
+            }
+        }catch{message.stringValue=error.localizedDescription}
+    }
     @objc func exportProfile(){guard let p=profile else{message.stringValue="请先读取或导入配置。";return};let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json";panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{try p.encoded().write(to:url,options:.atomic);self?.message.stringValue="配置已导出。"}catch{self?.message.stringValue=error.localizedDescription}}}
     func loadImport(_ data:Data)throws {
         guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}

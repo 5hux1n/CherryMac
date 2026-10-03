@@ -19,6 +19,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     let queue=DispatchQueue(label:"local.cherrymac.macro-hardware-test")
     let directory:URL
     let scenario:Scenario
+    var includePowerCycle:Bool
+    let powerOption=NSButton(checkboxWithTitle:"本轮同时测试断电保留（输出通过后按提示断电）",target:nil,action:nil)
     let resumeDirectory:URL?
     let status=NSTextField(wrappingLabelWithString:"正在核对设备和宏配置…")
     let detail=NSTextField(wrappingLabelWithString:"仅测试计算器键绑定的 AB 两次宏；日志自动保存。")
@@ -29,7 +31,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var phase:Phase = .preparing,authorization:MacroWriteAuthorization?,power:CalculatorPowerCycleEvidence?
     var adapter=MacroHIDObservationAdapter(),execution:MacroExecutionEvidence?,executionStart=0
     var powerVerified=false,firstExecutionPassed=false,secondExecutionPassed=false,restored=false
-    var passed:Bool{firstExecutionPassed && secondExecutionPassed && powerVerified && restored && errorMessage==nil && interruptions.isEmpty}
+    var passed:Bool{firstExecutionPassed && (!includePowerCycle || (secondExecutionPassed && powerVerified)) && restored && errorMessage==nil && interruptions.isEmpty}
     var locationID:Int?,errorMessage:String?,raw:[[String:Any]]=[]
     var interruptions:[MacroExecutionEvidence.Interruption]=[]
     var writeAttempted=false
@@ -63,8 +65,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
         var instruction:String{"请按下并完全松开计算器键一次；预期 \(label)，共 \(macro.steps.count*playback.count) 个按下／松开事件。"}
     }
-    init(directory:URL?=nil,resumeDirectory:URL?=nil,scenario:Scenario = .abTwice){
-        self.scenario=scenario;self.resumeDirectory=resumeDirectory
+    init(directory:URL?=nil,resumeDirectory:URL?=nil,scenario:Scenario = .abTwice,includePowerCycle:Bool?=nil){
+        self.includePowerCycle=includePowerCycle ?? (scenario == .abTwice);self.scenario=scenario;self.resumeDirectory=resumeDirectory
         self.directory=directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareTests/Macro-\(UUID().uuidString)");super.init()
     }
     static func plan(_ baseline:HardwareSnapshot,scenario:Scenario = .abTwice)throws->MacroWriteAuthorization {
@@ -86,7 +88,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encoded<T:Encodable>(_ value:T)throws->Data{let e=JSONEncoder();e.outputFormatting=[.prettyPrinted,.sortedKeys];return try e.encode(value)}
     func persist()throws {
-        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
+        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"powerTestRequested":includePowerCycle,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
         if let errorMessage{session["error"]=errorMessage};if let locationID{session["locationID"]=locationID}
         if let power{session["originalRegistryID"]=String(power.originalRegistryID);session["disconnectedAt"]=power.disconnectedAt;session["powerOffConfirmedAt"]=power.powerOffConfirmedAt;session["reconnectedAt"]=power.reconnectedAt;session["confirmedOffInterval"]=power.confirmedOffInterval}
         try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
@@ -98,16 +100,22 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
     }
     func fail(_ message:String,_ interruption:MacroExecutionEvidence.Interruption = .cancelled){
-        if execution != nil{execution?.invalidate(interruption);if !interruptions.contains(interruption){interruptions.append(interruption)}}
-        phase = .failed;transitions.append(["phase":"failed","at":Date().timeIntervalSince1970,"error":message]);errorMessage=message;status.stringValue=message;action.isEnabled=false;off.isEnabled=false
+        if phase == .observing,execution != nil{execution?.invalidate(interruption);if !interruptions.contains(interruption){interruptions.append(interruption)}}
+        powerOption.isEnabled=false;phase = .failed;transitions.append(["phase":"failed","at":Date().timeIntervalSince1970,"error":message]);errorMessage=message;status.stringValue=message;action.isEnabled=false;off.isEnabled=false
         restore.isEnabled=authorization != nil && !busy;detail.stringValue="停止正在运行的宏；重连后可点击恢复。备份与日志：\(directory.path)";try? persist()
     }
     func set(_ next:Phase,_ text:String)throws{phase=next;status.stringValue=text;action.isEnabled=[.ready,.observeReady,.restoreReady,.complete].contains(next);restore.isEnabled=authorization != nil && !busy && ![.ready,.complete,.cancelled].contains(next);
+        powerOption.isEnabled=next == .ready && !busy && !writeAttempted
         transitions.append(["phase":next.rawValue,"at":Date().timeIntervalSince1970]);try persist()}
     func registry(_ device:IOHIDDevice)->UInt64?{var id:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS ? id:nil}
     func devices()->Set<IOHIDDevice>{IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []}
     func soleDevice()throws->IOHIDDevice{let all=devices();guard all.count==1,let d=all.first,(IOHIDDeviceGetProperty(d,kIOHIDLocationIDKey as CFString) as? NSNumber)?.intValue==locationID else{throw HardwareError(message:"无法确认同一把 USB 键盘，停止操作。")};return d}
     func stop(_ request:MacroStopRequest)throws{try MacroPhysicalStopController.confirm(request,owner:window,directory:directory.appendingPathComponent("stop-\(UUID().uuidString)"))}
+    @objc func powerOptionChanged(){
+        guard phase == .ready,!busy,!writeAttempted else{powerOption.state=includePowerCycle ? .on:.off;return}
+        includePowerCycle=powerOption.state == .on
+        do{try persist()}catch{fail(error.localizedDescription,.loggingFailed)}
+    }
     @objc func next(){
         guard !busy,let event=NSApp.currentEvent,event.type == .leftMouseUp,event.modifierFlags.intersection([.control,.option,.command,.shift]).isEmpty else{return}
         switch phase {
@@ -138,7 +146,10 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
                 if result.status=="failed"{fail(result.failure ?? "宏执行检查失败。",.reportRejected);return}
                 if result.passed{
                     if powerVerified{secondExecutionPassed=true;action.title="恢复原配置";try set(.restoreReady,"断电后的实体输出检查通过。点击恢复原配置，完成本轮测试。")}
-                    else{firstExecutionPassed=true;action.title="等候断开";try set(.disconnect,"实体输出检查通过。请拔 USB 并关闭键盘电源；断开后勾选电源关闭确认。")}
+                    else{firstExecutionPassed=true
+                        if includePowerCycle{action.title="等候断开";try set(.disconnect,"实体输出检查通过。请拔 USB 并关闭键盘电源；断开后勾选电源关闭确认。")}
+                        else{action.title="恢复原配置";try set(.restoreReady,"实体输出和释放检查通过。本轮未选择断电测试；保持 USB 连接，点击恢复原配置。")}
+                    }
                 }else if milliseconds()-executionStart>300_000{fail("观察超时，请停止宏并恢复原配置。");return}
             }catch{fail(error.localizedDescription,.loggingFailed)}
         }
@@ -171,7 +182,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             let result=Result<HardwareSnapshot,Error>{let usb=try CherryUSB(),log=try HardwareOperationLog(kind:"macro-test-recovery",directory:directory.appendingPathComponent("operations"));return try usb.recoverMacro(authorization,log:log,confirmStopped:stop)}
             DispatchQueue.main.async{[self] in busy=false;do{let s=try result.get();try HardwareProfile(snapshot:s).encoded().write(to:directory.appendingPathComponent("restored.json"),options:.atomic)
                 guard Self.matches(s,authorization.before) else{throw HardwareError(message:"恢复读回不一致。")};restored=true;action.title="完成并关闭"
-                try set(.complete,passed ? "本轮宏写入、两次实体输出、断电保留和恢复均通过。":"原配置已恢复；宏测试未完成全部验收，不计作通过。")
+                try set(.complete,passed ? (includePowerCycle ? "本轮宏写入、两次实体输出、断电保留和恢复均通过。":"本轮宏写入、实体输出和恢复通过；未测试断电保留。"):"原配置已恢复；宏测试未完成全部验收，不计作通过。")
             }catch{fail(error.localizedDescription)}}
         }
     }
@@ -226,7 +237,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         let view=MacroTestInputView(frame:NSRect(x:0,y:0,width:760,height:350));w.contentView=view
         let title=NSTextField(labelWithString:"宏 · 写入、输出、断电保留与恢复");title.font = .systemFont(ofSize:22,weight:.semibold);title.frame=NSRect(x:22,y:295,width:716,height:32);view.addSubview(title)
         status.font = .systemFont(ofSize:16,weight:.medium);status.frame=NSRect(x:22,y:170,width:716,height:110);view.addSubview(status)
-        detail.textColor = .secondaryLabelColor;detail.frame=NSRect(x:22,y:100,width:716,height:60);view.addSubview(detail)
+        detail.textColor = .secondaryLabelColor;detail.frame=NSRect(x:22,y:125,width:716,height:40);view.addSubview(detail)
+        powerOption.state=includePowerCycle ? .on:.off;powerOption.target=self;powerOption.action=#selector(powerOptionChanged);powerOption.isEnabled=false;powerOption.frame=NSRect(x:22,y:92,width:716,height:28);view.addSubview(powerOption)
         action.target=self;action.action=#selector(next);action.frame=NSRect(x:22,y:54,width:230,height:32);action.isEnabled=false;view.addSubview(action)
         restore.target=self;restore.action=#selector(requestRestore);restore.frame=NSRect(x:270,y:54,width:300,height:32);restore.isEnabled=false;view.addSubview(restore)
         action.bezelStyle = .rounded;restore.bezelStyle = .rounded
@@ -305,9 +317,22 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             let data=try Data(contentsOf:folder.appendingPathComponent(afterPower ? "execution-after-power.json":"execution-before-power.json"))
             let log=try JSONDecoder().decode(MacroExecutionLog.self,from:data);precondition(log.source == .simulation && (try! log.replay()).passed)
         }
+        let completedData=try Data(contentsOf:folder.appendingPathComponent("execution-after-power.json"))
+        controller.phase = .reconnect;controller.fail("late reconnect failure")
+        let retainedLog=try JSONDecoder().decode(MacroExecutionLog.self,from:Data(contentsOf:folder.appendingPathComponent("execution-after-power.json")))
+        precondition(retainedLog.interruptions?.isEmpty == true && (try! retainedLog.replay()).passed)
+        precondition(!completedData.isEmpty && !controller.passed)
+        controller.errorMessage=nil
         precondition(controller.firstExecutionPassed && controller.secondExecutionPassed)
         controller.restored=true;precondition(controller.passed)
         controller.phase = .observing;controller.fail("simulated interruption",.focusLost);precondition(controller.phase == .failed && !controller.passed)
+        let outputOnly=MacroHardwareTestController(directory:folder,scenario:.mouse)
+        precondition(!outputOnly.includePowerCycle)
+        outputOnly.executionStart=outputOnly.milliseconds()-2000;outputOnly.phase = .observing
+        outputOnly.execution=try MacroExecutionEvidence(macro:Scenario.mouse.macro,playback:Scenario.mouse.playback,source:.simulation,startedMilliseconds:outputOnly.executionStart)
+        for (i,step) in Scenario.mouse.macro.steps.enumerated(){try outputOnly.execution?.observe(.init(usage:step.usage,pressed:step.pressed,milliseconds:outputOnly.executionStart+i*80,kind:step.kind))}
+        outputOnly.tick();precondition(outputOnly.phase == .restoreReady && outputOnly.firstExecutionPassed && !outputOnly.powerVerified && !outputOnly.secondExecutionPassed)
+        outputOnly.restored=true;precondition(outputOnly.passed)
         print("PASS: macro hardware-flow plan preserves other keys/lights, requires original calculator, verifies full retained configuration and explicit power evidence (offline; manager never opened, no writes)")
     }
 }
