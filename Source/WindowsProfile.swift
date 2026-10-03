@@ -21,6 +21,14 @@ enum WindowsProfile {
     ]
     static let mediaCodes:[UInt16] = [0x0183,0x00CD,0x00B7,0x00B6,0x00B5,0x00EA,0x00E9,0x00E2,0x0223,0x0227,0x0226,0x0224,0x0225,0x022A,0x0221,0x0194,0x0192,0x018A]
     static let modeCodes:[UInt8] = [0,1,2,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,3,8,22,23,24]
+    // Confirmed JSON getter/setter struct order (seven UInt16 fields), not
+    // offsets in the keyboard's USB parameter bank or accepted UI ranges.
+    static let systemStageFields=["Repeat","RepeatDelay","Key6Flag","ReportSelectItem","RFReportSelectItem","WFlag","WinFlag"]
+    static func systemStageWords(_ root:[String:Any])throws->[UInt16]? {
+        guard let value=root["SystemStages"],!(value is NSNull) else{return nil}
+        guard let stages=value as? [String:Any] else{throw HardwareError(message:"Windows SystemStages 结构无效。")}
+        return try systemStageFields.map{UInt16(try integer(stages[$0],$0,range:0...65535))}
+    }
     struct Imported {
         let profile:HardwareProfile
         let keyCount:Int
@@ -55,6 +63,7 @@ enum WindowsProfile {
         guard data.count<=1_000_000,let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],
               root["//"] as? String=="47",let keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"需要本型号的官方配置模板（不超过 1 MB）。")}
         for (i,key) in keys.enumerated(){guard try integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF)==defaults[i] else{throw HardwareError(message:"Windows 键盘布局不匹配。")}}
+        _ = try systemStageWords(root)
         return root
     }
     // ActionInfo serializer shared by the forthcoming full-document exporter.
@@ -157,6 +166,7 @@ enum WindowsProfile {
         }
         if let object=root["ActionInfo"],!(object is NSNull),!(object is [[String:Any]]){throw HardwareError(message:"Windows ActionInfo 结构无效。")}
         let actions=root["ActionInfo"] as? [[String:Any]] ?? []
+        _ = try systemStageWords(root)
         var result=try HardwareProfile.fromHardware(baseline)
         result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
         let oldBindings=result.macroBindings ?? [:]

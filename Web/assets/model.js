@@ -102,9 +102,16 @@ function physicalSlot(v){
   if(v>>16===0x20&&((v>>8)&255)===0){const slot=SLOTS[v&255];return [10,75].includes(slot)?undefined:slot;}
   return ({[0xa00300]:6,[0xa00100]:71,[0x200100]:5,[0x200200]:4,[0x200400]:17,[0x200800]:11,[0x201000]:83,[0x202000]:82,[0x204000]:65,[0x309201]:102,[0x30b600]:108,[0x30cd00]:114,[0x30b500]:120})[v];
 }
+export function officialSystemStageWords(root){
+  const stages=root?.SystemStages;if(stages==null)return null;
+  requireThat(typeof stages==='object'&&!Array.isArray(stages),'Windows SystemStages 结构无效。');
+  // JSON struct order only; these are not USB offsets or UI value ranges.
+  return ['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'].map(k=>winInt(stages[k],k,0,65535));
+}
 function validateWindowsTemplate(root,size){
   requireThat(size<=1_000_000&&root?.['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'需要本型号的官方配置模板（不超过 1 MB）。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
+  officialSystemStageWords(root);
 }
 // ActionInfo building block; this does not yet export a whole official document.
 export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'count',count:1}){
@@ -170,6 +177,7 @@ export function exportWindowsKeysAndMacros(profile,template){
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
 }
 export function importWindows(root,baseline){
+  officialSystemStageWords(root);
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
   for(const field of ['LightInfo','CustomLightMode'])requireThat(root[field]==null||(typeof root[field]==='object'&&!Array.isArray(root[field])),'Windows 灯效结构无效。');

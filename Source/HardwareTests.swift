@@ -705,6 +705,15 @@ private func runWindowsProfileTests(_ fixture:HardwareSnapshot){
         precondition(try! data(["action":WindowsProfile.macroAction(exported)])==data(["action":action]))
     }
     rejected{_ = try WindowsProfile.macroAction(mixed,playback:.init(count:0))}
+    var systemRoot=root;systemRoot.removeValue(forKey:"LightInfo")
+    systemRoot["SystemStages"]=["Repeat":16,"RepeatDelay":"257","Key6Flag":1,"ReportSelectItem":3,"RFReportSelectItem":2,"WFlag":0,"WinFlag":65535,"opaque":"preserve"] as [String:Any]
+    precondition(try! WindowsProfile.systemStageWords(systemRoot)==[16,257,1,3,2,0,65535])
+    let systemImport=try! WindowsProfile.decode(data(systemRoot),baseline:baseline).profile
+    precondition(systemImport.snapshot.parameters==baseline.parameters)
+    let preservedSystem=try! WindowsProfile.templateRoot(WindowsProfile.encodeKeysAndMacros(systemImport,template:data(systemRoot)))
+    precondition((preservedSystem["SystemStages"] as! [String:Any])["opaque"] as! String=="preserve")
+    for invalid:Any in [-1,65536,1.5,true,NSNull()]{var stages=systemRoot["SystemStages"] as! [String:Any];stages["RepeatDelay"]=invalid;var bad=systemRoot;bad["SystemStages"]=stages;rejected{_ = try WindowsProfile.decode(data(bad),baseline:baseline)}}
+    for invalid:Any in [[],42,[:]]{var bad=systemRoot;bad["SystemStages"]=invalid;rejected{_ = try WindowsProfile.systemStageWords(bad)}}
     var largeRoot=root;largeRoot["unknown"]=["text":String(repeating:"\"",count:420000)]
     let retained=try! WindowsProfile.decode(data(largeRoot),baseline:baseline).profile
     let retainedData=try! retained.encoded();precondition(retainedData.count>1_000_000)

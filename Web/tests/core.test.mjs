@@ -4,7 +4,7 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
-import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.5.0';
@@ -196,6 +196,17 @@ test('Windows macro playback imports all supported bindings without changing the
     const p=importWindows(root,base);assert.deepEqual(p.snapshot.keymap.slice(306,309),record);assert.deepEqual(base,old);
     root.ActionInfo[0].ActionContent.ActionMacroType=3;assert.throws(()=>importWindows(root,base));assert.deepEqual(base,old);
   }
+});
+
+test('official system stages use seven words while imports preserve USB parameters and unknown fields',()=>{
+  const root=windowsFixture(),base=demoSnapshot(),before=clone(base);delete root.LightInfo;
+  root.SystemStages={Repeat:16,RepeatDelay:'257',Key6Flag:1,ReportSelectItem:3,RFReportSelectItem:2,WFlag:0,WinFlag:65535,opaque:'preserve'};
+  assert.deepEqual(officialSystemStageWords(root),[16,257,1,3,2,0,65535]);assert.equal(officialSystemStageWords({}),null);
+  const p=importWindows(root,base);assert.deepEqual(p.snapshot.parameters,base.parameters);assert.deepEqual(JSON.parse(p.windowsTemplateJSON).SystemStages,root.SystemStages);
+  assert.deepEqual(exportWindowsKeysAndMacros(p,root).SystemStages,root.SystemStages);
+  for(const value of [-1,65536,1.5,true,null]){const bad=clone(root);bad.SystemStages.RepeatDelay=value;assert.throws(()=>importWindows(bad,base));}
+  for(const value of [[],42,{}])assert.throws(()=>officialSystemStageWords({SystemStages:value}));
+  assert.deepEqual(base,before);
 });
 
 test('official source template survives profile save/reload, validates layout and allows escaped files',()=>{
