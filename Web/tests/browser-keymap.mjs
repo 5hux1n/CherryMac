@@ -23,6 +23,11 @@ await page.screenshot({path:join(artifacts,'mobile.png'),fullPage:false});
 await page.setViewportSize({width:1440,height:1120});
 await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:join(artifacts,'dark.png'),fullPage:true});await page.emulateMedia({colorScheme:'light'});
 await page.locator('#tab-macros').click();await page.locator('[data-id="calculator"]').click();await page.locator('#macro-name').fill('测试宏');await page.locator('#add-pair').click();await page.locator('#save-macro').click();await page.locator('#assign-macro').click();assert.match(await page.locator('#status').textContent(),/已将/);
+// Reordering edits the draft; an unbalanced order cannot replace the saved macro.
+await page.getByLabel('移动步骤 1',{exact:true}).selectOption('bottom');
+await page.locator('#save-macro').click();assert.match(await page.locator('#status').textContent(),/按下|松开/);
+await page.getByLabel('移动步骤 2',{exact:true}).selectOption('top');
+await page.locator('#save-macro').click();assert.match(await page.locator('#status').textContent(),/已保存/);
 // Verify the visible playback controls and exported wire mapping, with no HID.
 for(const [mode,count,record] of [['count',3,[0x71,0,3]],['held',1,[0x70,0,1]],['toggle',1,[0x70,0,2]]]){
   await page.locator('#macro-playback').selectOption(mode);

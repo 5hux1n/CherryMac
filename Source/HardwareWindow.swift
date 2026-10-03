@@ -136,10 +136,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("复制",#selector(copyMacro)),456,8,64,28,in:macros)
         place(button("清空",#selector(clearMacros)),527,8,64,28,in:macros)
         place(label("名称"),8,57,90,24,in:macros);controls.append(macroName);place(macroName,116,53,333,28,in:macros)
-        let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:154));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
+        let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:120));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
         macroText.frame=NSRect(origin:.zero,size:macroScroll.contentSize);macroText.minSize=NSSize(width:0,height:macroScroll.contentSize.height);macroText.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
         macroText.isVerticallyResizable=true;macroText.isHorizontallyResizable=false;macroText.autoresizingMask = .width;macroText.textContainer?.widthTracksTextView=true;macroText.textContainerInset=NSSize(width:10,height:10)
         macroScroll.documentView=macroText;macroText.isRichText=false;macroText.font = .monospacedSystemFont(ofSize:13,weight:.regular);macroText.string="A 按下 0\nA 松开 50";macros.addSubview(macroScroll)
+        for (index,title) in ["置顶","上移","下移","置底"].enumerated(){let move=button(title,#selector(moveMacroStep));move.tag=index;place(move,8+CGFloat(index)*82,224,76,28,in:macros)}
         place(label("添加按键"),593,12,110,24,in:macros)
         macroKey.addItems(withTitles:(hidKeys.filter{$0.1 != 0}+mouseMacroKeys).map{$0.0});controls.append(macroKey);place(macroKey,707,8,168,28,in:macros)
         place(label("间隔（毫秒）"),593,57,110,24,in:macros);controls.append(macroDelay);place(macroDelay,707,53,168,28,in:macros)
@@ -345,6 +346,22 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }
         p.macroBindings?.removeValue(forKey:slot);p.macroModes?.removeValue(forKey:slot)
         p.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:record);profile=p;message.stringValue="已编辑 \(key.label)：\(CherryMatrix.describe(record))。尚未写入键盘。";update()
+    }
+    @objc func moveMacroStep(_ sender:NSButton){
+        guard !busy,(0...3).contains(sender.tag) else{return}
+        var lines=macroText.string.components(separatedBy:"\n")
+        let selection=macroText.selectedRange(),text=macroText.string as NSString
+        let caret=min(selection.location,text.length)
+        let index=(text.substring(to:caret).components(separatedBy:"\n").count-1)
+        guard lines.indices.contains(index),!lines[index].trimmingCharacters(in:.whitespaces).isEmpty else{return}
+        let lineRange=text.lineRange(for:NSRange(location:caret,length:0))
+        guard selection.length==0 || NSMaxRange(selection)<=NSMaxRange(lineRange) else{message.stringValue="请选中一个步骤再移动。";return}
+        let target=[0,max(0,index-1),min(lines.count-1,index+1),lines.count-1][sender.tag]
+        guard target != index else{return}
+        let line=lines.remove(at:index);lines.insert(line,at:target);macroText.string=lines.joined(separator:"\n")
+        let offset=lines.prefix(target).reduce(0){$0+($1 as NSString).length+1}
+        macroText.setSelectedRange(NSRange(location:offset,length:(line as NSString).length));macroText.scrollRangeToVisible(macroText.selectedRange())
+        message.stringValue="步骤顺序已调整；保存宏时检查按下与松开是否配对。"
     }
     @objc func stageMacro(){
         do{guard var p=profile else{throw HardwareError(message:"请先读取或导入配置。")}

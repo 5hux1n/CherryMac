@@ -591,6 +591,10 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(editor.profile!.macros.count==1 && editor.profile!.macros[0].steps.map{$0.usage}==[4,4])
     editor.macroText.string="";editor.chooseMacro()
     precondition(editor.macroText.string=="A 按下 0\nA 松开 50")
+    let reorder=HardwareWindowController();reorder.macroText.string="A 按下 0\nA 松开 50\nB 按下 0\nB 松开 50"
+    reorder.macroText.setSelectedRange(NSRange(location:0,length:0));let move=NSButton();move.tag=3;reorder.moveMacroStep(move)
+    precondition(reorder.macroText.string=="A 松开 50\nB 按下 0\nB 松开 50\nA 按下 0")
+    move.tag=0;reorder.moveMacroStep(move);precondition(reorder.macroText.string=="A 按下 0\nA 松开 50\nB 按下 0\nB 松开 50")
     let saved=editor.profile
     editor.macroText.string="A 按下 0";editor.stageMacro()
     precondition(editor.profile==saved,"invalid macro must preserve the saved draft")
