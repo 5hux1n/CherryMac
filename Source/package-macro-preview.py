@@ -36,7 +36,7 @@ manifest = {'format': 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False}, 'files': files}
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True}, 'files': files}
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
 

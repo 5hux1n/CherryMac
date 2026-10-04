@@ -445,6 +445,40 @@ enum WindowsProfile {
             var format="CherryMacLightingRecoveryReview";var version=1;var hardwareReady=false
             var matchedWritePrefixes:[Int];var requiresRecovery:Bool;var restoreData:[Write]
         }
+        struct Trace:Codable {
+            struct Entry:Codable {var request:[UInt8];var sentMilliseconds:Int;var endedMilliseconds:Int?;var reply:[UInt8]?;var error:String?}
+            var format:String;var version:Int;var source:String;var entries:[Entry]
+        }
+        struct TraceReview:Codable,Equatable {
+            var format="CherryMacLightingTraceReview";var version=1;var hardwareReady=false
+            var source:String;var status:String;var acceptedReports:Int;var expectedReports:Int;var failedIndex:Int
+        }
+        // A trace is untrusted evidence, never permission to send or proof of
+        // persistence. A pending/failed exchange must be the final entry.
+        func reviewTrace(_ trace:Trace)throws->TraceReview {
+            let expected=try reports()
+            guard trace.format=="CherryMacLightingTrace",trace.version==1,["simulation","usbTrace"].contains(trace.source),trace.entries.count<=expected.count else{throw HardwareError(message:"灯效日志格式无效。")}
+            var accepted=0,previousEnd=0,status="incomplete",failedIndex = -1
+            for (index,entry) in trace.entries.enumerated(){
+                let report=expected[index],last=index==trace.entries.count-1
+                guard entry.request==report.request,entry.sentMilliseconds>=previousEnd,entry.sentMilliseconds<=9_007_199_254_740_991,entry.sentMilliseconds-previousEnd>=report.delayMilliseconds else{throw HardwareError(message:"灯效日志指令、顺序或结束等待时间不匹配。")}
+                if let end=entry.endedMilliseconds {
+                    guard end>=entry.sentMilliseconds,end<=9_007_199_254_740_991,(entry.reply != nil) != (entry.error != nil) else{throw HardwareError(message:"灯效日志回复或时钟无效。")}
+                    previousEnd=end
+                    if let error=entry.error {
+                        guard !error.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,last else{throw HardwareError(message:"灯效日志在失败后仍继续发送。")}
+                        status="failed";failedIndex=index
+                    } else {
+                        do{try report.validateReply(entry.reply!);accepted+=1}
+                        catch{guard last else{throw HardwareError(message:"灯效日志在无效回复后仍继续发送。")};status="failed";failedIndex=index}
+                    }
+                } else {
+                    guard entry.reply==nil,entry.error==nil,last else{throw HardwareError(message:"灯效日志缺少回复后仍继续发送。")}
+                }
+            }
+            if accepted==expected.count{status="complete"}
+            return .init(source:trace.source,status:status,acceptedReports:accepted,expectedReports:expected.count,failedIndex:failedIndex)
+        }
         private func applying(_ write:Write,to snapshot:HardwareSnapshot)->HardwareSnapshot {
             var result=snapshot;let range=write.offset..<write.offset+write.data.count
             if write.command==6{result.parameters.replaceSubrange(range,with:write.data)}

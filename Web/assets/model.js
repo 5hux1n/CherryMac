@@ -471,6 +471,27 @@ export function officialLightingReports(plan){
 }
 
 const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+// Pure trace review. Accepted replies are not proof of flash persistence.
+export function reviewOfficialLightingTrace(plan,trace){
+  const expected=officialLightingReports(plan);
+  requireThat(trace?.format==='CherryMacLightingTrace'&&trace.version===1&&['simulation','usbTrace'].includes(trace.source)&&Array.isArray(trace.entries)&&trace.entries.length<=expected.length,'灯效日志格式无效。');
+  let acceptedReports=0,previousEnd=0,status='incomplete',failedIndex=-1;
+  trace.entries.forEach((entry,index)=>{
+    const report=expected[index],last=index===trace.entries.length-1;
+    requireThat(equal(entry.request,report.request)&&Number.isSafeInteger(entry.sentMilliseconds)&&entry.sentMilliseconds>=previousEnd&&entry.sentMilliseconds-previousEnd>=report.delayMilliseconds,'灯效日志指令、顺序或结束等待时间不匹配。');
+    if(entry.endedMilliseconds!=null){
+      requireThat(Number.isSafeInteger(entry.endedMilliseconds)&&entry.endedMilliseconds>=entry.sentMilliseconds&&(entry.reply!=null)!==(entry.error!=null),'灯效日志回复或时钟无效。');previousEnd=entry.endedMilliseconds;
+      if(entry.error!=null){requireThat(typeof entry.error==='string'&&entry.error.trim().length>0&&last,'灯效日志在失败后仍继续发送。');status='failed';failedIndex=index;}
+      else {
+        const reply=entry.reply,request=report.request,sum=request.slice(3).reduce((n,v)=>n+v,0);
+        const valid=bytes(reply,64)&&reply[0]===4&&reply[3]===request[3]&&equal(reply.slice(4,8),request.slice(4,8))&&reply[7]!==255&&reply[7]!==254&&reply[1]===(sum&255)&&reply[2]===(sum>>8);
+        if(valid)acceptedReports++;else{requireThat(last,'灯效日志在无效回复后仍继续发送。');status='failed';failedIndex=index;}
+      }
+    }else requireThat(entry.reply==null&&entry.error==null&&last,'灯效日志缺少回复后仍继续发送。');
+  });
+  if(acceptedReports===expected.length)status='complete';
+  return {format:'CherryMacLightingTraceReview',version:1,hardwareReady:false,source:trace.source,status,acceptedReports,expectedReports:expected.length,failedIndex};
+}
 const applyLightingCandidate=(snapshot,write)=>{const result=clone(snapshot),field=write.command===6?'parameters':'colors';result[field].splice(write.offset,write.data.length,...write.data);return result;};
 export function officialLightingReadbackTarget(plan,baseline){
   officialLightingReports(plan);validateSnapshot(baseline,true);

@@ -1249,6 +1249,20 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--review-official-lighting-trace") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+4 else{throw HardwareError(message:"需要候选计划、日志和分析输出路径。")}
+        let outputURL=URL(fileURLWithPath:args[index+3]).standardizedFileURL.resolvingSymlinksInPath()
+        guard !args[(index+1)...(index+2)].contains(where:{URL(fileURLWithPath:$0).standardizedFileURL.resolvingSymlinksInPath()==outputURL}) else{throw HardwareError(message:"分析输出不能覆盖候选计划或原始日志。")}
+        let planData=try Data(contentsOf:URL(fileURLWithPath:args[index+1])),traceData=try Data(contentsOf:URL(fileURLWithPath:args[index+2]))
+        guard planData.count<=1_000_000,traceData.count<=3_000_000 else{throw HardwareError(message:"灯效计划或日志文件过大。")}
+        let decoder=JSONDecoder(),plan=try decoder.decode(WindowsProfile.OfficialLightingPlan.self,from:planData),trace=try decoder.decode(WindowsProfile.OfficialLightingPlan.Trace.self,from:traceData)
+        let review=try plan.reviewTrace(trace),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(review).write(to:URL(fileURLWithPath:args[index+3]),options:.atomic)
+        print("PASS: lighting trace reviewed offline; no HID or persistence proof");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--review-official-lighting") {
     do{
         let args=CommandLine.arguments
