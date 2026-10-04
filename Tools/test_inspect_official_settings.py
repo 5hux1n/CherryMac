@@ -28,6 +28,24 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_settings_notifications_verify_api_and_window_arguments(self):
+        class MemoryPE:
+            base = 0x400000
+            def __init__(self):
+                self.code = {a: bytes.fromhex(v) for a,v in audit.SETTINGS_WINDOW_MESSAGE_CHECKS.items()}
+                self.code[0x401002] = b"SendMessageW\0"
+            def at(self,address,size):
+                return self.code[address][:size]
+            def pointer(self,address):
+                assert address == 0x6EBEA0
+                return 0x1000
+        result = audit.inspect_settings_window_messages(MemoryPE())
+        self.assertEqual(result['apiImport'], 'SendMessageW')
+        self.assertEqual(result['relay']['argumentsPreserved'], ['wParam', 'lParam'])
+        for address in [0x4FDD94,0x4FDDD8,0x493B9D,0x493BA1,0x401002]:
+            bad=MemoryPE();value=bytearray(bad.code[address]);value[0]^=1;bad.code[address]=bytes(value)
+            with self.assertRaises(ValueError):audit.inspect_settings_window_messages(bad)
+
     def test_settings_layouts_reject_changed_copy_branch_and_namespace(self):
         class MemoryPE:
             def __init__(self):

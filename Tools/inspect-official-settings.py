@@ -353,6 +353,40 @@ def inspect_settings_layouts(pe):
             "limits": "The same +0x4a8 displacement occurs in different layouts. It does not prove the same object instance, shared storage, a keyboard transport or a firmware command. Zero JSON fallback does not authorize writing hardware defaults."}
 
 
+# Parameter-state notifications are window messages, not vendor reports.
+SETTINGS_WINDOW_MESSAGE_CHECKS = {
+    0x4FDD7A: "8b8280020000", 0x4FDD80: "ffd0", 0x4FDD84: "742d",
+    0x4FDD94: "0fb788e83f0000", 0x4FDD9B: "51", 0x4FDD9C: "68190c0000",
+    0x4FDDA4: "8b82641f0000", 0x4FDDAB: "ff15a0be6e00",
+    0x4FDDC1: "0fb788e63f0000", 0x4FDDC8: "51", 0x4FDDC9: "68190c0000",
+    0x4FDDD1: "8b82641f0000", 0x4FDDD8: "ff15a0be6e00",
+    0x493B81: "817d08190c0000", 0x493B88: "7534",
+    0x493B90: "83b96c14000000", 0x493B99: "8b5510", 0x493B9C: "52",
+    0x493B9D: "8b450c", 0x493BA0: "50", 0x493BA1: "68190c0000",
+    0x493BAC: "8b916c140000", 0x493BB3: "ff15a0be6e00",
+}
+
+
+def inspect_settings_window_messages(pe):
+    for address, encoded in SETTINGS_WINDOW_MESSAGE_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected settings window message instruction")
+    # In this fixed, unbound PE image the IAT holds a hint/name RVA. Check the
+    # actual import name rather than treating the call address as HID evidence.
+    name_address = pe.base + pe.pointer(0x6EBEA0) + 2
+    if pe.at(name_address, 13) != b"SendMessageW\0":
+        raise ValueError("Unexpected settings notification import")
+    return {"instructionChecks": len(SETTINGS_WINDOW_MESSAGE_CHECKS),
+            "apiImport": "SendMessageW", "iatAddress": "0x6ebea0",
+            "source": "parameter state update 0x4fd620",
+            "wordReads": {"RFReportSelectItem": "0x4fdd94", "ReportSelectItem": "0x4fddc1"},
+            "message": "0xc19", "firstWindowMember": "0x1f64",
+            "relay": {"comparison": "0x493b81", "childWindowMember": "0x146c",
+                      "forwardCall": "0x493bb3", "argumentsPreserved": ["wParam", "lParam"]},
+            "limits": "These calls send a Windows window message. The virtual predicate +0x280 and downstream child-window handling are not classified here; this does not establish or exclude a separate firmware settings command."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -609,12 +643,13 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 9,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 10,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
+        "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
