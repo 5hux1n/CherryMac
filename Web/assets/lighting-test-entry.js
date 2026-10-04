@@ -2,7 +2,7 @@ import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.6.0';
 import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v=0.6.0';
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
 import {lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
-import {saveBackup,download} from './storage.js?v=0.6.0';
+import {takeLightingHandoff,saveBackup,download} from './storage.js?v=0.6.0';
 import {saveLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
@@ -37,19 +37,29 @@ async function operation(body){
   if(busy)return;busy=true;render();
   try{await body();}catch(error){status(error.message,true);}finally{abort=null;busy=false;render();}
 }
+async function loadInput(value,name){
+  input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;
+  $('lighting-plan').textContent='正在核对新计划；此前选择已清除。';
+  const prepared=lightingAcceptanceInput(value);
+  if(prepared.kind==='write')new LightingCandidateAuthorization(prepared.value.plan,prepared.value.original);
+  // Persist the selected source before enabling either operation button.
+  artifacts.observations.push({kind:'loaded',at:new Date().toISOString(),name,input:clone(prepared.value)});await persistSession();
+  input=prepared;latestRecord=prepared.kind==='restore'?clone(prepared.value):null;
+  $('lighting-plan').textContent=prepared.kind==='write'?`已载入写入核对：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
+  status('计划已核对；请单独选择并读取 USB 键盘。');
+}
 $('lighting-file').onchange=()=>operation(async()=>{
   const file=$('lighting-file').files[0];if(!file)return;
   input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;
   $('lighting-plan').textContent='正在核对新文件；此前选择已清除。';
   requireThat(file.size<=3_000_000,'文件超过 3 MB。');
-  const prepared=lightingAcceptanceInput(JSON.parse(await file.text()));
-  // Validate the exact scope now; files cannot broaden the research sender.
-  if(prepared.kind==='write')new LightingCandidateAuthorization(prepared.value.plan,prepared.value.original);
-  input=prepared;latestRecord=prepared.kind==='restore'?clone(prepared.value):null;
-  writeAttempted=false;writtenTarget=null;powerCycle=null;
-  $('lighting-plan').textContent=prepared.kind==='write'?`已载入写入核对：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
-  artifacts.observations.push({kind:'loaded',at:new Date().toISOString(),name:file.name,input:clone(prepared.value)});await persistSession();status('文件已核对；请单独选择并读取 USB 键盘。');
+  await loadInput(JSON.parse(await file.text()),file.name);
 });
+const handoffID=new URL(location.href).searchParams.get('plan');
+if(handoffID!==null){
+  history.replaceState(null,'',location.pathname);
+  void operation(async()=>loadInput(takeLightingHandoff(sessionStorage,handoffID),'编辑区计划'));
+}
 $('lighting-connect').onclick=()=>operation(async()=>{
   const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘。');
   if(hid)await hid.close();

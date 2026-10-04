@@ -2,7 +2,7 @@ import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layou
 import {lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
-import {backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
 import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
@@ -46,6 +46,7 @@ function render(){
   $('save-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('review-lighting').disabled=busy||!baseline;
+  if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
@@ -126,6 +127,21 @@ $('save-polling-draft').onclick=()=>act(()=>{
   const value=$('polling-draft').value;requireThat(value!=='','请选择回报率，或保留原草稿。');
   const output=officialPollingDraft(JSON.parse(profile.windowsTemplateJSON),Number(value));profile.windowsTemplateJSON=JSON.stringify(output);validateProfile(profile);status('回报率已保存到官方配置草稿，尚未写入键盘。请在配置与备份导出。');
 });
+if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>{
+  if(busy||!baseline)return;
+  // Open during the click so popup blockers do not lose an async navigation.
+  const view=window.open('about:blank','_blank');if(!view){status('请允许本网站打开新页面，再试一次。',true);return;}
+  let sent=false;void operation(async()=>{
+    try{
+      const review=reviewLightingDraft(profile,baseline),id=crypto.randomUUID();
+      if(hid)await hid.close();hid=null;gate.invalidate();
+      requireThat(!view.closed,'验收页面已关闭，请重新准备。');
+      view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);view.opener=null;
+      view.location.replace(`lighting-test.php?plan=${encodeURIComponent(id)}`);sent=true;
+      status('编辑区计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。');
+    }catch(error){view.close();throw error;}
+  }).finally(()=>{if(!sent)view.close();});
+};
 $('review-lighting').onclick=()=>act(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
   const review=reviewLightingDraft(profile,baseline),mode=modes.find(([code])=>code===review.target.parameters[1])?.[1]??'未知模式';

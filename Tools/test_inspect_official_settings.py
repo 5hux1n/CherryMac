@@ -28,6 +28,25 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_current_dialog_dispatch_and_named_calls(self):
+        class MemoryPE:
+            def __init__(self):
+                self.code = {a: bytes.fromhex(v) for a, v in audit.DIALOG_POLLING_CHECKS.items()}
+                self.code.update({a: b"\xe8" + struct.pack("<i", target-a-5)
+                                 for a, (target, _) in audit.SETTINGS_DIRECT_CALLS.items()})
+                self.code.update({a: (name+"\0").encode("utf-16-le") for a, name in {
+                    0x729B90: "polling_rate_option_4", 0x729BBC: "polling_rate_option_5",
+                    0x729BE8: "polling_rate_option_6", 0x729C14: "report_layout"}.items()})
+            def at(self, address, size):
+                return self.code[address][:size]
+        pe = MemoryPE();result = audit.inspect_dialog_polling_dispatch(pe)
+        self.assertNotIn(result['targetProduct'], result['specialPollingSetupProducts'])
+        self.assertEqual(result['targetSetupArguments'], [False, False])
+        self.assertEqual(len(result['namedDirectCalls']), 11)
+        for address in [0x4AEFBA, 0x4AF145, 0x42938F, 0x729B90, 0x4F888E]:
+            bad = MemoryPE();value = bytearray(bad.code[address]);value[-1] ^= 1;bad.code[address] = bytes(value)
+            with self.assertRaises(ValueError):audit.inspect_dialog_polling_dispatch(bad)
+
     def test_profile_reload_rejects_changed_call_and_virtual_target(self):
         class MemoryPE:
             def __init__(self):

@@ -47,3 +47,19 @@ assert.equal(cycle.evidence('returned').elapsedMilliseconds,15_000);
 cycle.disconnect('returned',40_000);assert.throws(()=>cycle.evidence('returned'));cycle.confirmPowerOff(41_000);cycle.reconnect('returned',55_999);assert.throws(()=>cycle.evidence('returned'));
 const reused=new LightingPowerCycle('same');reused.disconnect('same',0);reused.confirmPowerOff(1);reused.reconnect('same',15_001);assert.equal(reused.evidence('same').elapsedMilliseconds,15_000);
 console.log('PASS: first reconnect time preserved, selected device binding, repeated power-cycle invalidation, early reconnect rejection and reused HID object; memory only');
+// The research tab handoff is one-use and untrusted; replay, expiry, quota
+// failure and a modified keymap must not become transport authorization.
+const {saveLightingHandoff,takeLightingHandoff}=await import('../assets/storage.js');
+const handoffID='aabbccdd-0000-4000-8000-000000000001',memory=new Map();
+const storage={getItem:k=>memory.get(k)??null,setItem:(k,v)=>memory.set(k,v),removeItem:k=>memory.delete(k)};
+saveLightingHandoff(storage,handoffID,review,100);
+assert.deepEqual(lightingAcceptanceInput(takeLightingHandoff(storage,handoffID,200)).value,review);
+assert.throws(()=>takeLightingHandoff(storage,handoffID,201));
+for(const now of [99,600_101]){saveLightingHandoff(storage,handoffID,review,100);assert.throws(()=>takeLightingHandoff(storage,handoffID,now));assert.equal(memory.size,0);}
+saveLightingHandoff(storage,handoffID,tampered,100);
+assert.throws(()=>lightingAcceptanceInput(takeLightingHandoff(storage,handoffID,200)));
+assert.throws(()=>saveLightingHandoff({...storage,setItem:()=>{}},handoffID,review,100));
+assert.throws(()=>saveLightingHandoff(storage,'../../config',review));
+assert.throws(()=>saveLightingHandoff(storage,handoffID,{text:'界'.repeat(1_000_001)},100));
+assert.equal(memory.size,0);
+console.log('PASS: single-use lighting handoff, expiry, scope revalidation, quota and UTF-8 size failure; memory only');

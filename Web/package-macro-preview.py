@@ -14,7 +14,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--ligh
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.1' if lighting_acceptance else '0.20.0'
+version = '0.1.2' if lighting_acceptance else '0.20.0'
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
@@ -61,7 +61,7 @@ contents['README.md'] = '''# CherryMac 网页宏与文本预览
 
 “配置与备份”可导入同时包含键位、宏和文本的 Windows 官方 JSON：键位和宏进入编辑区，文本定义进入文本页；文本键保留当前键盘功能，需要单独安装。“导出 Windows 配置草稿”会合并宏编辑和文本页当前定义，保留共享引用与附加字段。同一键若同时有普通键位修改和文本绑定，会提示先解除冲突；导入、导出都不会自动写入。
 
-Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度、方向、全局颜色和逐键配色；需先导入包含完整颜色表的官方模板。隐藏颜色和未核对字段保留原值，设备设置继续沿用模板。导出文件不会向键盘写入。点击读取时会另外核对默认键位和 LED 索引；取得的映射随普通配置和读取备份保存，用于预览与配色。映射读取失败时保留按键、宏读取结果并显示原因。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
+Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度、方向、全局颜色和逐键配色；需先导入官方模板；自定义配色需要完整原始颜色表，内置模式允许没有逐键表。隐藏颜色和未核对字段保留原值，设备设置继续沿用模板。导出文件不会向键盘写入。点击读取时会另外核对默认键位和 LED 索引；取得的映射随普通配置和读取备份保存，用于预览与配色。映射读取失败时保留按键、宏读取结果并显示原因。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
 
 宏名称和录制偏好保存在当前浏览器的本地数据库；读取时只沿用与实际宏库和绑定相符的资料。建议导出配置、下载备份。清理网站数据或更换浏览器／网址会失去本地资料。“设备与诊断”可导出日志，文件不会上传。
 
@@ -81,7 +81,7 @@ if lighting_acceptance:
 
 已有 PHP 时，解压后双击 start.command，用 Chrome 或 Edge 打开 http://localhost:8771/lighting-test.php 。无需 Node 或构建；启动脚本不会打开浏览器。手动运行时设置 CHERRY_LIGHTING_TEST=1、CHERRY_MACRO_PRODUCT=1、CHERRY_TEXT_PRODUCT=1，再启动 PHP 本机服务。退出其他配置程序及 Mac 文本服务。
 
-先在 http://localhost:8771/ 读取配置、导入本型号官方 JSON、编辑并保存灯效，再点击“核对并导出计划”。自定义配色需要官方原始 RGB 和读取到的 LED 映射；内置模式无需逐键表。
+先在 http://localhost:8771/ 读取配置、导入本型号官方 JSON、编辑并保存灯效，再点击“使用编辑区计划开始独立验收”。新标签页直接载入计划，原页面停止文本服务、关闭 USB 并保留编辑区，无需导出再导入。浏览器需允许新页面；交接计划只能取用一次，10 分钟后失效。也可保留“核对并导出计划”的文件流程。自定义配色需要官方原始 RGB 和读取到的 LED 映射；内置模式无需逐键表。
 
 独立验收页按顺序载入计划、选择 USB、核对并确认写入。写前自动保存完整备份，每包保存日志，失败中止；可停止后续发送，已发送报告不能撤回。当前只允许已核对固件、配置 0 和完整开始／结束布局。连接、读取和载入文件不写入。
 
@@ -99,6 +99,7 @@ contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) 
 if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
+    manifest['features']['lightingEditorPlanHandoff'] = True
     contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 prefix = f'{package_name}-{version}/'
 with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:

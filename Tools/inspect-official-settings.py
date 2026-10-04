@@ -236,6 +236,74 @@ def inspect_profile_settings_reload(pe):
             "limits": "Named copy and refresh call sites only. These calls do not identify a settings USB report. Nested paths and runtime behavior remain unverified; no inference that all settings are unsupported or host-only."}
 
 
+# Current dialog dispatch, separate from the legacy keyboard-image controls.
+DIALOG_POLLING_CHECKS = {
+    0x4AEF76: "81fada010000", 0x4AEF7C: "743e",
+    0x4AEF8B: "81f9e6010000", 0x4AEF91: "7429",
+    0x4AEFA0: "3def010000", 0x4AEFA5: "7415",
+    0x4AEFB4: "81fa4c010000", 0x4AEFBA: "757b",
+    0x4AF044: "81fafb010000", 0x4AF04A: "757d",
+    0x4AF0D6: "81f942010000", 0x4AF0DC: "7565",
+    0x4AF143: "6a00", 0x4AF145: "6a00",
+    0x4AF14D: "e82ea2f7ff", 0x4AF160: "0fb755e6",
+    0x4AF16B: "e880a5f7ff",
+    0x429389: "0fb64508", 0x42938D: "85c0",
+    0x42938F: "0f848c000000",  # false bypasses higher-rate visibility calls
+    0x429395: "68909b7200", 0x4293A9: "68bc9b7200",
+    0x4293BD: "68e89b7200", 0x4293E3: "6a01",
+    0x4293ED: "8b8218010000", 0x4293F3: "ffd0",
+    0x4293F5: "6a01", 0x4293FF: "8b8218010000",
+    0x429405: "ffd0", 0x429407: "0fb64d0c",
+    0x42940D: "7412", 0x42940F: "6a01",
+    0x429419: "8b9018010000", 0x42941F: "ffd2",
+    0x429421: "68149c7200",
+}
+
+# These named sites were additionally located by an offline x86 instruction
+# scan. Checking them does not make the inventory exhaustive (indirect calls,
+# dynamically loaded modules and alternate instruction entry points remain).
+SETTINGS_DIRECT_CALLS = {
+    0x4AEDDC: (0x4FB930, "dialog initial read"),
+    0x4AFF1F: (0x4FB930, "dialog apply read"),
+    0x4B001C: (0x4FB8C0, "dialog apply settings copy"),
+    0x4F87D0: (0x483100, "parameter readback update"),
+    0x4F888E: (0x482E70, "parameter readback JSON save"),
+    0x4F93E9: (0x483100, "profile reload"),
+    0x4F94DA: (0x483100, "profile reload"),
+    0x4F99D9: (0x483100, "profile state load"),
+    0x4FB916: (0x482E70, "device settings JSON save"),
+    0x4FDD30: (0x482E70, "parameter event JSON save"),
+    0x500A77: (0x483100, "parameter work buffer construction"),
+}
+
+
+def inspect_dialog_polling_dispatch(pe):
+    for address, encoded in DIALOG_POLLING_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected current dialog polling dispatch instruction")
+    names = {0x729B90: "polling_rate_option_4", 0x729BBC: "polling_rate_option_5",
+             0x729BE8: "polling_rate_option_6", 0x729C14: "report_layout"}
+    for address, name in names.items():
+        encoded = (name + "\0").encode("utf-16-le")
+        if pe.at(address, len(encoded)) != encoded:
+            raise ValueError("Unexpected current dialog polling control name")
+    calls = []
+    for address, (target, role) in SETTINGS_DIRECT_CALLS.items():
+        expected = b"\xe8" + struct.pack("<i", target - address - 5)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected named settings direct call")
+        calls.append({"address": hex(address), "target": hex(target), "role": role})
+    return {"instructionChecks": len(DIALOG_POLLING_CHECKS),
+            "specialPollingSetupProducts": [0x1DA, 0x1E6, 0x1EF, 0x14C, 0x1FB, 0x142],
+            "targetProduct": 0x1CE, "targetSetup": "0x4af143",
+            "targetSetupArguments": [False, False],
+            "higherRateVisibilityCallsBypassed": True,
+            "higherRateControlNames": list(names.values())[:3],
+            "selectedField": "ReportSelectItem", "namedDirectCalls": calls,
+            "limits": "The checked setup path does not enable indices 4..6. Other UI mutations and indirect/dynamic module calls are not excluded. This is not hardware polling-rate support or a settings write protocol."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -492,13 +560,14 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 7,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 8,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "systemDevicePaths": inspect_system_device_paths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
+        "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},

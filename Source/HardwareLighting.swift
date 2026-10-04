@@ -178,7 +178,15 @@ extension HardwareWindowController {
     @objc func openLightingAcceptance(){
         guard !busy,macroRecordingSheet==nil,let owner=window else{return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
-        let acceptance=LightingAcceptanceWindow(queue:queue);lightingAcceptance=acceptance
+        let prepared:Data?;var preparationFailure:String?
+        do{
+            if baselineWasRead,let baseline,let profile{
+                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+                prepared=try encoder.encode(WindowsProfile.reviewLightingDraft(profile,baseline:baseline))
+            }else{prepared=nil}
+        }catch{prepared=nil;preparationFailure=error.localizedDescription}
+        let acceptance=LightingAcceptanceWindow(queue:queue,prepared:prepared);lightingAcceptance=acceptance
+        if let preparationFailure{acceptance.state.stringValue="编辑区计划不能生成：\(preparationFailure)。可载入已有恢复记录。"}
         owner.beginSheet(acceptance.window!){[weak self] _ in
             guard let self else{return};self.lightingAcceptance=nil;self.busy=false
             self.controls.forEach{$0.isEnabled=true};self.baseline=nil;self.baselineWasRead=false
@@ -200,7 +208,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     var manager:IOHIDManager?;var registryID:UInt64?;var cycle:CalculatorPowerCycleEvidence?
     var refresh:Timer?;var focusObserver:NSObjectProtocol?
     var powerEvents:[[String:Any]]=[];var monitorFailure:String?
-    init(queue:DispatchQueue){
+    init(queue:DispatchQueue,prepared:Data?=nil){
         self.queue=queue
         let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:810,height:550),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="CherryMac · 灯效独立验收";super.init(window:panel);panel.delegate=self
@@ -218,7 +226,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         for i in titles.indices{let b=NSButton(title:titles[i],target:self,action:actions[i]);b.bezelStyle = .rounded;b.frame=frames[i];root.addSubview(b);buttons.append(b)}
         state.frame=NSRect(x:22,y:488,width:766,height:48);root.addSubview(state)
         focusObserver=NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:panel,queue:.main){[weak self] _ in if self?.running==true{self?.log?.requestCancellation()}}
-        refresh=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true){[weak self] _ in self?.render()};render()
+        refresh=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true){[weak self] _ in self?.render()}
+        if let prepared{loadData(prepared,source:"编辑区计划")};render()
     }
     required init?(coder:NSCoder){fatalError()}
     func render(){
@@ -232,9 +241,13 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     @objc func load(){
         guard !running else{return};let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
         guard panel.runModal() == .OK,let url=panel.url else{return}
-        review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新文件；旧选择已清除。"
+        resetInput();do{loadData(try Data(contentsOf:url),source:"选择的文件")}catch{fail(error);render()}
+    }
+    func resetInput(){review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新计划；旧选择已清除。"}
+    func loadData(_ data:Data,source:String){
+        guard !running else{return};resetInput()
         do{
-            let data=try Data(contentsOf:url);guard data.count<=3_000_000 else{throw HardwareError(message:"文件超过 3 MB。")}
+            guard data.count<=3_000_000 else{throw HardwareError(message:"文件超过 3 MB。")}
             let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
             if root?["format"] as? String=="CherryMacLightingDraftReview" {
                 let value=try JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:data)
@@ -247,7 +260,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data).assess();recoveryData=data;summary.stringValue="已载入恢复中断记录；保留原计划并核对新读回。"
             }else{throw HardwareError(message:"请选择灯效核对文件、写入记录或恢复记录。")}
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try data.write(to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"),options:.atomic)
-            state.stringValue="文件已核对，未连接或写入键盘。"
+            state.stringValue="\(source)已核对，请点击读取 USB 配置；未连接或写入键盘。"
         }catch{review=nil;recoveryData=nil;fail(error)};render()
     }
     func startMonitor()throws {

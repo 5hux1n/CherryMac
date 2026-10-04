@@ -10,3 +10,21 @@ export function backupConfiguration(record){
 }
 export async function listBackups(){const database=await db();return (await transaction(database,'readonly',s=>s.getAll())).sort((a,b)=>b.date.localeCompare(a.date));}
 export function download(value,name){const blob=new Blob([JSON.stringify(value,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+
+// A one-use handoff in the new research tab's sessionStorage. No device access,
+// persistent database record or upload; the receiver still validates the plan.
+const lightingHandoffPrefix='CherryMacLightingHandoff:';
+function handoffKey(id){if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new Error('灯效计划标识无效。');return lightingHandoffPrefix+id;}
+export function saveLightingHandoff(storage,id,review,now=Date.now()){
+  const key=handoffKey(id);if(!Number.isFinite(now)||now<0)throw new Error('计划时间无效。');
+  const text=JSON.stringify({format:'CherryMacLightingHandoff',version:1,createdAt:now,review});
+  if(new TextEncoder().encode(text).length>3_000_000)throw new Error('灯效计划超过 3 MB。');
+  storage.setItem(key,text);if(storage.getItem(key)!==text){storage.removeItem(key);throw new Error('灯效计划暂存失败。');}
+}
+export function takeLightingHandoff(storage,id,now=Date.now()){
+  const key=handoffKey(id),text=storage.getItem(key);storage.removeItem(key);
+  if(typeof text!=='string'||new TextEncoder().encode(text).length>3_000_000)throw new Error('灯效计划已取走或不可用，请返回编辑区重新准备。');
+  const value=JSON.parse(text);
+  if(value.format!=='CherryMacLightingHandoff'||value.version!==1||!Number.isFinite(value.createdAt)||value.createdAt<0||!Number.isFinite(now)||now<value.createdAt||now-value.createdAt>600_000)throw new Error('灯效计划已过期，请返回编辑区重新准备。');
+  return value.review;
+}
