@@ -20,6 +20,20 @@ function stateValid(state){
   requireThat(state?.format==='CherryMacHostTextStore'&&state.version===1&&Array.isArray(state.records)&&state.records.length<=128,'文本存储格式或容量无效。');
   definition(state.active);return state;
 }
+export function validateHostTextArchive(value){
+  const state=clone(stateValid(value)),ids=new Map();
+  requireThat(new TextEncoder().encode(JSON.stringify(state)).length<=8_000_000,'文本恢复记录超过 8 MB。');
+  for(const record of state.records){
+    recordPlan(record);requireThat(!ids.has(record.id),'文本恢复记录含重复版本编号。');
+    requireThat(typeof record.date==='string'&&Number.isFinite(Date.parse(record.date)),'文本恢复记录日期无效。');
+    const previous=record.previousID??null;
+    requireThat(previous===null?record.previousConfiguration===null:ids.has(previous)&&equal(ids.get(previous).officialJSON,record.previousConfiguration),'文本恢复记录的先前版本不完整。');
+    ids.set(record.id,record);
+  }
+  requireThat(state.latest===null?state.records.length===0:ids.has(state.latest),'最近文本恢复记录不存在。');
+  requireThat(state.activeID===null?state.active===null:ids.has(state.activeID)&&['installed','failed'].includes(ids.get(state.activeID).phase)&&equal(ids.get(state.activeID).officialJSON,state.active),'当前文本定义与版本记录不一致。');
+  return state;
+}
 const identity=r=>[r.id,r.officialJSON,r.factoryKeymap,r.before,r.previousConfiguration,r.previousID??null];
 function checked(state,record){
   const saved=state.records.find(r=>r.id===record.id);
@@ -57,6 +71,14 @@ export class HostTextStore{
   async validateRestoration(record){canRestore(await readState(),record);}
   async restored(record){return changeState(state=>{const saved=canRestore(state,record);state.active=clone(saved.previousConfiguration);state.activeID=saved.previousID??null;saved.phase='restored';});}
   async exportRecords(){return readState();}
+  async importRecords(value){
+    const imported=validateHostTextArchive(value);
+    return changeState(state=>{
+      if(equal(state,imported))return imported.records.length;
+      requireThat(state.records.length===0&&state.active===null&&state.activeID===null&&state.latest===null,'当前网站已有文本记录，未覆盖。请使用原记录，或在独立浏览器环境导入。');
+      Object.assign(state,imported);return imported.records.length;
+    });
+  }
 }
 export function mergeHostTextDraft(previous,snapshot,plan){
   validateProfile(previous);validateSnapshot(snapshot,true);const result=clone(previous);requireThat(equal(previous.snapshot.deviceInfo,snapshot.deviceInfo),'文本操作设备与编辑区不同，未合并草稿。');

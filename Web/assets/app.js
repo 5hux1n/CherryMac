@@ -190,6 +190,15 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
 
 
 if(textProduct){
+  $('text-history-import').onclick=()=>{if(!busy)$('text-history-file').click();};
+  $('text-history-file').onchange=()=>{
+    const file=$('text-history-file').files[0];$('text-history-file').value='';if(!file)return;
+    void operation(async()=>{
+      requireThat(file.size<=8_000_000,'文本恢复记录超过 8 MB。');
+      const count=await textStore.importRecords(JSON.parse(await file.text()));
+      status(`已导入 ${count} 条文本恢复记录，键盘未改写。恢复时仍须连接、核对并确认；输入服务未开启。`);
+    });
+  };
   function selectTextConfiguration(root,name){
     prepareHostTextBindings(root,Array(378).fill(0),Array(378).fill(0));
     let count=0;

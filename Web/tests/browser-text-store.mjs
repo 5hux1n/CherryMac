@@ -22,7 +22,7 @@ try{
   assert.equal(await page.locator('#board-card').isVisible(),false);assert.equal(await page.locator('#review-card').isVisible(),false);
   assert.equal(await page.locator('#text-install').isDisabled(),true);
   const fixture=await page.evaluate(async()=>{
-    const {HostTextStore,mergeHostTextDraft}=await import('/assets/product-text.js'),{prepareHostTextInstallation,fromHardware}=await import('/assets/model.js'),{demoSnapshot}=await import('/assets/layout.js'),{WINDOWS_DEFAULTS}=await import('/assets/tables.js');
+    const {HostTextStore,mergeHostTextDraft,validateHostTextArchive}=await import('/assets/product-text.js'),{prepareHostTextInstallation,fromHardware}=await import('/assets/model.js'),{demoSnapshot}=await import('/assets/layout.js'),{WINDOWS_DEFAULTS}=await import('/assets/tables.js');
     const root={'//':'47',KeyList:WINDOWS_DEFAULTS.map(DefaultAssignment=>({DefaultAssignment,ActionLink:0,ActionLinkIndex:-1})),ActionInfo:[{ActionType:3,ActionTextFlag:1,ActionContent:{ActionText:'中😀'}}]};root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
     const before=demoSnapshot(),factory=Array(378).fill(0);factory.splice(306,3,48,146,1);
     const plan=prepareHostTextInstallation(root,factory,before),store=new HostTextStore();
@@ -37,6 +37,15 @@ try{
     const newer=await store.prepare(prepareHostTextInstallation(replacement,factory,plan.expected));await store.commit(newer);
     refused=false;try{await store.validateRestoration(first);}catch{refused=true;}require(refused,'old recovery overwrote newer definition');
     await store.restored(newer);require(JSON.stringify(await store.active())===JSON.stringify(root),'definition rollback failed');
+    window.textArchive=await store.exportRecords();
+    require(await store.importRecords(window.textArchive)===4,'identical archive import failed');
+    const malformed=structuredClone(window.textArchive);malformed.activeID=crypto.randomUUID();
+    refused=false;try{validateHostTextArchive(malformed);}catch{refused=true;}require(refused,'missing active version accepted');
+    const duplicate=structuredClone(window.textArchive);duplicate.records.push(duplicate.records[0]);
+    refused=false;try{validateHostTextArchive(duplicate);}catch{refused=true;}require(refused,'duplicate version accepted');
+    const conflicting=structuredClone(window.textArchive);conflicting.records[0].date='2026-01-01T00:00:00.000Z';
+    refused=false;try{await store.importRecords(conflicting);}catch{refused=true;}require(refused,'archive overwrote occupied store');
+    require(JSON.stringify(await store.exportRecords())===JSON.stringify(window.textArchive),'refused import changed records');
     const pending=fromHardware(before);pending.snapshot.colors[0]=42;pending.snapshot.keymap.splice(27,3,32,0,5);
     const merged=mergeHostTextDraft(pending,plan.expected,plan);require(merged.snapshot.colors[0]===42&&merged.snapshot.keymap[29]===5&&merged.snapshot.keymap[306]===161,'draft merge');
     return root;
@@ -50,6 +59,17 @@ try{
   await page.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));
   assert.match(await page.locator('#text-summary').textContent(),/official-text.json/);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
+  const archive=await page.evaluate(()=>window.textArchive),importing=await browser.newPage();
+  await importing.addInitScript(()=>{window.hidRequests=0;Object.defineProperty(navigator,'hid',{value:{getDevices:async()=>{window.hidRequests++;throw new Error('real HID disabled');},requestDevice:async()=>{window.hidRequests++;throw new Error('real HID disabled');}},configurable:true});});
+  await importing.goto(url);await importing.locator('#tab-text').click();
+  await importing.locator('#text-history-file').setInputFiles({name:'recovery.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(archive))});
+  await importing.waitForFunction(()=>document.querySelector('#status').textContent.includes('已导入 4 条'));
+  const imported=await importing.evaluate(async()=>new (await import('/assets/product-text.js')).HostTextStore().exportRecords());assert.deepEqual(imported,archive);
+  assert.equal(await importing.evaluate(()=>window.hidRequests),0);assert.equal(await importing.locator('#text-restore').isDisabled(),true);
+  await importing.locator('#text-history-file').setInputFiles({name:'bad-recovery.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+  await importing.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));
+  assert.deepEqual(await importing.evaluate(async()=>new (await import('/assets/product-text.js')).HostTextStore().exportRecords()),archive);
+  await importing.close();
   const editing=await browser.newPage();
   await editing.addInitScript(()=>{
     window.fakeWrites=0;
@@ -77,5 +97,5 @@ try{
   const removing=editing.waitForEvent('download');await editing.locator('#text-export').click();const cleared=JSON.parse(await readFile(await (await removing).path(),'utf8'));
   assert.equal(cleared.KeyList[17].ActionLink,0);assert.equal(cleared.KeyList[17].Assignment,cleared.KeyList[17].DefaultAssignment);
   assert.equal(await editing.evaluate(()=>window.fakeWrites),0);
-  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection and draft preservation; zero real HID requests; editor uses read-only fake transport');
+  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection, archive import and draft preservation; zero real HID requests; editor uses read-only fake transport');
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}
