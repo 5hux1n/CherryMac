@@ -304,6 +304,55 @@ def inspect_dialog_polling_dispatch(pe):
             "limits": "The checked setup path does not enable indices 4..6. Other UI mutations and indirect/dynamic module calls are not excluded. This is not hardware polling-rate support or a settings write protocol."}
 
 
+# Identical member offsets do not identify an object type or wire command.
+SETTINGS_LAYOUT_CHECKS = {
+    0x483113: "33c0", 0x483115: "668945ec", 0x483119: "33c9",
+    0x48311B: "894dee", 0x48311E: "894df2", 0x483121: "894df6",
+    0x483137: "0f854b010000", 0x48313D: "68c08b7400",
+    0x48315C: "0f8526010000", 0x48328B: "81c1a8040000",
+    0x483294: "8911", 0x483299: "894104", 0x48329F: "895108",
+    0x4832A6: "6689410c", 0x4832AD: "81c1a8040000",
+    0x4832B8: "8902", 0x4832BD: "894204", 0x4832C3: "894208",
+    0x4832CA: "66894a0c",
+    0x481A4C: "68a0657400", 0x481BBC: "81c7a8040000",
+    0x481BC2: "b908000000", 0x481BCA: "f3a5",
+    0x481BCF: "81c6a8040000", 0x481BD5: "b908000000",
+    0x481BDD: "f3a5", 0x4EB7B6: "81c148260000",
+    0x4EB7BC: "e83f62f9ff", 0x4EB7C4: "81c7282b0000",
+    0x4EB7CA: "b908000000", 0x4EB7D1: "f3a5",
+}
+SETTINGS_LAYOUT_NAMES = {
+    0x748BC0: "SystemStages", 0x748BD8: "Repeat", 0x748BF0: "RepeatDelay",
+    0x748C0C: "Key6Flag", 0x748C28: "ReportSelectItem",
+    0x748C4C: "RFReportSelectItem", 0x748C70: "WFlag", 0x748C88: "WinFlag",
+    0x7465A0: "SystemSetStages", 0x7465C0: "MagicEnable", 0x7465DC: "MagicType",
+    0x7465F8: "EqType", 0x746610: "CustomEqSeletIndex", 0x746634: "MicInSelect",
+    0x746650: "MicInValue", 0x74666C: "MicMoniterSelect", 0x746690: "MicMoniterValue",
+}
+
+
+def inspect_settings_layouts(pe):
+    for address, encoded in SETTINGS_LAYOUT_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected settings layout instruction")
+    for address, name in SETTINGS_LAYOUT_NAMES.items():
+        expected = (name + "\0").encode("ascii")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected settings layout JSON name")
+    return {"instructionChecks": len(SETTINGS_LAYOUT_CHECKS),
+            "keyboard": {"getter": "0x483100", "namespace": "SystemStages",
+                         "structureBytes": 14, "elementType": "UInt16", "elementCount": 7,
+                         "localInitiallyZero": True, "earlyBranches": "0x483137 / 0x48315c to 0x483288",
+                         "earlyBranchResult": "Zero-initialized local replaces member +0x4a8, then copies to output"},
+            "otherSettings": {"getter": "0x481a00", "namespace": "SystemSetStages",
+                              "structureBytes": 32, "elementType": "UInt32", "elementCount": 8,
+                              "fieldNames": list(SETTINGS_LAYOUT_NAMES.values())[9:],
+                              "namedCaller": "0x4eb7bc", "callerProfileOffset": "0x2648",
+                              "callerOutputOffset": "0x2b28"},
+            "limits": "The same +0x4a8 displacement occurs in different layouts. It does not prove the same object instance, shared storage, a keyboard transport or a firmware command. Zero JSON fallback does not authorize writing hardware defaults."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -560,11 +609,12 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 8,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 9,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
+        "settingsStructureLayouts": inspect_settings_layouts(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),

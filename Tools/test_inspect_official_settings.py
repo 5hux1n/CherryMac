@@ -28,6 +28,24 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_settings_layouts_reject_changed_copy_branch_and_namespace(self):
+        class MemoryPE:
+            def __init__(self):
+                self.code = {a: bytes.fromhex(v) for a, v in audit.SETTINGS_LAYOUT_CHECKS.items()}
+                self.code.update({a: (name + "\0").encode("ascii")
+                                  for a, name in audit.SETTINGS_LAYOUT_NAMES.items()})
+            def at(self, address, size):
+                return self.code[address][:size]
+        result = audit.inspect_settings_layouts(MemoryPE())
+        self.assertEqual(result['keyboard']['structureBytes'], 14)
+        self.assertEqual(result['otherSettings']['structureBytes'], 32)
+        self.assertEqual(len(result['otherSettings']['fieldNames']), 8)
+        for address in [0x483115, 0x48315C, 0x4832CA, 0x481BD5, 0x4EB7B6, 0x7465A0]:
+            bad = MemoryPE(); value = bytearray(bad.code[address]); value[0] ^= 1
+            bad.code[address] = bytes(value)
+            with self.assertRaises(ValueError):
+                audit.inspect_settings_layouts(bad)
+
     def test_current_dialog_dispatch_and_named_calls(self):
         class MemoryPE:
             def __init__(self):
