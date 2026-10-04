@@ -424,6 +424,7 @@ enum WindowsProfile {
         for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(p[6+offset])}
         for i in groups[0].indices {
             for name in ["Red","Green","Blue"]{_ = try integer(groups[0][i][name],name,range:0...255)}
+            if let alpha=groups[0][i]["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
             guard let slot=physicalSlot(defaults[i]) else{continue}
             for (offset,name) in ["Red","Green","Blue"].enumerated(){groups[0][i][name]=Int(colors[slot*3+offset])}
         }
@@ -534,8 +535,9 @@ enum WindowsProfile {
         if let custom=root["CustomLightMode"] as? [String:Any] {
             guard let groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,result.snapshot.colors != nil else{throw HardwareError(message:"Windows 逐键颜色组不匹配，无法导入。")}
             for (index,entry) in groups[0].enumerated(){
-                guard let slot=physicalSlot(defaults[index])else{continue}
                 let bytes=try ["Red","Green","Blue"].map{UInt8(try integer(entry[$0],$0,range:0...255))}
+                if let alpha=entry["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
+                guard let slot=physicalSlot(defaults[index])else{continue}
                 result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes);colorCount+=1
             }
         }

@@ -922,3 +922,16 @@ test('lighting draft export roundtrips all model modes and preserves hidden colo
   assert.throws(()=>exportWindowsLightingDraft(snapshot,windowsFixture()),/颜色表/);
   const malformed=clone(root);malformed.CustomLightMode.LightColorInfo[0][79].Red=999;assert.throws(()=>exportWindowsLightingDraft(snapshot,malformed));assert.deepEqual(root,before);
 });
+
+
+test('official colors validate optional Alpha and hidden RGB before import or export',()=>{
+  const root=windowsFixture();root.CustomLightMode={LightColorInfo:[WINDOWS_DEFAULTS.map(()=>({Red:50,Green:100,Blue:150,Alpha:255}))]};
+  const baseline=demoSnapshot(),before=clone(baseline);
+  for(const index of [17,79])for(const [field,value] of [['Alpha',-1],['Alpha',256],['Alpha',null],['Red',999]]){
+    const bad=clone(root);bad.CustomLightMode.LightColorInfo[0][index][field]=value;
+    assert.throws(()=>importWindows(bad,baseline));assert.throws(()=>exportWindowsLightingDraft(baseline,bad));
+    assert.deepEqual(baseline,before);
+  }
+  for(const value of [0,255,'128']){const good=clone(root);good.CustomLightMode.LightColorInfo[0][17].Alpha=value;assert.equal(exportWindowsLightingDraft(baseline,good).CustomLightMode.LightColorInfo[0][17].Alpha,value);importWindows(good,baseline);}
+  delete root.CustomLightMode.LightColorInfo[0][17].Alpha;importWindows(root,baseline);exportWindowsLightingDraft(baseline,root);
+});

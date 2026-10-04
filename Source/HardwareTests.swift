@@ -1287,6 +1287,16 @@ func runLightingDraftExportChecks(){
         precondition(colors[0][79]["Red"] as! Int==79 && colors[0][17]["Red"] as! Int==Int(snapshot.colors![306]) && colors[0][17]["Alpha"] as! Int==255)
         precondition(try! WindowsProfile.encodeLightingDraft(snapshot,template:output)==output)
     }
+    let invalidAlphas:[Any]=[-1,256,NSNull()]
+    for index in [17,79] {
+        for invalid in invalidAlphas {
+            var invalidRoot=try! WindowsProfile.templateRoot(template),custom=invalidRoot["CustomLightMode"] as! [String:Any],groups=custom["LightColorInfo"] as! [[[String:Any]]]
+            groups[0][index]["Alpha"]=invalid;custom["LightColorInfo"]=groups;invalidRoot["CustomLightMode"]=custom
+            let data=try! JSONSerialization.data(withJSONObject:invalidRoot)
+            rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:data)}
+            rejected{_ = try WindowsProfile.decode(data,baseline:.demo())}
+        }
+    }
     snapshot.parameters[3]=5;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:template)}
     snapshot.parameters[3]=1;root["CustomLightMode"]=nil;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:JSONSerialization.data(withJSONObject:root))}
     print("PASS: lighting draft file export, 12 modes, mapped/hidden colors, metadata and invalid ranges; no HID")

@@ -211,6 +211,73 @@ def audit_colors(pe):
         'limits': 'Static evidence only. No actual mapping, bank argument, timing, packets or incident cause established. No device accessed.'}
 
 
+BRIGHTNESS_CHECKS = {
+    0x483B07: "68248f7400",
+    0x483B14: "68288f7400",
+    0x483B19: "680c8f7400",
+    0x483B43: "e898400c00",
+    0x483B4A: "e8212f0c00",
+    0x483B4F: "8845e8",
+    0x483B52: "68688f7400",
+    0x483B5F: "68388f7400",
+    0x483B64: "68488f7400",
+    0x483B95: "e8d62e0c00",
+    0x483B9A: "8845e9",
+    0x483B9D: "68708f7400",
+    0x483BAA: "68788f7400",
+    0x483BAF: "68588f7400",
+    0x483BE0: "e88b2e0c00",
+    0x483BE5: "8845ea",
+    0x483BE8: "68b88f7400",
+    0x483BF5: "68888f7400",
+    0x483BFA: "68988f7400",
+    0x483C2B: "e8402e0c00",
+    0x483C30: "8845eb",
+    0x483C33: "8d45e8",
+    0x483C3A: "e811eaffff",
+    0x483C51: "e86aebffff",
+    0x483C63: "e8f8edffff",
+    0x505A32: "e849dcf7ff",
+    0x505A41: "81c150210000",
+    0x505A47: "e8a4f2feff",
+    0x505A7C: "0fb6b15d210000",
+    0x505A90: "e85bcaf1ff",
+    0x505A95: "8a8e50a37400",
+    0x505A9B: "884803",
+    0x505A9E: "ebbd",
+    0x505974: "e877f3feff",
+    0x5059A9: "0fb6b05d210000",
+    0x5059BD: "e82ecbf1ff",
+    0x5059C2: "8a9650a37400",
+    0x5059C8: "885003",
+}
+COLOR_JSON_KEYS = {0x748F24: 'Red', 0x748F28: 'LightColorInfo', 0x748F0C: 'CustomLightMode',
+                   0x748F68: 'Green', 0x748F70: 'Blue', 0x748F58: 'CustomLightMode',
+                   0x748F78: 'LightColorInfo', 0x748FB8: 'Alpha', 0x748F88: 'LightColorInfo',
+                   0x748F98: 'CustomLightMode'}
+
+
+def audit_brightness(pe):
+    for address, encoded in BRIGHTNESS_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected brightness instruction at {address:#x}')
+    for address, key in COLOR_JSON_KEYS.items():
+        if cstring(pe, address) != key:
+            raise ValueError(f'Unexpected color JSON key at {address:#x}')
+    coefficients = list(pe.at(0x74A350, 5))
+    if coefficients != [0, 65, 135, 195, 255]:
+        raise ValueError('Unexpected brightness coefficient table')
+    return {'getter': '0x483680', 'jsonPath': 'CustomLightMode.LightColorInfo[group][index]',
+            'colorByteOrder': ['Red', 'Green', 'Blue', 'Alpha'],
+            'loadingPaths': ['0x505900', '0x5059f0'],
+            'brightnessField': 'byte at object+0x215d', 'coefficientTable': '0x74a350',
+            'coefficientsForLevels0Through4': coefficients,
+            'conversion': 'After loading JSON colors into object+0x2150, these paths replace byte 3 of every entry with table[brightnessField]. Color method subsequently computes (component*byte3)>>8.',
+            'instructionChecks': len(BRIGHTNESS_CHECKS),
+            'limits': 'Two static loading paths only. Live call reachability, brightness field initialization and all other paths remain unproven. Values after level 4 are not part of this five-level table. No device accessed.'}
+
+
 def cstring(pe, address):
     result = bytearray()
     for offset in range(256):
@@ -265,6 +332,7 @@ def audit_sequence(pe):
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
         'selectorAudit': audit_selector(pe),
         'colorAudit': audit_colors(pe),
+        'brightnessAudit': audit_brightness(pe),
         'bankBase': 'caller argument << 6',
         'tailField': {'jsonKey': 'LightOpenFlag', 'getter': '0x47ade0', 'getterStructByte': 11, 'parameterByte': 21, 'limits': 'Field origin only; physical on/off semantics and accepted values are not proven'},
         'optionalBegin': {'guard': 'object+0xa84 != 0', 'helper': '0x4d9eb0'},

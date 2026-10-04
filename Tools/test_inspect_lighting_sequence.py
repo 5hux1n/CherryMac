@@ -29,6 +29,11 @@ class MemoryPE:
         self.put(0x77F604 + 0x2C4, struct.pack('<I', 0x501190))
         for address, encoded in audit.COLOR_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
+        for address, encoded in audit.BRIGHTNESS_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
+        for address, key in audit.COLOR_JSON_KEYS.items():
+            self.put(address, key.encode() + b'\0')
+        self.put(0x74A350, bytes([0, 65, 135, 195, 255]))
         for address, load, compare, jump in audit.PREDICATES:
             self.put(address - 7, bytes.fromhex(load))
             self.put(address, bytes.fromhex(compare))
@@ -98,6 +103,19 @@ class LightingAuditTests(unittest.TestCase):
         pe.put(0x77F604 + 0x2C4, struct.pack('<I', 0x500790))
         with self.assertRaisesRegex(ValueError, 'color virtual'):
             audit.audit_colors(pe)
+
+    def test_brightness_conversion_chain(self):
+        result = audit.audit_brightness(MemoryPE())
+        self.assertEqual(result['colorByteOrder'], ['Red', 'Green', 'Blue', 'Alpha'])
+        self.assertEqual(result['coefficientsForLevels0Through4'], [0, 65, 135, 195, 255])
+        self.assertEqual(result['loadingPaths'], ['0x505900', '0x5059f0'])
+
+    def test_changed_brightness_table_field_and_json_key_rejected(self):
+        for address in (0x74A352, 0x505A7C, 0x748FB8):
+            pe = MemoryPE()
+            pe.put(address, bytes([pe.at(address, 1)[0] ^ 1]))
+            with self.assertRaises(ValueError):
+                audit.audit_sequence(pe)
 
     def test_changed_instruction_rejected(self):
         pe = MemoryPE()
