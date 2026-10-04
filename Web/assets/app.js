@@ -17,7 +17,7 @@ const macroProduct=document.documentElement.dataset.macroProduct==='true';
 const textProduct=document.documentElement.dataset.textProduct==='true',textStore=new HostTextStore();
 let bridgeStorage=null;if(textProduct)try{bridgeStorage=sessionStorage;}catch{}
 const textBridge=textProduct?new HostTextBridge({storage:bridgeStorage}):null;
-let textRoot=null,textPending=null,textFactory=null;
+let textRoot=null,textPending=null,textFactory=null,selectImportedText=null;
 if(textProduct)pages.text=['文本快捷输入','安装触发键，管理主机文本配置。'];
 const supported=isSecureContext&&'hid' in navigator;
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error);}
@@ -128,7 +128,17 @@ $('unassign-macro').onclick=()=>act(()=>{const key=keys.find(k=>k.id===selected)
 $('connect').onclick=()=>operation(async()=>{status('请在浏览器弹窗中选择 CHERRY USB 键盘。');const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘，配置没有变化。');if(hid)await hid.close();baseline=null;hid=new CherryHID(devices[0],{macroProduct,textProduct,log:saveLog,progress:message=>status(message+'…'),onDisconnect:error=>{status(error.message,true);render();}});await hid.open();await read();});
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
 $('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot)??safeProfile(snapshot);refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
-$('import').onclick=()=>$('file').click();$('file').onchange=()=>operation(async()=>{const file=$('file').files[0];$('file').value='';if(!file)return;requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');const p=parseProfile(await file.text(),baseline);profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();status('配置已导入编辑区，尚未写入键盘。');});
+$('import').onclick=()=>$('file').click();
+$('file').onchange=()=>operation(async()=>{
+  const file=$('file').files[0];$('file').value='';if(!file)return;
+  requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');
+  const raw=await file.text(),root=JSON.parse(raw),p=parseProfile(raw,baseline,{deferHostText:textProduct});
+  const mixed=textProduct&&Array.isArray(root.KeyList)&&root.KeyList.some(k=>k.ActionLink===1&&root.ActionInfo?.[k.ActionLinkIndex]?.ActionType===3);
+  // Both parsers validate before replacing either editor. No HID writes here.
+  if(mixed)selectImportedText(root,file.name);
+  profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();
+  status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
+});
 $('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出当前编辑配置。');});
 $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const output=exportWindowsKeysAndMacros(profile,JSON.parse(profile.windowsTemplateJSON));download(output,'CHERRY-keys-macros.json');status('已导出 Windows 格式键位与宏；灯效和设备设置沿用导入模板。');});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();loadPlayback();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
@@ -218,6 +228,7 @@ if(textProduct){
     for(const action of root.ActionInfo){requireThat(Number.isInteger(action.ActionType)&&action.ActionType>=0&&action.ActionType<=4,'Windows 动作类型无效。');if(action.ActionType===3&&officialHostTextPlan(action).marker!==null)count++;}
     textRoot=clone(root);$('text-summary').textContent=`${name} · ${count} 个文本动作。准备安装时读取默认表并显示实体键。`;$('text-bindings').replaceChildren();
   }
+  selectImportedText=selectTextConfiguration;
   function loadTextEditor(){
     const slot=Number($('text-edit-key').value),trigger=resolveHostTextTrigger(0x700+slot,textFactory),item=textRoot.KeyList[trigger.logicalIndex];
     $('text-edit-name').value='文本';$('text-edit-value').value='';$('text-edit-remove').disabled=true;

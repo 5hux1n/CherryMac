@@ -1081,11 +1081,23 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}
         guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")}
         let next:HardwareProfile;let summary:String
+        #if CHERRY_MACRO_PRODUCT
+        var importedText:Data?
+        #endif
         if WindowsProfile.isOfficial(data){
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
-            let imported=try WindowsProfile.decode(data,baseline:baseline);next=imported.profile;summary=imported.summary
+            #if CHERRY_MACRO_PRODUCT
+            let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true)
+            if imported.deferredTextCount>0{importedText=data}
+            #else
+            let imported=try WindowsProfile.decode(data,baseline:baseline)
+            #endif
+            next=imported.profile;summary=imported.summary
         }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}
         suspendHostTextForConfiguration()
+        #if CHERRY_MACRO_PRODUCT
+        if let importedText{hostTextJSON=importedText;hostTextFile.stringValue="导入的混合配置 · 文本绑定待安装"}
+        #endif
         profile=next;recordingPreference=nil;message.stringValue=summary;loadLighting();refreshMacroPicker();loadSelectedAssignment();update()
     }
     @objc func importProfile(){

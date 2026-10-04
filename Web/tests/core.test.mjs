@@ -717,7 +717,7 @@ test('official host text prepares UTF-16 without treating Unicode as onboard mac
   assert.throws(()=>officialHostTextPlan({ActionType:3,ActionContent:{ActionText:7}}));
   const root=windowsFixture(),baseline=demoSnapshot(),before=clone(baseline);
   root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;root.ActionInfo=[action(raw)];
-  assert.throws(()=>importWindows(root,baseline),/需要主机执行服务/);assert.deepEqual(baseline,before);
+  assert.throws(()=>importWindows(root,baseline),/文本绑定/);assert.deepEqual(baseline,before);
 });
 
 test('host text dispatch uses factory matching table instead of JSON logical position',()=>{
@@ -855,4 +855,19 @@ test('text editor isolates shared actions, preserves unknown fields and restores
   assert.deepEqual(plan.bindings,[]);assert.deepEqual(plan.removedSlots,[102]);assert.deepEqual(plan.changedSlots,[102]);assert.deepEqual(plan.expected.keymap,before.keymap);
   const permission=new HostTextWriteAuthorization(cleared,factory,installed);assert.deepEqual(permission.expected.keymap,before.keymap);
   assert.throws(()=>editHostText(root,factory,102,'a\0b'));assert.throws(()=>editHostText(root,factory,6,'x'));
+});
+
+test('mixed official import defers text and retains its live macro binding and mode',()=>{
+  const live=fromHardware(demoSnapshot());live.macros=[{...clone(macro),name:'Existing'}];live.macroBindings={102:'Existing'};live.macroModes={102:{mode:'held',count:1}};live.snapshot=resolveMacros(live);
+  const baseline=clone(live.snapshot),before=clone(baseline),root=windowsFixture();
+  root.ActionInfo=[{ActionType:3,ActionName:'Text',ActionTextFlag:1,ActionContent:{ActionText:'中文😀'}},officialMacroAction(macro)];
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  root.KeyList[0].ActionLink=1;root.KeyList[0].ActionLinkIndex=1;
+  assert.throws(()=>parseProfile(JSON.stringify(root),baseline),/文本绑定/);
+  const p=parseProfile(JSON.stringify(root),baseline,{deferHostText:true});
+  assert.equal(p.macros.length,2);assert.equal(p.macroBindings[102],fromHardware(baseline).macroBindings[102]);assert.deepEqual(p.macroModes[102],live.macroModes[102]);
+  assert.deepEqual(p.snapshot.keymap.slice(306,309),baseline.keymap.slice(306,309));assert.ok(Object.values(p.macroBindings).includes('AB'));
+  assert.deepEqual(JSON.parse(p.windowsTemplateJSON),root);assert.deepEqual(baseline,before);
+  root.ActionInfo[0].ActionContent.ActionText=17;
+  assert.throws(()=>parseProfile(JSON.stringify(root),baseline,{deferHostText:true}),/文本/);assert.deepEqual(baseline,before);
 });

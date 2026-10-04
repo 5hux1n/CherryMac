@@ -214,9 +214,9 @@ export function resolveMacros(p){
   const header=s.macroData?.[0]===0xaa&&s.macroData[1]===0x55?s.macroData.slice(6,16):[];
   s.macroData=encodeBank(p.macros,header);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
 }
-export function parseProfile(text,baseline){
+export function parseProfile(text,baseline,options={}){
   requireThat(new TextEncoder().encode(text).length<=3_000_000,'配置文件超过 3 MB。');const data=JSON.parse(text);
-  if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline);}
+  if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
   if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;return editable;}catch{}}
@@ -310,7 +310,7 @@ export function exportWindowsKeysAndMacros(profile,template){
   encodeBank(emitted);root.ActionInfo=actions;
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
 }
-export function importWindows(root,baseline){
+export function importWindows(root,baseline,{deferHostText=false}={}){
   officialSystemStageWords(root);
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
@@ -318,6 +318,8 @@ export function importWindows(root,baseline){
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
   const p=fromHardware(baseline),old=clone(p.macroBindings),actions=root.ActionInfo??[],imported=new Map(),physical=new Set(WINDOWS_DEFAULTS.map(physicalSlot));
   p.windowsTemplateJSON=JSON.stringify(root);
+  const oldModes=clone(p.macroModes??{});
+  if(deferHostText)for(const action of actions){const type=winInt(action?.ActionType,'ActionType',0,4);if(type===3)officialHostTextPlan(action);}
   p.macroBindings=Object.fromEntries(Object.entries(old).filter(([slot])=>!physical.has(Number(slot))));
   p.macroModes=Object.fromEntries(Object.entries(p.macroModes??{}).filter(([slot])=>!physical.has(Number(slot))));
   const record=v=>{v=winInt(v,'按键动作',0,0xffffff);const b=[v>>16,(v>>8)&255,v&255];requireThat([0x20,0x30].includes(b[0]),'不支持此 Windows 按键动作。');return b;};
@@ -347,7 +349,7 @@ export function importWindows(root,baseline){
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
-      }else if(type===3){officialHostTextPlan(a);throw new Error('此配置含文本绑定，请使用带“文本”页的预览，在该页单独选择和安装。普通配置导入保留原编辑区。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
+      }else if(type===3){officialHostTextPlan(a);if(deferHostText){if(old[slot]!=null)p.macroBindings[slot]=old[slot];if(oldModes[slot]!=null)p.macroModes[slot]=oldModes[slot];return;}throw new Error('此配置含文本绑定，请使用带“文本”页的预览，在该页单独选择和安装。普通配置导入保留原编辑区。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');

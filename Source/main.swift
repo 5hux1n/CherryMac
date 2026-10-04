@@ -1209,6 +1209,7 @@ if CommandLine.arguments.contains("--macro-editor-self-test"){
     runMacroEditorChecks();exit(0)
 }
 #endif
+if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {
     runSelfTests()

@@ -219,7 +219,8 @@ enum WindowsProfile {
         let macroCount:Int
         let colorCount:Int
         let ignoredKeyCount:Int
-        var summary:String {"已导入 Windows 配置：\(keyCount) 个实体键、\(colorCount) 个颜色、\(macroCount) 个宏（含未绑定）。保留 \(ignoredKeyCount) 个内部／隐藏位置及系统参数；其他未绑定动作未迁移。尚未写入。"}
+        let deferredTextCount:Int
+        var summary:String {"已导入 Windows 配置：\(keyCount) 个实体键、\(colorCount) 个颜色、\(macroCount) 个宏（含未绑定）。保留 \(ignoredKeyCount) 个内部／隐藏位置及系统参数；其他未绑定动作未迁移。尚未写入。" + (deferredTextCount>0 ? " \(deferredTextCount) 个文本绑定已分流到文本页；这些键保留当前配置，需另行安装文本。":"")}
     }
     static func integer(_ object:Any?,_ name:String,range:ClosedRange<Int>)throws->Int {
         let value:Int?
@@ -353,7 +354,7 @@ enum WindowsProfile {
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
         guard output.count<=1_000_000 else{throw HardwareError(message:"导出的配置文件过大。")};return output
     }
-    static func decode(_ data:Data,baseline:HardwareSnapshot)throws->Imported {
+    static func decode(_ data:Data,baseline:HardwareSnapshot,deferHostText:Bool=false)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
         try baseline.validate()
         guard let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],root["//"] as? String=="47",
@@ -369,12 +370,18 @@ enum WindowsProfile {
         _ = try systemStageWords(root)
         var result=try HardwareProfile.fromHardware(baseline)
         result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
-        let oldBindings=result.macroBindings ?? [:]
+        let oldBindings=result.macroBindings ?? [:],oldModes=result.macroModes ?? [:]
+        if deferHostText {
+            for action in actions {
+                let type=try integer(action["ActionType"],"ActionType",range:0...4)
+                if type==3 {_ = try HostTextPlan(action:action)}
+            }
+        }
         let physicalSlots=Set(defaults.compactMap{physicalSlot($0)})
         // Replace the imported physical bindings while preserving any raw hidden data.
         result.macroBindings=oldBindings.filter{!physicalSlots.contains($0.key)}
         result.macroModes=(result.macroModes ?? [:]).filter{!physicalSlots.contains($0.key)}
-        var importedMacros:[Int:String]=[:];var keyCount=0;var colorCount=0;var ignored=0
+        var importedMacros:[Int:String]=[:];var keyCount=0;var colorCount=0;var ignored=0;var deferredTextCount=0
         func importMacro(_ index:Int)throws {
             if importedMacros[index] != nil{return}
             guard let content=actions[index]["ActionContent"] as? [String:Any] else{throw HardwareError(message:"Windows 宏内容无效。")}
@@ -426,6 +433,12 @@ enum WindowsProfile {
                     bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!,playback:playback)
                 case 3:
                     _=try HostTextPlan(action:actions[actionIndex])
+                    if deferHostText {
+                        // Keep the live binding until the separate text installer owns it.
+                        if let name=oldBindings[slot]{result.macroBindings![slot]=name}
+                        if let mode=oldModes[slot]{result.macroModes![slot]=mode}
+                        deferredTextCount += 1;continue
+                    }
                     throw HardwareError(message:"此配置含文本绑定，需要主机执行服务；普通配置导入尚不处理，请使用专用文本配置流程。原编辑区保留。")
                 case 4:
                     let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
@@ -458,6 +471,6 @@ enum WindowsProfile {
         // preserve the original bank and its reserved bytes byte-for-byte.
         if result.macroBindings != oldBindings || !importedMacros.isEmpty {result.snapshot=try result.resolvedMacros()}
         try result.validate()
-        return Imported(profile:result,keyCount:keyCount,macroCount:importedMacros.count,colorCount:colorCount,ignoredKeyCount:ignored)
+        return Imported(profile:result,keyCount:keyCount,macroCount:importedMacros.count,colorCount:colorCount,ignoredKeyCount:ignored,deferredTextCount:deferredTextCount)
     }
 }

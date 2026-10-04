@@ -1218,3 +1218,31 @@ private func runMacroExecutionEvidenceTests(){
     server.start();return server
 }
 #endif
+
+// Pure mixed-import check: preserve an existing held macro on the deferred text
+// key while adding a different official macro to another physical key.
+func runMixedOfficialImportChecks(){
+    func rejected(_ body:()throws->Void){do{try body();preconditionFailure("mixed import must reject invalid input")}catch{}}
+    let old=KeyboardMacro(name:"Existing",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:20)])
+    var original=try! HardwareProfile.fromHardware(.demo());original.macros=[old]
+    try! original.assignMacro(named:old.name,to:102,playback:.init(mode:.held,count:1))
+    let baseline=original.snapshot
+    var keys:[[String:Any]]=WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0,"ActionLinkIndex":-1]}
+    keys[17]["ActionLink"]=1;keys[17]["ActionLinkIndex"]=0
+    keys[0]["ActionLink"]=1;keys[0]["ActionLinkIndex"]=1
+    let new=KeyboardMacro(name:"Imported",steps:[.init(usage:5,pressed:true,delayMilliseconds:0),.init(usage:5,pressed:false,delayMilliseconds:20)])
+    var root:[String:Any]=["//":"47","KeyList":keys,"ActionInfo":[["ActionType":3,"ActionName":"Text","ActionTextFlag":1,"ActionContent":["ActionText":"中文😀"]],try! WindowsProfile.macroAction(new)]]
+    func encoded()throws->Data{try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)}
+    rejected{_ = try WindowsProfile.decode(encoded(),baseline:baseline)}
+    let imported=try! WindowsProfile.decode(encoded(),baseline:baseline,deferHostText:true)
+    precondition(imported.deferredTextCount==1 && imported.profile.macros.count==2)
+    precondition(imported.profile.snapshot.keymap[306..<309]==baseline.keymap[306..<309])
+    precondition(imported.profile.macroBindings?[102]==(try! HardwareProfile.fromHardware(baseline)).macroBindings?[102] && imported.profile.macroModes?[102]==original.macroModes?[102])
+    precondition(imported.profile.macroBindings?[WindowsProfile.physicalSlot(WindowsProfile.defaults[0])!]==new.name)
+    let retained=try! WindowsProfile.templateRoot(Data(imported.profile.windowsTemplateJSON!.utf8))
+    precondition((retained["ActionInfo"] as! [[String:Any]])[0]["ActionTextFlag"] as! Int==1)
+    root["ActionInfo"]=[["ActionType":3,"ActionContent":["ActionText":17]],try! WindowsProfile.macroAction(new)]
+    rejected{_ = try WindowsProfile.decode(encoded(),baseline:baseline,deferHostText:true)}
+    precondition(original.snapshot==baseline)
+    print("PASS: mixed official macro/text import preserves live held binding; invalid import rejected (no HID or permissions)")
+}
