@@ -280,7 +280,7 @@ export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'coun
       return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};})
   }};
 }
-function canonicalJSON(value){
+export function canonicalJSON(value){
   const sorted=x=>Array.isArray(x)?x.map(sorted):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])])):x;
   return JSON.stringify(sorted(value));
 }

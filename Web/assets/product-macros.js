@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource,canonicalJSON} from './model.js?v=0.6.0';
 import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
 
 // Names and recording preferences live locally; firmware stores event bytes.
@@ -46,7 +46,7 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
     const actions=clone(root.ActionInfo??[]);
     result.macros.forEach((macro,index)=>{
       const source=officialMacroSource(restored,restored.macros[index]);if(!source)return;
-      let destination=actions.findIndex(action=>equal(action,source));
+      let destination=actions.findIndex(action=>canonicalJSON(action)===canonicalJSON(source));
       if(destination<0){destination=actions.length;actions.push(clone(source));}
       macro.windowsActionIndex=destination;
     });
