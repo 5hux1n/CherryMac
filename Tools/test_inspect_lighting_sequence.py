@@ -16,7 +16,7 @@ class MemoryPE:
         self.memory = {}
         self.put(0x3C, struct.pack('<I', 0x80))
         self.put(0x94, struct.pack('<H', 112))
-        self.put(0x100, struct.pack('<II', 0x1000, 60))
+        self.put(0x100, struct.pack('<II', 0x1000, 100))
         self.put(0x401000, struct.pack('<5I', 0x1200, 0, 0, 0x1300, 0x2EBCF4))
         self.put(0x401200, struct.pack('<II', 0x1320, 0))
         self.put(0x401300, b'KERNEL32.dll\0')
@@ -25,6 +25,12 @@ class MemoryPE:
         self.put(0x401400, struct.pack('<II', 0x1520, 0))
         self.put(0x401500, b'HID.DLL\0')
         self.put(0x401520, b'\0\0HidD_GetAttributes\0')
+        self.put(0x401028, struct.pack('<5I', 0x1600, 0, 0, 0x1300, 0x2EBC90))
+        self.put(0x40103C, struct.pack('<5I', 0x1610, 0, 0, 0x1300, 0x2EBD04))
+        self.put(0x401600, struct.pack('<II', 0x1620, 0))
+        self.put(0x401610, struct.pack('<II', 0x1640, 0))
+        self.put(0x401620, b'\0\0CreateFileW\0')
+        self.put(0x401640, b'\0\0CloseHandle\0')
         for address, encoded in audit.IDENTITY_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
         for address, encoded in audit.TRANSPORT_CHECKS.items():
@@ -35,6 +41,8 @@ class MemoryPE:
         for address, encoded in audit.CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
         for address, encoded in audit.BEGIN_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
+        for address, encoded in audit.BEGIN_STATE_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
 
         self.put(0x77F604 + 0x2C4, struct.pack('<I', 0x501190))
@@ -68,6 +76,20 @@ class MemoryPE:
 
 
 class LightingAuditTests(unittest.TestCase):
+    def test_begin_guard_is_selected_communication_open_state(self):
+        result = audit.audit_begin_state(MemoryPE())
+        self.assertEqual(result['communicationOffset'] + result['fieldInCommunication'], result['fieldInDevice'])
+        self.assertEqual(result['communicationOffset'] + result['openWrapperOffset'], result['openWrapperInDevice'])
+        self.assertEqual(result['initialValue'], 0)
+        for address in (0x53F685, 0x4D9269, 0x498AFB, 0x498B07, 0x545290, 0x5452BD, 0x499277):
+            pe = MemoryPE();pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'begin state instruction'):
+                audit.audit_begin_state(pe)
+        for address in (0x401622, 0x401642):
+            pe = MemoryPE();pe.put(address, b'WrongName\0')
+            with self.assertRaisesRegex(ValueError, 'Begin state import'):
+                audit.audit_begin_state(pe)
+
     def test_begin_report_and_status_checks(self):
         result = audit.audit_begin(MemoryPE())
         self.assertEqual(result['headerBytes4Through7'], [0, 0, 0, 0])

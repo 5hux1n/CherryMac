@@ -38,6 +38,50 @@ BEGIN_CHECKS = {
     0x4DA0BA: '3dfe000000',
 }
 
+BEGIN_STATE_CHECKS = {
+    0x4F608B: 'e870950400',  # model constructor -> shared base constructor
+    0x53F685: '81c1380a0000', 0x53F68B: 'e8109bf9ff',
+    0x4D91C9: '83c154', 0x4D91CC: 'e87fb20600',
+    0x4D9269: 'c7404c00000000', 0x4D931E: 'c7424c00000000',
+    0x498A4F: '83b9840a000000', 0x498A56: '0f85a4030000',
+    0x498ACE: '6a00', 0x498AD0: '6a01', 0x498AD2: '6a01', 0x498AD4: '6a01',
+    0x498AE3: '81c18c0a0000', 0x498AE9: 'e8e2c70a00',
+    0x498AF4: '83bdccfdffff00', 0x498AFB: '0f84c3000000',
+    0x498B07: 'c782840a000001000000',
+    0x499277: 'c782840a000000000000',
+    0x499287: '81c18c0a0000', 0x49928D: 'e88ec00a00',
+    0x5452DC: '8d5620', 0x5452F1: '8b4508',
+    0x545300: '0fb708', 0x545306: '66894c02fe',
+    0x545312: 'e8f9feffff',
+    0x545290: 'ff1590bc6e00', 0x545296: '89461c',
+    0x545299: '83f8ff', 0x54529C: '7414',
+    0x5452A0: 'e8fbf4ffff', 0x5452A5: '85c0', 0x5452A7: '7514',
+    0x5452AC: 'ff1504bd6e00', 0x5452B2: 'c7461c00000000',
+    0x5452B9: '33c0', 0x5452BD: 'b801000000',
+    0x545350: 'ff1504bd6e00', 0x545356: 'c7461c00000000',
+}
+
+
+def audit_begin_state(pe):
+    for address, encoded in BEGIN_STATE_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected begin state instruction at {address:#x}')
+    for slot, name in ((0x6EBC90, 'CreateFileW'), (0x6EBD04, 'CloseHandle')):
+        dll, function = import_at(pe, slot)
+        if dll.lower() != 'kernel32.dll' or function != name:
+            raise ValueError(f'Begin state import is not KERNEL32!{name}')
+    return {'instructionChecks': len(BEGIN_STATE_CHECKS),
+            'modelConstructor': '0x4f6060 -> 0x53f600',
+            'communicationOffset': 0xA38, 'fieldInCommunication': 0x4C,
+            'fieldInDevice': 0xA84, 'initialValue': 0,
+            'openWrapperOffset': 0x54, 'openWrapperInDevice': 0xA8C,
+            'selectedOpenPath': '0x498740: only a nonzero 0x5452d0 result sets device+0xa84=1; already nonzero skips this opening block',
+            'openHelper': '0x5452d0 copies the path and calls 0x545210; CreateFileW and 0x5447a0 must succeed for return 1',
+            'selectedClosePath': '0x498e70 clears device+0xa84 before 0x545320 closes wrappers',
+            'interpretation': 'On this path the begin guard is communication open state, distinct from JSON LightOpenFlag at parameter byte 21',
+            'limits': 'Static selected open/close path only; no live route, firmware acknowledgement, persistence or all field stores proven. Not a Mac authorization.'}
+
 
 def audit_begin(pe):
     for address, encoded in BEGIN_CHECKS.items():
@@ -49,7 +93,7 @@ def audit_begin(pe):
             'headerBytes4Through7': [0, 0, 0, 0],
             'checksum': 'sum bytes 3 through 63; low/high bytes at 1/2',
             'failure': 'Exchange result must equal 1; FF/FE reply statuses return errors',
-            'limits': 'Report construction and helper result only. Actual caller begin guard and accepted firmware behavior remain unproven; no HID.'}
+            'limits': 'Report construction and helper result only. Caller state origin is audited separately. Live routing and accepted firmware behavior remain unproven; no HID.'}
 
 
 # Exact word-load, compare and conditional-jump bytes; no general x86 emulator.
@@ -517,6 +561,7 @@ def audit_sequence(pe):
         'deviceIdentityAudit': audit_device_identity(pe),
         'transportBankAudit': audit_transport_and_bank(pe),
         'beginAudit': audit_begin(pe),
+        'beginStateAudit': audit_begin_state(pe),
         'colorAudit': audit_colors(pe),
         'brightnessAudit': audit_brightness(pe),
         'mappingAudit': audit_mapping(pe),

@@ -546,13 +546,13 @@ enum WindowsProfile {
             private var invalidated=false
             init(plan:OfficialLightingPlan,baseline:HardwareSnapshot)throws{
                 _ = try plan.expectedReadback(from:baseline)
-                guard baseline.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56 else{throw HardwareError(message:"灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。")}
+                guard baseline.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56,plan.stages.allSatisfy({$0.beginRequired}) else{throw HardwareError(message:"灯效研究仅允许指定固件、配置 0 和已打开 USB 路径的完整开始／结束布局。")}
                 packets=try plan.reports()
             }
             init(recovery:RecoveryPlan)throws{
                 packets=try recovery.reports()
                 let plan=recovery.sourceRecord.plan
-                guard recovery.before.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56 else{throw HardwareError(message:"灯效恢复研究范围无效。")}
+                guard recovery.before.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56,plan.stages.allSatisfy({$0.beginRequired}) else{throw HardwareError(message:"灯效恢复研究范围或开始布局无效。")}
             }
             func validate(_ request:[UInt8])throws{
                 guard !invalidated,index<packets.count,request==packets[index].request else{throw HardwareError(message:"灯效报告偏离本次计划顺序或会话已失效，停止发送。")}

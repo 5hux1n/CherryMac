@@ -35,6 +35,7 @@ test('lighting research adapter is closed by default and stops permanently on un
   }
 });
 test('lighting report scope rejects altered, reordered, repeated and failed-session packets',()=>{
+  const omittedBegin=plan();omittedBegin.stages[0].beginRequired=false;assert.throws(()=>new LightingCandidateAuthorization(omittedBegin,demoSnapshot()));
   const p=plan(),reports=officialLightingReports(p),scope=new LightingCandidateAuthorization(p,demoSnapshot());p.stages[0].writes[0].data[1]^=1;
   assert.throws(()=>scope.validate(reports[1].request));
   for(const report of reports){scope.validate(report.request);scope.accept(report.request,report.request);assert.throws(()=>scope.validate(report.request));}

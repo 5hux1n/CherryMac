@@ -1278,6 +1278,8 @@ func runLightingExecutionChecks(){
     let plan=Plan(bank:0,transportSelector:0,chunkCapacity:56,stages:[.init(name:"parameters",beginRequired:true,beginCommand:1,writes:writes,finishCommand:2,finishDelayMilliseconds:10)])
     func mustReject(_ body:()throws->Void){do{try body();preconditionFailure("scope must reject")}catch{}}
     let packets=try! plan.reports(),scope=try! Plan.CandidateAuthorization(plan:plan,baseline:baseline)
+    var omittedBegin=plan;omittedBegin.stages[0].beginRequired=false
+    mustReject{_ = try Plan.CandidateAuthorization(plan:omittedBegin,baseline:baseline)}
     mustReject{try scope.validate(packets[1].request)}
     for packet in packets{try! scope.validate(packet.request);try! scope.accept(packet.request,request:packet.request);mustReject{try scope.validate(packet.request)}}
     precondition(scope.complete)

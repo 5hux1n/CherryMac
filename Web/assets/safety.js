@@ -11,7 +11,7 @@ export class LightingCandidateAuthorization{
   #reports;#index=0;#invalidated=false;
   constructor(plan,baseline){
     officialLightingReadbackTarget(plan,baseline);
-    requireThat(baseline.deviceInfo[6]===24&&plan.bank===0&&plan.transportSelector===0&&plan.chunkCapacity===56,'灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。');
+    requireThat(baseline.deviceInfo[6]===24&&plan.bank===0&&plan.transportSelector===0&&plan.chunkCapacity===56&&plan.stages.every(stage=>stage.beginRequired),'灯效研究仅允许指定固件、配置 0 和已打开 USB 路径的完整开始／结束布局。');
     this.#reports=officialLightingReports(plan);
   }
   static recovery(recovery){
