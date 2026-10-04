@@ -116,6 +116,94 @@ def initialized_words(pe, start, end, destination):
     return [words[offset] for offset in range(0, 22, 2)]
 
 
+SYSTEM_DEVICE_CHECKS = {
+    0x4FB8C0: "558bec",              # selected seven-word device setter
+    0x4FB8CA: "05e03f0000",          # in-memory seven-word structure
+    0x4FB8D2: "8908",
+    0x4FB8D7: "895004",
+    0x4FB8DD: "894808",
+    0x4FB8E4: "6689500c",
+    0x4FB910: "81c100400000",        # profile object
+    0x4FB916: "e85575f8ff",          # JSON setter, not transport
+    0x4FB91E: "c21000",
+    0x4F99D3: "81c100400000",
+    0x4F99D9: "e82297f8ff",          # JSON getter
+    0x4F99E4: "81c1e03f0000",
+    0x4F99EC: "8911",
+    0x4F99F1: "895104",
+    0x4F99F7: "895108",
+    0x4F99FE: "6689410c",
+    0x4F874A: "3dda010000",          # selected specialized readback allowlist
+    0x4F874F: "746c",
+    0x4F875E: "81fae6010000",
+    0x4F8764: "7457",
+    0x4F8773: "81f9ef010000",
+    0x4F8779: "7442",
+    0x4F8788: "3dfb010000",
+    0x4F878D: "742e",
+    0x4F879C: "81fa42010000",
+    0x4F87A2: "7419",
+    0x4F87B1: "81f94c010000",
+    0x4F87B7: "0f85d6000000",
+    0x4F87D0: "e82ba9f8ff",
+    0x4F87FF: "c1e106",
+    0x4F8822: "6bc835",
+    0x4F8825: "660fb6940d40ffffff",
+    0x4F8840: "6bd136",
+    0x4F8843: "660fb6841540ffffff",
+    0x4F8802: "51",                  # offset = bank << 6
+    0x4F8803: "6a40",                # 64-byte readback
+    0x4F8818: "e8c350feff",
+    0x4F8834: "668990e63f0000",      # report word from parameter byte 53
+    0x4F8852: "668981e83f0000",      # RF report word from parameter byte 54
+    0x4F888E: "e8dda5f8ff",
+}
+
+
+def inspect_system_device_paths(pe):
+    for address, encoded in SYSTEM_DEVICE_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected system settings device instruction")
+    return {"instructionChecks": len(SYSTEM_DEVICE_CHECKS),
+            "deviceWordOffset": "0x3fe0", "profileObjectOffset": "0x4000",
+            "selectedSetter": "0x4fb8c0", "selectedSetterBehavior": "Copy seven words then call JSON setter; no transport in this function",
+            "selectedReadbackBranchProducts": [0x1DA, 0x1E6, 0x1EF, 0x1FB, 0x142, 0x14C],
+            "selectedReadbackBranchIncludesTarget": False,
+            "selectedReadbackBytes": {"ReportSelectItem": 53, "RFReportSelectItem": 54},
+            "limits": "Only the named paths are audited; not proof that all settings are host-only, unsupported or writable on 01CE."}
+
+
+def inspect_settings_resources(skin):
+    path = Path(skin) / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+    data = path.read_bytes()
+    if len(data) > 500_000:
+        raise ValueError("Settings resource exceeds audit bounds")
+    root = ET.fromstring(data.lstrip())
+    if len(list(root.iter("EevisionKeyboardDevice"))) != 1:
+        raise ValueError("Settings resource does not select target device class")
+    controls = {}
+    for node in root.iter():
+        name = node.get("name")
+        if name:
+            controls.setdefault(name, []).append(node)
+    required = ["winlockflag_option", "wflag_option", "6flag_option", "repeat_delay_check_"]
+    required += ["polling_rate_option_" + str(i) for i in range(4)]
+    required += ["repeat_delay_check_" + str(i) for i in range(4)]
+    if any(len(controls.get(name, [])) != 1 for name in required):
+        raise ValueError("Settings controls are missing or ambiguous")
+    slider = controls["repeat_delay_check_"][0]
+    if slider.tag != "Slider" or [slider.get(k) for k in ["min", "max"]] != ["0", "31"]:
+        raise ValueError("Unexpected repeat slider range")
+    for index, hz in enumerate([1000, 500, 250, 125]):
+        node = controls["polling_rate_option_" + str(index)][0]
+        if node.tag != "Option" or str(hz) + "HZ" not in node.get("normalimage", ""):
+            raise ValueError("Unexpected polling-rate resource")
+    return {"resourceSHA256": hashlib.sha256(data).hexdigest(), "controls": required,
+            "repeatSliderRange": [0, 31], "pollingControlLabelsHz": [1000, 500, 250, 125],
+            "limits": "Static resource declarations only; runtime visibility, JSON bindings and hardware write path require separate evidence."}
+
+
 def inspect_macro_resources(skin):
     root = Path(skin)
     device_path = root / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
@@ -307,11 +395,12 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 3,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 4,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
+        "systemDevicePaths": inspect_system_device_paths(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},
@@ -327,6 +416,7 @@ def inspect(path, skin=None, macro_ui=False):
     }
     if skin is not None:
         result["modelResource"] = inspect_model_resources(skin)
+        result["settingsResource"] = inspect_settings_resources(skin)
     if macro_ui:
         if skin is None:
             raise ValueError("Macro UI audit requires --skin")

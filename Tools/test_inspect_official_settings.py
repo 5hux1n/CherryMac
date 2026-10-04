@@ -28,6 +28,36 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_selected_system_paths_reject_altered_fields_or_calls(self):
+        class MemoryPE:
+            def __init__(self):
+                self.code = {a: bytes.fromhex(v) for a, v in audit.SYSTEM_DEVICE_CHECKS.items()}
+            def at(self, address, size):
+                return self.code[address][:size]
+        pe = MemoryPE()
+        result = audit.inspect_system_device_paths(pe)
+        self.assertFalse(result['selectedReadbackBranchIncludesTarget'])
+        self.assertNotIn(0x1CE, result['selectedReadbackBranchProducts'])
+        for address in audit.SYSTEM_DEVICE_CHECKS:
+            bad = MemoryPE();value = bytearray(bad.code[address]);value[-1] ^= 1;bad.code[address] = bytes(value)
+            with self.assertRaisesRegex(ValueError, 'system settings device'):
+                audit.inspect_system_device_paths(bad)
+
+    def test_target_settings_resources_and_altered_ranges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory);path = root / 'XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml'
+            path.parent.mkdir(parents=True)
+            content = '<Window><EevisionKeyboardDevice>'
+            content += ''.join('<Option name="' + name + '"/>' for name in ['winlockflag_option', 'wflag_option', '6flag_option'])
+            content += '<Slider name="repeat_delay_check_" min="0" max="31"/>'
+            content += ''.join('<Option name="polling_rate_option_' + str(i) + '" normalimage="common/' + str(hz) + 'HZ.png"/>' for i,hz in enumerate([1000,500,250,125]))
+            content += ''.join('<Option name="repeat_delay_check_' + str(i) + '"/>' for i in range(4))
+            content += '</EevisionKeyboardDevice></Window>';path.write_text(content)
+            self.assertEqual(audit.inspect_settings_resources(root)['repeatSliderRange'], [0,31])
+            for text in [content.replace('max="31"', 'max="32"'),content.replace('1000HZ', '8000HZ'),content.replace('name="wflag_option"', 'name="6flag_option"')]:
+                path.write_text(text)
+                with self.assertRaises(ValueError):audit.inspect_settings_resources(root)
+
     def test_macro_resource_selection_and_unexpected_event_menu(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
