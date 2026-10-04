@@ -623,6 +623,23 @@ func runHostTextPlanChecks(){
     let failedTextWriter=SimulatedCherry(installBaseline);failedTextWriter.failSendAt=2
     do{_ = try failedTextWriter.writeKeymap(textAuthorization.expected.keymap,baseline:installBaseline,recoveryAuthorization:textAuthorization);preconditionFailure("injected text write failure ignored")}catch{}
     precondition(failedTextWriter.state==installBaseline)
+    var sharedRoot=try! WindowsProfile.templateRoot(installationData),sharedKeys=sharedRoot["KeyList"] as! [[String:Any]],sharedActions=sharedRoot["ActionInfo"] as! [[String:Any]]
+    sharedKeys[18]["ActionLink"]=1;sharedKeys[18]["ActionLinkIndex"]=0;sharedRoot["KeyList"]=sharedKeys
+    var sharedContent=sharedActions[0]["ActionContent"] as! [String:Any];sharedContent["opaque"]=["keep":7];sharedActions[0]["ActionContent"]=sharedContent;sharedRoot["ActionInfo"]=sharedActions;sharedRoot["opaqueRoot"]=["keep":true]
+    let sharedData=try! JSONSerialization.data(withJSONObject:sharedRoot)
+    let edited=try! WindowsProfile.editHostText(sharedData,factoryKeymap:factory,physicalSlot:102,text:"一\n二",name:"e\u{301}")
+    let editedRoot=try! WindowsProfile.templateRoot(edited),editedActions=editedRoot["ActionInfo"] as! [[String:Any]],editedKeys=editedRoot["KeyList"] as! [[String:Any]]
+    precondition(editedActions.count==2 && editedKeys[17]["ActionLinkIndex"] as? Int==1 && editedKeys[18]["ActionLinkIndex"] as? Int==0)
+    precondition(try! WindowsProfile.HostTextPlan(action:editedActions[0]).originalText=="中😀")
+    precondition(try! WindowsProfile.HostTextPlan(action:editedActions[1]).originalText=="一\r\n二" && WindowsProfile.HostTextPlan(action:editedActions[1]).name=="é")
+    precondition((editedActions[1]["ActionContent"] as! [String:Any])["opaque"] as? [String:Int]==["keep":7])
+    let cleared=try! WindowsProfile.editHostText(installationData,factoryKeymap:factory,physicalSlot:102,text:nil)
+    let removed=try! WindowsProfile.HostTextInstallation(officialJSON:cleared,factoryKeymap:factory,baseline:snapshot)
+    precondition(removed.bindings.isEmpty && removed.removedSlots==[102] && removed.expected==installBaseline)
+    _ = try! HostTextWriteAuthorization(officialJSON:cleared,factoryKeymap:factory,baseline:snapshot)
+    do{_ = try WindowsProfile.editHostText(sharedData,factoryKeymap:factory,physicalSlot:102,text:"a\0b");preconditionFailure("text editor accepted NUL")}catch{}
+    var editorResult:Data?
+    let editor=try! HostTextEditor(source:sharedData,factory:factory,selected:102){editorResult=$0};editor.name.stringValue="编辑文本";editor.text.string="甲\n乙";editor.apply();precondition(editor.finished && editorResult != nil)
     let installed=try! WindowsProfile.HostTextInstallation(officialJSON:installationData,factoryKeymap:factory,baseline:snapshot)
     precondition(installed.changedSlots.isEmpty && installed.bindings.count==1)
     func rejectsInstallation(_ document:[String:Any],_ baseline:HardwareSnapshot,_ factory:[UInt8]){

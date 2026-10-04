@@ -53,6 +53,32 @@ export function prepareHostTextBindings(root,factoryKeymap,currentKeymap){
   return eventValue=>{const slot=officialTextTriggerIndex(eventValue);return bindings.has(slot)?clone(bindings.get(slot)):null;};
 }
 
+export function officialKeyRecord(value){value=winInt(value,'按键动作',0,0xffffff);const result=[value>>16,(value>>8)&255,value&255];requireThat([32,48].includes(result[0]),'Windows 配置包含尚未支持的按键动作。');return result;}
+export function editHostText(root,factoryKeymap,physicalSlot,text,name='文本'){
+  root=clone(root);prepareHostTextBindings(root,factoryKeymap,Array(378).fill(0));
+  const trigger=resolveHostTextTrigger(0x700+physicalSlot,factoryKeymap);
+  requireThat(editableSlots.has(physicalSlot)&&trigger,'此按键没有可编辑的文本位置。');
+  const logical=trigger.logicalIndex,key=root.KeyList[logical],actions=root.ActionInfo;
+  const references=new Map();
+  for(const item of root.KeyList)if(winInt(item.ActionLink??0,'ActionLink',0,1)===1){const index=winInt(item.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,actions.length-1));requireThat(actions[index],'文本配置含无效动作引用。');references.set(index,(references.get(index)??0)+1);}
+  const link=winInt(key.ActionLink??0,'ActionLink',0,1);let oldIndex=null;
+  if(link===1){oldIndex=winInt(key.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,actions.length-1));requireThat(actions[oldIndex],'文本动作引用无效。');}
+  if(text!==null){
+    requireThat(typeof name==='string'&&typeof text==='string','名称或文本无效。');name=name.normalize('NFC');
+    requireThat(name.trim()&&[...name].length<=80&&text.length&&!text.includes('\0'),'请填写有效名称和非空文本；文本不能含 NUL。');
+    text=text.replaceAll('\r\n','\n').replaceAll('\r','\n').replaceAll('\n','\r\n');
+    let action={},replace=null;
+    if(oldIndex!==null&&winInt(actions[oldIndex].ActionType,'ActionType',0,4)===3){action=clone(actions[oldIndex]);if(references.get(oldIndex)===1)replace=oldIndex;}
+    action.ActionContent={...(action.ActionContent??{}),ActionText:text};action.ActionType=3;action.ActionTextFlag=1;action.ActionName=name;
+    const index=replace??actions.length;if(replace===null)actions.push(action);else actions[index]=action;
+    key.ActionLink=1;key.ActionLinkIndex=index;key.Assignment=WINDOWS_DEFAULTS[logical];
+  }else{
+    requireThat(oldIndex!==null&&winInt(actions[oldIndex].ActionType,'ActionType',0,4)===3,'此按键没有文本绑定。');
+    officialKeyRecord(WINDOWS_DEFAULTS[logical]);key.ActionLink=0;key.ActionLinkIndex=-1;key.Assignment=WINDOWS_DEFAULTS[logical];
+  }
+  prepareHostTextBindings(root,factoryKeymap,Array(378).fill(0));return root;
+}
+
 // Pure installation plan, never a WebHID write authorization. Text is kept
 // in officialJSON on the host; only the trigger marker belongs to firmware.
 export function prepareHostTextInstallation(root,factoryKeymap,baseline){
@@ -63,10 +89,18 @@ export function prepareHostTextInstallation(root,factoryKeymap,baseline){
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'Windows 文本配置过大。');
   root.KeyList.forEach((key,i)=>requireThat(winInt(key?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
   officialSystemStageWords(root);
-  const slots=new Map(),expected=clone(baseline),bindings=[];
+  const slots=new Map(),expected=clone(baseline),bindings=[],removedSlots=[];
   for(let slot=0;slot<126;slot++){const trigger=resolveHostTextTrigger(0x700+slot,factoryKeymap);if(trigger)slots.set(trigger.logicalIndex,slot);}
   root.KeyList.forEach((key,logicalIndex)=>{
-    if(winInt(key.ActionLink??0,'ActionLink',0,1)!==1)return;
+    if(winInt(key.ActionLink??0,'ActionLink',0,1)===0){
+      const slot=slots.get(logicalIndex);
+      if(slot!==undefined&&equal(baseline.keymap.slice(slot*3,slot*3+3),[161,0,0])&&key.Assignment!==undefined){
+        requireThat(editableSlots.has(slot),'隐藏或内部文本位置不能还原。');
+        const assignment=winInt(key.Assignment,'Assignment',0,0xffffff);
+        requireThat(assignment===WINDOWS_DEFAULTS[logicalIndex],'解除文本绑定只支持还原默认键，请在按键页单独设置其他功能。');
+        expected.keymap.splice(slot*3,3,...officialKeyRecord(assignment));removedSlots.push(slot);
+      }return;
+    }
     const actionIndex=winInt(key.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,root.ActionInfo.length-1)),action=root.ActionInfo[actionIndex];
     requireThat(action,'文本安装配置的动作引用无效。');
     if(winInt(action.ActionType,'ActionType',0,4)!==3)return;
@@ -79,10 +113,10 @@ export function prepareHostTextInstallation(root,factoryKeymap,baseline){
     expected.keymap.splice(physicalSlot*3,3,...plan.marker);
     bindings.push({logicalIndex,physicalSlot,actionIndex,plan});
   });
-  requireThat(bindings.length>0,'配置没有可安装的非空文本绑定。');
+  requireThat(bindings.length>0||removedSlots.length>0,'配置没有可安装的非空文本绑定或待还原文本键。');
   bindings.sort((a,b)=>a.physicalSlot-b.physicalSlot);
-  const changedSlots=bindings.filter(b=>[0,1,2].some(i=>baseline.keymap[b.physicalSlot*3+i]!==expected.keymap[b.physicalSlot*3+i])).map(b=>b.physicalSlot);
-  return {before:baseline,expected,factoryKeymap,officialJSON:root,bindings,changedSlots};
+  const changedSlots=[...bindings.map(b=>b.physicalSlot),...removedSlots].filter(slot=>[0,1,2].some(i=>baseline.keymap[slot*3+i]!==expected.keymap[slot*3+i])).sort((a,b)=>a-b);
+  return {before:baseline,expected,factoryKeymap,officialJSON:root,bindings,changedSlots,removedSlots:removedSlots.sort((a,b)=>a-b)};
 }
 
 export function validateSnapshot(s,complete=false){

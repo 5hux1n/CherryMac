@@ -91,6 +91,60 @@ final class HardwareNavigationButton:NSButton {
     }
 }
 
+// Edits one text binding in memory. No HID access or input monitor.
+final class HostTextEditor:NSWindowController,NSWindowDelegate {
+    let source:Data
+    let factory:[UInt8]
+    let choices:[(String,Int)]
+    let completion:(Data?)->Void
+    let key=NSPopUpButton(),name=NSTextField(string:"文本"),text=NSTextView()
+    let status=NSTextField(wrappingLabelWithString:"采用后仅修改文本配置；返回文本页核对安装才会写入键盘。")
+    let remove=NSButton(title:"解除并恢复默认",target:nil,action:nil)
+    var finished=false
+    init(source:Data,factory:[UInt8],selected:Int?,completion:@escaping(Data?)->Void)throws {
+        self.source=source;self.factory=factory;self.completion=completion
+        _ = try WindowsProfile.templateRoot(source)
+        choices=try keyboardLayout().compactMap{spec in
+            guard let slot=CherryMatrix.slot(spec),KeymapWriteAuthorization.editableSlots.contains(slot),try WindowsProfile.resolveHostTextTrigger(eventValue:0x700+slot,factoryKeymap:factory) != nil else{return nil}
+            return (spec.label.replacingOccurrences(of:"\n",with:" / "),slot)
+        }
+        guard !choices.isEmpty else{throw HardwareError(message:"默认表中没有可编辑的文本按键。")}
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:700,height:500),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        super.init(window:window);window.title="编辑文本绑定";window.delegate=self
+        let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:700,height:500));window.contentView=view
+        func place(_ child:NSView,_ x:CGFloat,_ y:CGFloat,_ w:CGFloat,_ h:CGFloat){child.frame=NSRect(x:x,y:y,width:w,height:h);view.addSubview(child)}
+        place(NSTextField(labelWithString:"按键"),20,24,65,25);key.addItems(withTitles:choices.map{$0.0});key.target=self;key.action=#selector(selectKey);place(key,90,20,240,28)
+        place(NSTextField(labelWithString:"名称"),20,69,65,25);place(name,90,65,590,28)
+        let scroll=NSScrollView(frame:NSRect(x:20,y:114,width:660,height:240));scroll.hasVerticalScroller=true;scroll.borderType = .bezelBorder
+        text.frame=NSRect(origin:.zero,size:scroll.contentSize);text.isRichText=false;text.isVerticallyResizable=true;text.autoresizingMask = .width;text.textContainer?.widthTracksTextView=true;text.font = .systemFont(ofSize:14);text.textContainerInset=NSSize(width:10,height:10);scroll.documentView=text;view.addSubview(scroll)
+        place(status,20,366,660,52)
+        remove.target=self;remove.action=#selector(removeTextBinding);place(remove,20,438,180,30)
+        place(NSButton(title:"取消",target:self,action:#selector(cancel)),424,438,100,30)
+        place(NSButton(title:"采用文本绑定",target:self,action:#selector(apply)),540,438,140,30)
+        if let selected,let index=choices.firstIndex(where:{$0.1==selected}){key.selectItem(at:index)}
+        selectKey()
+    }
+    required init?(coder:NSCoder){fatalError()}
+    @objc func selectKey(){
+        name.stringValue="文本";text.string="";remove.isEnabled=false
+        do{let root=try WindowsProfile.templateRoot(source),slot=choices[key.indexOfSelectedItem].1
+            guard let trigger=try WindowsProfile.resolveHostTextTrigger(eventValue:0x700+slot,factoryKeymap:factory),let keys=root["KeyList"] as? [[String:Any]],let actions=root["ActionInfo"] as? [[String:Any]] else{return}
+            let item=keys[trigger.logicalIndex]
+            if try WindowsProfile.integer(item["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 {
+                let index=try WindowsProfile.integer(item["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+                guard actions.indices.contains(index) else{throw HardwareError(message:"动作引用无效。")}
+                if try WindowsProfile.integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 {let plan=try WindowsProfile.HostTextPlan(action:actions[index]);name.stringValue=plan.name;text.string=plan.originalText;remove.isEnabled=true}
+            }
+        }catch{status.stringValue=error.localizedDescription}
+    }
+    @objc func apply(){edit(text.string)}
+    @objc func removeTextBinding(){edit(nil)}
+    private func edit(_ value:String?){do{let data=try WindowsProfile.editHostText(source,factoryKeymap:factory,physicalSlot:choices[key.indexOfSelectedItem].1,text:value,name:name.stringValue);finish(data)}catch{status.stringValue=error.localizedDescription}}
+    @objc func cancel(){finish(nil)}
+    func finish(_ data:Data?){guard !finished else{return};finished=true;if let window{window.sheetParent?.endSheet(window);window.orderOut(nil)};completion(data)}
+    func windowShouldClose(_ sender:NSWindow)->Bool{cancel();return false}
+}
+
 final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
@@ -148,6 +202,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     #if CHERRY_MACRO_PRODUCT
     var hostTextJSON:Data?
     let hostTextStore=HostTextConfigurationStore()
+    var hostTextEditor:HostTextEditor?
     let hostTextFile=NSTextField(wrappingLabelWithString:"尚未选择文本配置")
     let hostTextState=NSTextField(wrappingLabelWithString:"文本服务未开启")
     lazy var hostTextService=HostTextService(onState:{[weak self] state in self?.hostTextState.stringValue=state})
@@ -284,7 +339,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("选择官方文本配置…",#selector(chooseHostTextProfile)),8,137,230,32,in:text)
         place(button("载入已保存配置",#selector(loadSavedHostText)),258,137,180,32,in:text)
         place(button("导出文本配置…",#selector(exportHostText)),458,137,180,32,in:text)
-        place(hostTextFile,8,187,850,48,in:text)
+        place(hostTextFile,8,187,650,48,in:text)
+        place(button("编辑文本绑定…",#selector(editHostText)),678,187,195,32,in:text)
         place(button("启用文本服务",#selector(startHostTextService)),8,257,180,32,in:text)
         place(button("停止",#selector(stopHostTextService)),208,257,100,32,in:text)
         place(button("查看最近日志",#selector(openHostTextLog)),328,257,180,32,in:text)
@@ -321,7 +377,6 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let type=try WindowsProfile.integer(action["ActionType"],"ActionType",range:0...4)
             if type==3 {let plan=try WindowsProfile.HostTextPlan(action:action);if plan.marker != nil{count += 1}}
         }
-        guard count>0 else{throw HardwareError(message:"此配置没有非空文本动作，请选择包含文本绑定的官方配置。")}
         suspendHostTextForConfiguration()
         hostTextJSON=data;hostTextFile.stringValue="\(name) · \(count) 个文本动作"
     }
@@ -357,6 +412,26 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             do{try data.write(to:url,options:.atomic);self?.hostTextState.stringValue="文本配置已导出。"}catch{self?.hostTextState.stringValue=error.localizedDescription}
         }
     }
+    @objc func editHostText(){
+        guard !busy,hostTextEditor==nil,let data=hostTextJSON,let baseline,let window else{hostTextState.stringValue="请先读取键盘并选择官方配置。";return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        queue.async{[weak self] in
+            let result=Result<[UInt8],Error>{
+                let usb=try CherryUSB();let before=try usb.read(8,count:378),factory=try usb.read(7,count:378),after=try usb.read(8,count:378)
+                guard before==baseline.keymap,after==before else{throw HardwareError(message:"文本编辑准备期间键位变化，请重新读取。")};return factory
+            }
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                do{let factory=try result.get(),slot=keyboardLayout().first(where:{$0.id==self.selected}).flatMap{CherryMatrix.slot($0)}
+                    let editor=try HostTextEditor(source:data,factory:factory,selected:slot){[weak self] edited in
+                        guard let self else{return};self.hostTextEditor=nil
+                        guard let edited else{return}
+                        do{try self.loadHostTextProfile(edited,name:"编辑后的文本配置");self.hostTextState.stringValue="文本配置已修改，尚未写入。请核对安装或导出保存。"}catch{self.hostTextState.stringValue=error.localizedDescription}
+                    }
+                    self.hostTextEditor=editor;window.beginSheet(editor.window!)
+                }catch{self.hostTextState.stringValue=error.localizedDescription}
+            }
+        }
+    }
     @objc func installHostText(){
         guard !busy,macroRecordingSheet==nil,let data=hostTextJSON,let baseline,let window else{hostTextState.stringValue="请先读取键盘并选择文本配置。";return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};hostTextState.stringValue="正在读取默认表并核对文本安装计划…"
@@ -371,8 +446,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 case .failure(let error):self.hostTextState.stringValue=error.localizedDescription
                 case .success(let plan):
                     let labels=Dictionary(uniqueKeysWithValues:keyboardLayout().compactMap{key in CherryMatrix.slot(key).map{($0,key.label.replacingOccurrences(of:"\n",with:" / "))}})
-                    let review=plan.bindings.map{binding in "\(labels[binding.physicalSlot] ?? "按键 \(binding.physicalSlot)") → 文本（\(binding.plan.originalText.count) 字符）"}.joined(separator:"\n")
-                    let alert=NSAlert();alert.messageText="安装 \(plan.bindings.count) 个文本绑定？"
+                    let review=(plan.bindings.map{binding in "\(labels[binding.physicalSlot] ?? "按键 \(binding.physicalSlot)") → 文本（\(binding.plan.originalText.count) 字符）"}+plan.removedSlots.map{"\(labels[$0] ?? "按键 \($0)") → 恢复默认"}).joined(separator:"\n")
+                    let alert=NSAlert();alert.messageText="更新文本绑定？"
                     alert.informativeText=review+"\n\n其中 \(plan.changedSlots.count) 个键位需要写入。请松开全部按键，保持 USB 有线连接。文本输入需要 CherryMac 持续运行，灯效与宏区保留。"
                     alert.addButton(withTitle:"安装并保存");alert.addButton(withTitle:"取消")
                     alert.beginSheetModal(for:window){[weak self] response in
@@ -443,7 +518,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         case .success(let snapshot):
             baseline=snapshot;baselineWasRead=true
             var remaining=previousDraft ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
-            for binding in plan.bindings{let slot=binding.physicalSlot;remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3]);remaining.macroBindings?.removeValue(forKey:slot);remaining.macroModes?.removeValue(forKey:slot)}
+            for slot in plan.bindings.map({$0.physicalSlot})+plan.removedSlots{remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3]);remaining.macroBindings?.removeValue(forKey:slot);remaining.macroModes?.removeValue(forKey:slot)}
             profile=remaining;loadLighting();refreshMacroPicker();loadSelectedAssignment()
             hostTextState.stringValue=recovery ? "键位与先前文本定义已恢复，服务保持关闭。":"文本绑定已安装并完整读回，配置已保存。切换到目标应用前请启用文本服务。"
             message.stringValue=hostTextState.stringValue

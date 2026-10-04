@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
+import {readFile} from 'node:fs/promises';
 const web=fileURLToPath(new URL('../',import.meta.url));
 const socket=createServer();await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
 const server=spawn('php',['-S',`127.0.0.1:${port}`,'-t',web],{env:{...process.env,CHERRY_TEXT_PRODUCT:'1'},stdio:'ignore'});
@@ -49,5 +50,32 @@ try{
   await page.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));
   assert.match(await page.locator('#text-summary').textContent(),/official-text.json/);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
-  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection and draft preservation; zero HID requests');
+  const editing=await browser.newPage();
+  await editing.addInitScript(()=>{
+    window.fakeWrites=0;
+    class Device extends EventTarget{
+      constructor(){super();this.vendorId=1130;this.productId=462;this.collections=[{usagePage:0xff1c,usage:0x92,inputReports:[{reportId:4,items:[{reportSize:8,reportCount:63}]}],outputReports:[{reportId:4,items:[{reportSize:8,reportCount:63}]}]}];}
+      async open(){this.opened=true;}async close(){this.opened=false;}
+      async sendReport(id,data){
+        const request=new Uint8Array([id,...data]),command=request[3];
+        if(![3,5,7,8,10,20].includes(command)){window.fakeWrites++;throw new Error('write disabled for editor check');}
+        const n=({3:34,5:56,7:378,8:378,10:378,20:3071})[command],value=Array(n).fill(0);
+        if(command===3)value[6]=24;if(command===7||command===8)value.splice(306,3,48,146,1);
+        const offset=request[5]|request[6]<<8,reply=request.slice();reply.set(value.slice(offset,offset+request[4]),8);
+        const event=new Event('inputreport');Object.assign(event,{device:this,reportId:4,data:new DataView(reply.slice(1).buffer)});queueMicrotask(()=>this.dispatchEvent(event));
+      }
+    }
+    Object.defineProperty(navigator,'hid',{value:{requestDevice:async()=>[new Device()],getDevices:async()=>[],addEventListener(){},removeEventListener(){}}});
+  });
+  await editing.goto(url);await editing.locator('#connect').click();await editing.waitForFunction(()=>document.querySelector('#connection').textContent.includes('USB 已连接'));
+  await editing.locator('#tab-text').click();await editing.locator('#text-file').setInputFiles({name:'official-text.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture))});
+  await editing.waitForFunction(()=>!document.querySelector('#text-edit-open').disabled);await editing.locator('#text-edit-open').click();await editing.waitForFunction(()=>!document.querySelector('#text-editor').hidden&&!document.querySelector('#text-edit-save').disabled);
+  await editing.locator('#text-edit-name').fill('编辑文本');await editing.locator('#text-edit-value').fill('甲\n乙');await editing.locator('#text-edit-save').click();
+  const downloading=editing.waitForEvent('download');await editing.locator('#text-export').click();const exported=JSON.parse(await readFile(await (await downloading).path(),'utf8'));
+  assert.equal(exported.ActionInfo[exported.KeyList[17].ActionLinkIndex].ActionContent.ActionText,'甲\r\n乙');
+  await editing.locator('#text-edit-open').click();await editing.waitForFunction(()=>!document.querySelector('#text-editor').hidden&&!document.querySelector('#text-edit-remove').disabled);await editing.locator('#text-edit-remove').click();
+  const removing=editing.waitForEvent('download');await editing.locator('#text-export').click();const cleared=JSON.parse(await readFile(await (await removing).path(),'utf8'));
+  assert.equal(cleared.KeyList[17].ActionLink,0);assert.equal(cleared.KeyList[17].Assignment,cleared.KeyList[17].DefaultAssignment);
+  assert.equal(await editing.evaluate(()=>window.fakeWrites),0);
+  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection and draft preservation; zero real HID requests; editor uses read-only fake transport');
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}

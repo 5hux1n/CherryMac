@@ -88,6 +88,41 @@ enum WindowsProfile {
         let actionIndex:Int
         let plan:HostTextPlan
     }
+    static func editHostText(_ data:Data,factoryKeymap:[UInt8],physicalSlot:Int,text:String?,name:String="文本")throws->Data {
+        guard KeymapWriteAuthorization.editableSlots.contains(physicalSlot),let trigger=try resolveHostTextTrigger(eventValue:0x700+physicalSlot,factoryKeymap:factoryKeymap) else{throw HardwareError(message:"此按键没有可编辑的文本位置。")}
+        var root=try templateRoot(data)
+        guard var keys=root["KeyList"] as? [[String:Any]],var actions=root["ActionInfo"] as? [[String:Any]] else{throw HardwareError(message:"Windows 动作列表结构无效。")}
+        var references:[Int:Int]=[:]
+        for key in keys where try integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 {
+            let index=try integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+            guard actions.indices.contains(index) else{throw HardwareError(message:"文本配置含无效动作引用。")}
+            references[index,default:0]+=1
+        }
+        let logical=trigger.logicalIndex,link=try integer(keys[logical]["ActionLink"] ?? 0,"ActionLink",range:0...1)
+        var oldIndex:Int?
+        if link==1{let index=try integer(keys[logical]["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1));guard actions.indices.contains(index) else{throw HardwareError(message:"文本动作引用无效。")};oldIndex=index}
+        if let text {
+            let normalized=name.precomposedStringWithCanonicalMapping
+            guard !normalized.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,normalized.unicodeScalars.count<=80,!text.isEmpty,!text.contains("\0") else{throw HardwareError(message:"请填写有效名称和非空文本；文本不能含 NUL。")}
+            let edited=text.replacingOccurrences(of:"\r\n",with:"\n").replacingOccurrences(of:"\r",with:"\n").replacingOccurrences(of:"\n",with:"\r\n")
+            var action:[String:Any]=[:];var replaceIndex:Int?
+            if let index=oldIndex,try integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 {
+                action=actions[index]
+                if references[index]==1{replaceIndex=index}
+            }
+            var content=action["ActionContent"] as? [String:Any] ?? [:];content["ActionText"]=edited
+            action["ActionType"]=3;action["ActionTextFlag"]=1;action["ActionName"]=normalized;action["ActionContent"]=content
+            let index:Int
+            if let replaceIndex{index=replaceIndex;actions[index]=action}else{index=actions.count;actions.append(action)}
+            keys[logical]["ActionLink"]=1;keys[logical]["ActionLinkIndex"]=index;keys[logical]["Assignment"]=defaults[logical]
+        }else{
+            guard let index=oldIndex,try integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 else{throw HardwareError(message:"此按键没有文本绑定。")}
+            _ = try record(defaults[logical])
+            keys[logical]["ActionLink"]=0;keys[logical]["ActionLinkIndex"] = -1;keys[logical]["Assignment"]=defaults[logical]
+        }
+        root["KeyList"]=keys;root["ActionInfo"]=actions
+        let result=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys,.withoutEscapingSlashes]);_ = try templateRoot(result);return result
+    }
     // Installation data only. This does not authorize an A1 write, install a
     // listener, or store the text in firmware. The JSON remains on the host.
     struct HostTextInstallation {
@@ -97,6 +132,7 @@ enum WindowsProfile {
         let officialJSON:Data
         let bindings:[HostTextBinding]
         let changedSlots:[Int]
+        let removedSlots:[Int]
         init(officialJSON:Data,factoryKeymap:[UInt8],baseline:HardwareSnapshot)throws {
             try baseline.validate()
             guard baseline.deviceInfo[6]==24,baseline.colors != nil,baseline.macroData != nil,factoryKeymap.count==378 else{throw HardwareError(message:"准备文本安装需要本型号完整配置和默认键位表。")}
@@ -106,9 +142,17 @@ enum WindowsProfile {
             for slot in 0..<126 {
                 if let trigger=try WindowsProfile.resolveHostTextTrigger(eventValue:0x700+slot,factoryKeymap:factoryKeymap){slots[trigger.logicalIndex]=slot}
             }
-            var selected:[HostTextBinding]=[],target=baseline
+            var selected:[HostTextBinding]=[],removed:[Int]=[],target=baseline
             for (logical,key) in keys.enumerated() {
-                guard try WindowsProfile.integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 else{continue}
+                if try WindowsProfile.integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==0 {
+                    if let slot=slots[logical],Array(baseline.keymap[slot*3..<slot*3+3])==[0xA1,0,0],let assignment=key["Assignment"] {
+                        guard KeymapWriteAuthorization.editableSlots.contains(slot) else{throw HardwareError(message:"隐藏或内部文本位置不能还原。")}
+                        let value=try WindowsProfile.integer(assignment,"Assignment",range:0...0xFFFFFF)
+                        guard value==WindowsProfile.defaults[logical] else{throw HardwareError(message:"解除文本绑定只支持还原默认键，请在按键页单独设置其他功能。")}
+                        target.keymap.replaceSubrange(slot*3..<slot*3+3,with:try WindowsProfile.record(value));removed.append(slot)
+                    }
+                    continue
+                }
                 let index=try WindowsProfile.integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
                 guard actions.indices.contains(index) else{throw HardwareError(message:"文本安装配置的动作引用无效。")}
                 guard try WindowsProfile.integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 else{continue}
@@ -121,10 +165,11 @@ enum WindowsProfile {
                 target.keymap.replaceSubrange(slot*3..<slot*3+3,with:marker)
                 selected.append(HostTextBinding(logicalIndex:logical,physicalSlot:slot,actionIndex:index,plan:plan))
             }
-            guard !selected.isEmpty else{throw HardwareError(message:"配置没有可安装的非空文本绑定。")}
+            guard !selected.isEmpty || !removed.isEmpty else{throw HardwareError(message:"配置没有可安装的非空文本绑定或待还原文本键。")}
             before=baseline;expected=target;self.factoryKeymap=factoryKeymap;self.officialJSON=officialJSON
             bindings=selected.sorted{$0.physicalSlot<$1.physicalSlot}
-            changedSlots=bindings.filter{binding in let range=binding.physicalSlot*3..<binding.physicalSlot*3+3;return baseline.keymap[range] != target.keymap[range]}.map{$0.physicalSlot}
+            removedSlots=removed.sorted()
+            changedSlots=(bindings.map{$0.physicalSlot}+removed).filter{slot in let range=slot*3..<slot*3+3;return baseline.keymap[range] != target.keymap[range]}.sorted()
         }
     }
     // Prepared data only, not a device/report authorization. The eventual

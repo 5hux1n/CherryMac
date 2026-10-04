@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -837,4 +837,22 @@ test('host text writer gates transport, persists host configuration and restores
   assert.equal(backups,1);assert.equal(saves,1);assert.equal(device.writeCount,14);assert.ok(sameSnapshot(device.s,before));
   assert.ok(device.requests.filter(r=>r[3]===9).every(r=>r[4]===54));
   await assert.rejects(hid.exchange(permission.packet(permission.expected.keymap,0)),/写入暂缓/);await hid.close();
+});
+
+
+test('text editor isolates shared actions, preserves unknown fields and restores removed text keys',()=>{
+  const root=windowsFixture(),before=demoSnapshot(),factory=Array(378).fill(0);factory.splice(306,3,48,146,1);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;root.KeyList[18].ActionLink=1;root.KeyList[18].ActionLinkIndex=0;
+  root.ActionInfo=[{ActionType:3,ActionName:'原文',ActionTextFlag:1,opaqueAction:7,ActionContent:{ActionText:'中😀',opaque:{keep:7}}}];root.opaqueRoot={keep:true};
+  const original=clone(root),edited=editHostText(root,factory,102,'一\n二','e\u0301');
+  assert.deepEqual(root,original);assert.equal(edited.ActionInfo.length,2);assert.equal(edited.KeyList[17].ActionLinkIndex,1);assert.equal(edited.KeyList[18].ActionLinkIndex,0);
+  assert.equal(edited.ActionInfo[0].ActionContent.ActionText,'中😀');assert.equal(edited.ActionInfo[1].ActionContent.ActionText,'一\r\n二');assert.equal(edited.ActionInfo[1].ActionName,'é');
+  assert.deepEqual(edited.ActionInfo[1].ActionContent.opaque,{keep:7});assert.equal(edited.ActionInfo[1].opaqueAction,7);assert.deepEqual(edited.opaqueRoot,root.opaqueRoot);
+  const installed=clone(before);installed.keymap.splice(306,3,161,0,0);
+  // The unused old action remains intact; only the selected key is unlinked.
+  const single=clone(root);single.KeyList[18].ActionLink=0;single.KeyList[18].ActionLinkIndex=-1;
+  const cleared=editHostText(single,factory,102,null),plan=prepareHostTextInstallation(cleared,factory,installed);
+  assert.deepEqual(plan.bindings,[]);assert.deepEqual(plan.removedSlots,[102]);assert.deepEqual(plan.changedSlots,[102]);assert.deepEqual(plan.expected.keymap,before.keymap);
+  const permission=new HostTextWriteAuthorization(cleared,factory,installed);assert.deepEqual(permission.expected.keymap,before.keymap);
+  assert.throws(()=>editHostText(root,factory,102,'a\0b'));assert.throws(()=>editHostText(root,factory,6,'x'));
 });

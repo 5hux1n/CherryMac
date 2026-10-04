@@ -60,7 +60,7 @@ export class HostTextStore{
 }
 export function mergeHostTextDraft(previous,snapshot,plan){
   validateProfile(previous);validateSnapshot(snapshot,true);const result=clone(previous);requireThat(equal(previous.snapshot.deviceInfo,snapshot.deviceInfo),'文本操作设备与编辑区不同，未合并草稿。');
-  for(const binding of plan.bindings){const slot=binding.physicalSlot;result.snapshot.keymap.splice(slot*3,3,...snapshot.keymap.slice(slot*3,slot*3+3));if(result.macroBindings)delete result.macroBindings[slot];if(result.macroModes)delete result.macroModes[slot];}
+  for(const slot of [...plan.bindings.map(b=>b.physicalSlot),...plan.removedSlots]){result.snapshot.keymap.splice(slot*3,3,...snapshot.keymap.slice(slot*3,slot*3+3));if(result.macroBindings)delete result.macroBindings[slot];if(result.macroModes)delete result.macroModes[slot];}
   validateProfile(result);return result;
 }
 export {recordPlan as textRecordPlan};

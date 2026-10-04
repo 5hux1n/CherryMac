@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros,prepareHostTextBindings,officialHostTextPlan} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -14,7 +14,7 @@ let recorder=null,recordingPreference=null,macroAbort=null;
 let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
 const textProduct=document.documentElement.dataset.textProduct==='true',textStore=new HostTextStore();
-let textRoot=null,textPending=null;
+let textRoot=null,textPending=null,textFactory=null;
 if(textProduct)pages.text=['文本快捷输入','安装触发键，管理主机文本配置。'];
 const supported=isSecureContext&&'hid' in navigator;
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error);}
@@ -46,7 +46,7 @@ function render(){
   if(recorder)recordControls(true);
   $('cancel-macro-operation').hidden=!macroAbort;$('cancel-macro-operation').disabled=!macroAbort||macroAbort.signal.aborted;
   $('recover-macro').hidden=!macroProduct;$('recover-macro').disabled=busy||!online;
-  if(textProduct){$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
+  if(textProduct){$('text-edit-open').disabled=busy||!!recorder||!online||!textRoot;$('text-edit-value').disabled=busy;if(textFactory){const trigger=resolveHostTextTrigger(0x700+Number($('text-edit-key').value),textFactory),item=trigger&&textRoot.KeyList[trigger.logicalIndex];$('text-edit-remove').disabled=busy||item?.ActionLink!==1||textRoot.ActionInfo[item.ActionLinkIndex]?.ActionType!==3;}$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
   if(busy)$('connect').disabled=true;
   renderMacroSummary();
 }
@@ -92,7 +92,7 @@ function renderSteps(){
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];if(p.macroModes)delete p.macroModes[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
 async function read(){const s=await hid.snapshot();baseline=clone(s);profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status('已读取完整配置并保存本地备份。编辑后点击“写入按键”才会修改键盘。');}
-async function operation(fn){if(busy)return;hid?.stopHostTextObservation();busy=true;render();try{await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
+async function operation(fn){if(busy)return;hid?.stopHostTextObservation();if(textProduct){textFactory=null;$('text-editor').hidden=true;}busy=true;render();try{await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
 function switchTab(next){if(!pages[next])return;tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
 for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
@@ -194,9 +194,32 @@ if(textProduct){
     prepareHostTextBindings(root,Array(378).fill(0),Array(378).fill(0));
     let count=0;
     for(const action of root.ActionInfo){requireThat(Number.isInteger(action.ActionType)&&action.ActionType>=0&&action.ActionType<=4,'Windows 动作类型无效。');if(action.ActionType===3&&officialHostTextPlan(action).marker!==null)count++;}
-    requireThat(count>0,'此配置没有非空文本动作。');
     textRoot=clone(root);$('text-summary').textContent=`${name} · ${count} 个文本动作。准备安装时读取默认表并显示实体键。`;$('text-bindings').replaceChildren();
   }
+  function loadTextEditor(){
+    const slot=Number($('text-edit-key').value),trigger=resolveHostTextTrigger(0x700+slot,textFactory),item=textRoot.KeyList[trigger.logicalIndex];
+    $('text-edit-name').value='文本';$('text-edit-value').value='';$('text-edit-remove').disabled=true;
+    if(item.ActionLink===1){const action=textRoot.ActionInfo[item.ActionLinkIndex];requireThat(action,'文本动作引用无效。');if(action.ActionType===3){const plan=officialHostTextPlan(action);$('text-edit-name').value=plan.name;$('text-edit-value').value=plan.originalText;$('text-edit-remove').disabled=false;}}
+  }
+  $('text-edit-open').onclick=()=>operation(async()=>{
+    requireThat(hid&&!hid.dead&&baseline&&textRoot,'请先连接键盘并选择官方配置。');
+    const before=await hid.read(8,378),factory=await hid.read(7,378),after=await hid.read(8,378);
+    requireThat(equal(before,baseline.keymap)&&equal(before,after),'文本编辑准备期间键位变化，请重新读取。');
+    textFactory=factory;const picker=$('text-edit-key');picker.replaceChildren();
+    for(const key of keys)if(editableSlots.has(key.slot)&&resolveHostTextTrigger(0x700+key.slot,factory))picker.add(new Option(key.label.replaceAll('\n',' / '),String(key.slot)));
+    requireThat(picker.options.length,'默认表没有可编辑的文本位置。');
+    const initial=String(keys.find(k=>k.id===selected).slot);if([...picker.options].some(o=>o.value===initial))picker.value=initial;
+    loadTextEditor();$('text-editor').hidden=false;status('编辑完成后采用，尚未写入键盘。');
+  });
+  $('text-edit-key').onchange=()=>act(loadTextEditor);
+  function adoptText(value){
+    requireThat(textRoot&&textFactory,'请先准备文本编辑。');
+    const next=editHostText(textRoot,textFactory,Number($('text-edit-key').value),value,$('text-edit-name').value);
+    selectTextConfiguration(next,'编辑后的文本配置');textFactory=null;$('text-editor').hidden=true;status('文本配置已修改，尚未写入。请核对安装或导出保存。');
+  }
+  $('text-edit-save').onclick=()=>act(()=>adoptText($('text-edit-value').value));
+  $('text-edit-remove').onclick=()=>act(()=>adoptText(null));
+  $('text-edit-cancel').onclick=()=>{textFactory=null;$('text-editor').hidden=true;};
   $('text-import').onclick=()=>{if(!busy)$('text-file').click();};
   $('text-file').onchange=()=>{const file=$('text-file').files[0];$('text-file').value='';if(!file)return;void operation(async()=>{requireThat(file.size<=1_000_000,'文本配置超过 1 MB。');selectTextConfiguration(JSON.parse(await file.text()),file.name);status('文本配置已选中，编辑区和键盘没有变化。');});};
   $('text-load').onclick=()=>operation(async()=>{const root=await textStore.active();requireThat(root,'没有已安装并保存的文本配置。');selectTextConfiguration(root,'已保存文本配置');status('已载入文本定义，尚未启用输入服务。');});
@@ -207,7 +230,7 @@ if(textProduct){
     const root=clone(textRoot),before=clone(baseline),plan=await hid.readHostTextInstallation(root,before);
     textPending={kind:'install',plan,root,before,draft:clone(profile)};
     const names=Object.fromEntries(keys.map(k=>[k.slot,k.label.replaceAll('\n',' / ')]));
-    const rows=plan.bindings.map(b=>`${names[b.physicalSlot]??'按键'} → 文本（${[...b.plan.originalText].length} 字符）`);
+    const rows=[...plan.bindings.map(b=>`${names[b.physicalSlot]??'按键'} → 文本（${[...b.plan.originalText].length} 字符）`),...plan.removedSlots.map(slot=>`${names[slot]??'按键'} → 恢复默认`)];
     $('text-confirm-title').textContent='安装文本绑定';$('text-confirm-summary').textContent=rows.join('\n')+`\n\n${plan.changedSlots.length} 个键位需要写入，灯效和宏区保留。`;
     $('confirm-text').showModal();
   });
