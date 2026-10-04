@@ -98,7 +98,7 @@ $('lighting-retention').onclick=()=>operation(async()=>{
   artifacts.observations.push({kind:'powerCycleReadback',at:new Date().toISOString(),userConfirmedPowerOff:true,elapsedMilliseconds:Math.floor(usbReturnAt-powerOffAt),matches,current:clone(current)});await persistSession();
   status(matches?'关电确认后的完整读回符合写入目标。灯光外观仍需观察；接下来可以恢复原始数据。':'重连后的配置与目标不同。请保留资料，核对原始数据恢复。',!matches);
 });
-$('lighting-download').onclick=()=>operation(async()=>{await hid?.flushLogs();download(artifacts,`CherryMac-灯效验收-${runID}.json`);status('资料已下载；不会自动恢复或修改键盘。');});
+$('lighting-download').onclick=()=>operation(async()=>{let logFailure=null;try{await hid?.flushLogs();}catch(error){logFailure=error.message;}const saved=clone(artifacts);if(logFailure)saved.exportWarning=logFailure;download(saved,`CherryMac-灯效验收-${runID}.json`);status(logFailure?`已下载现有资料；日志未完整保存：${logFailure}`:'资料已下载；不会自动恢复或修改键盘。',!!logFailure);});
 $('lighting-download-record').onclick=()=>operation(async()=>{requireThat(latestRecord,'尚无恢复记录。');download(latestRecord,`CherryMac-灯效恢复记录-${latestRecord.operationID}.json`);status('已下载独立恢复记录，可在新会话载入。');});
 window.addEventListener('beforeunload',event=>{abort?.abort();gate.invalidate();if(busy){event.preventDefault();event.returnValue='';}});
 render();

@@ -10,20 +10,22 @@ import zipfile
 from package_runtime import runtime_files
 
 root = pathlib.Path(__file__).resolve().parent
-if len(sys.argv) != 2:
-    raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
+if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--lighting-acceptance'):
+    raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
+lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.20.0'
+version = '0.1.0' if lighting_acceptance else '0.20.0'
+package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')
 source_version = source_version_match.group(1)
 try:
-    files = runtime_files(root, source_version)
+    files = runtime_files(root, source_version, lighting_acceptance=lighting_acceptance)
 except ValueError as error:
     raise SystemExit(str(error))
 output_dir.mkdir(parents=True, exist_ok=True)
-output = output_dir / f'CherryMac-Web-MacroPreview-{version}.zip'
+output = output_dir / f'{package_name}-{version}.zip'
 checksum_file = output.with_suffix('.zip.sha256')
 if output.exists() or checksum_file.exists():
     raise SystemExit('Refusing to overwrite an existing preview artifact')
@@ -32,7 +34,7 @@ commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=Tr
 contents = {}
 for path in files:
     text = path.read_text().replace('?v=' + source_version, '?v=' + version)
-    text = text.replace('CherryMac Web ' + source_version, 'CherryMac Web ' + version + ' · 宏与文本预览')
+    text = text.replace('CherryMac Web ' + source_version, 'CherryMac Web ' + version + (' · 灯效独立验收版' if lighting_acceptance else ' · 宏与文本预览'))
     text = text.replace("webVersion:'" + source_version + "'", "webVersion:'" + version + "'")
     contents[path.relative_to(root).as_posix()] = text.encode()
 contents['start.command'] = '''#!/bin/zsh
@@ -71,12 +73,34 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 
 检查灯效恢复记录后，可以导出原始数据恢复计划。只接受记录中完整、可识别的读回状态；缺失读回或范围外变化会被拒绝。恢复计划只保存文件，尚未执行，实际恢复前仍需要重新读取键盘。
 '''.encode()
-manifest = {'format': 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
+if lighting_acceptance:
+    contents['start.command'] = contents['start.command'].replace(b'localhost:8770/', b'localhost:8771/lighting-test.php').replace(b'127.0.0.1:8770', b'127.0.0.1:8771').replace(b'CHERRY_MACRO_PRODUCT=1', b'CHERRY_LIGHTING_TEST=1 CHERRY_MACRO_PRODUCT=1')
+    contents['README.md'] = '''# CherryMac 灯效独立验收版
+
+这是准备统一真机验收的独立研究包，尚未完成验收。不会自动连接或写入键盘；普通配置页仍不提供灯效写入。
+
+已有 PHP 时，解压后双击 start.command，用 Chrome 或 Edge 打开 http://localhost:8771/lighting-test.php 。无需 Node 或构建；启动脚本不会打开浏览器。手动运行时设置 CHERRY_LIGHTING_TEST=1、CHERRY_MACRO_PRODUCT=1、CHERRY_TEXT_PRODUCT=1，再启动 PHP 本机服务。退出其他配置程序及 Mac 文本服务。
+
+先在 http://localhost:8771/ 读取配置、导入本型号官方 JSON、编辑并保存灯效，再点击“核对并导出计划”。自定义配色需要官方原始 RGB 和读取到的 LED 映射；内置模式无需逐键表。
+
+独立验收页按顺序载入计划、选择 USB、核对并确认写入。写前自动保存完整备份，每包保存日志，失败中止；可停止后续发送，已发送报告不能撤回。当前只允许已核对固件、配置 0 和完整开始／结束布局。连接、读取和载入文件不写入。
+
+写入读回通过后观察灯光，拔 USB、关闭键盘电源并点击关电确认；至少 15 秒后开电、接 USB，重新选择键盘并核对读回。系统拔插记录和用户关电确认不能证明电池实际断电，灯光外观需要实际观察。
+
+最后点击恢复原始数据并核对键盘功能。恢复会重新读取完整配置、拒绝范围外变化，原始颜色不重复缩放，不自动重试。超时或断开后用新会话载入独立恢复记录再核对。备份和记录存于当前网址的浏览器本地数据库，文件不上传；清理数据前分别下载本轮资料与独立恢复记录。日志保存失败时仍能下载现有资料，导出会标注日志缺失。
+
+此包与旧灯效版本不同，名字和端口独立，不替换旧包。它包含实际发送入口，请按统一验收安排使用；打包过程没有运行网页服务、申请权限或访问键盘。
+'''.encode()
+manifest = {'format': 'CherryMacWebLightingAcceptance' if lighting_acceptance else 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
             'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
-prefix = f'CherryMac-Web-MacroPreview-{version}/'
+if lighting_acceptance:
+    manifest['features']['lightingResearchAcceptance'] = True
+    manifest['features']['lightingResearchWrite'] = True
+    contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
+prefix = f'{package_name}-{version}/'
 with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
     for name, data in sorted(contents.items()):
         info = zipfile.ZipInfo(prefix + name)

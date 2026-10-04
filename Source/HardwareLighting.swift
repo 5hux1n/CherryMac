@@ -262,14 +262,14 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         },context)
         IOHIDManagerRegisterDeviceMatchingCallback(m,{context,_,_,device in
             guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
-            if let id=selfRef.id(device),selfRef.cycle?.reconnected(at:ProcessInfo.processInfo.systemUptime,registryID:id)==true{selfRef.savePowerEvent("usbReconnected")};selfRef.render()
+            if let id=selfRef.id(device),selfRef.cycle?.reconnected(at:ProcessInfo.processInfo.systemUptime,registryID:id)==true{selfRef.savePowerEvent("usbReconnected",registry:id)};selfRef.render()
         },context)
         IOHIDManagerScheduleWithRunLoop(m,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue)
         guard IOHIDManagerOpen(m,0)==0 else{IOHIDManagerUnscheduleFromRunLoop(m,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue);throw HardwareError(message:"无法监测 USB 连接，请检查研究 App 的输入监控权限。")}
         manager=m
     }
-    func savePowerEvent(_ kind:String){
-        powerEvents.append(["kind":kind,"at":ISO8601DateFormatter().string(from:Date()),"uptime":ProcessInfo.processInfo.systemUptime,"registryID":registryID ?? 0])
+    func savePowerEvent(_ kind:String,registry:UInt64?=nil){
+        powerEvents.append(["kind":kind,"at":ISO8601DateFormatter().string(from:Date()),"uptime":ProcessInfo.processInfo.systemUptime,"registryID":registry ?? registryID ?? 0])
         do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:powerEvents,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("power-events.json"),options:.atomic)}catch{monitorFailure=error.localizedDescription;fail(error)}
     }
     func id(_ device:IOHIDDevice)->UInt64?{var value:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&value)==KERN_SUCCESS ? value:nil}

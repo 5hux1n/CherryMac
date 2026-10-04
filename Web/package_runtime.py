@@ -11,8 +11,9 @@ RUNTIME_NAMES = ['index.php', 'README.md', 'start.command'] + [
 ]
 
 
-def runtime_files(root: pathlib.Path, version: str):
-    files = [root / name for name in RUNTIME_NAMES]
+def runtime_files(root: pathlib.Path, version: str, lighting_acceptance=False):
+    names = RUNTIME_NAMES + (['lighting-test.php', 'assets/lighting-test-entry.js', 'assets/lighting-test-plan.js'] if lighting_acceptance else [])
+    files = [root / name for name in names]
     paths = {path.resolve() for path in files}
     for path in files:
         text = path.read_text()

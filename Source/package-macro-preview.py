@@ -9,16 +9,17 @@ import sys
 import tempfile
 import zipfile
 
-if len(sys.argv) != 2:
-    raise SystemExit('Usage: python3 Source/package-macro-preview.py OUTPUT_DIRECTORY')
+if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--lighting-acceptance'):
+    raise SystemExit('Usage: python3 Source/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
+lighting_acceptance = len(sys.argv) == 3
 root = pathlib.Path(__file__).resolve().parent
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-app = output_dir / 'CherryMacMacroPreview.app'
+app = output_dir / ('CherryMacLightingAcceptance.app' if lighting_acceptance else 'CherryMacMacroPreview.app')
 info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-if info['CFBundleIdentifier'] != 'local.cherrymac.macro-product-preview':
+if info['CFBundleIdentifier'] != ('local.cherrymac.lighting-acceptance' if lighting_acceptance else 'local.cherrymac.macro-product-preview'):
     raise SystemExit('Refusing to package a different app identity')
 version = info['CFBundleShortVersionString']
-prefix = f'CherryMac-MacroPreview-{version}'
+prefix = f'CherryMac-LightingAcceptance-{version}' if lighting_acceptance else f'CherryMac-MacroPreview-{version}'
 output = output_dir / (prefix + '.zip')
 checksum_file = output.with_suffix('.zip.sha256')
 manifest_file = output_dir / 'manifest.json'
@@ -32,11 +33,18 @@ if info.get('CherryMacSourceCommit') != commit:
 architectures = subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True).split()
 files = {path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
          for path in sorted(app.rglob('*')) if path.is_file()}
-manifest = {'format': 'CherryMacNativeMacroPreview', 'version': version,
+symbols = subprocess.check_output(['nm', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True)
+if ('LightingAcceptanceWindow' in symbols) != lighting_acceptance:
+    raise SystemExit('App lighting acceptance compilation differs from requested package type')
+manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance else 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
             'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True}, 'files': files}
+if lighting_acceptance:
+    manifest['features']['lightingResearchAcceptance'] = True
+    manifest['features']['lightingResearchWrite'] = True
+    manifest['compileFlags'] = ['CHERRY_MACRO_PRODUCT', 'CHERRY_LIGHTING_TEST']
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
 
@@ -63,6 +71,23 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效页的“核对灯效写入”仅生成本地计划，不写入键盘。自定义配色核对和 Windows 草稿导出需要明确的官方原始 RGB；直接读回或来源未知的颜色不能直接转为原始配色。内置灯效遇到读回颜色时保留官方模板里的逐键配色。
 
 灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
+'''.encode()
+if lighting_acceptance:
+    readme = '''# CherryMac 灯效独立验收版
+
+适用于 Apple Silicon、macOS 13 及更新版本，使用临时签名，尚未 Apple 公证。此包用于统一灯效实机验收，尚未验证灯光外观与断电保存，不是完整成品。
+
+解压得到 CherryMacLightingAcceptance.app，退出其他 CherryMac 和键盘配置程序后打开。本次打包不打开 App、不申请权限、不访问键盘；请按统一验收安排使用。它使用独立名称和标识，不替换已安装的宏预览 App。
+
+在主配置窗口读取键盘，导入本型号 Windows 官方 JSON，编辑并保存灯效，再点击“核对灯效写入”导出计划。自定义配色需要官方原始 RGB 和读取到的 LED 映射；内置模式允许没有逐键表。
+
+灯效页点击“独立灯效验收”，按顺序载入计划、读取 USB、确认写入。打开窗口与载入文件不连接设备；读取按钮才打开接口，可能需要输入监控权限。写入前自动保存完整备份和逐包日志，失败中止，可停止后续发送；已发送报告不能撤回。当前只允许已核对固件、配置 0 和完整开始／结束布局。测试期间主配置窗口暂停其他操作，Mac 文本服务停止，保持验收窗口前台并松开全部按键。
+
+写入读回通过后观察灯光，拔 USB、关闭键盘电源并点击关电确认；至少等待 15 秒后开电、接 USB，重新读取并核对。记录包含操作系统拔插事件和用户关电确认，不能证明电池实际断电或灯光外观正确。
+
+最后点击恢复原始数据并核对键盘功能。恢复先重新读取并检查范围，拒绝未知变化；原始颜色不会再次缩放，不自动重试。超时或断开后可在新会话载入保存的独立恢复记录再核对，恢复中断保留原计划。关闭验收窗口后主页面需要重新读取配置。
+
+“打开本轮资料”显示完整备份、读取快照、操作日志、power-events.json 和独立恢复记录，无需手工抓包。记录可在网页端导入核对，文件不上传。不含官方 EXE、用户配置或既有真机日志。普通配置页仍不提供灯效写入，只有独立研究窗口提供实际发送入口。
 '''.encode()
 with tempfile.TemporaryDirectory(prefix='.native-preview-', dir=output_dir) as temp:
     package = pathlib.Path(temp) / prefix
