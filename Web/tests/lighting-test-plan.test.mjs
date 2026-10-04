@@ -74,3 +74,20 @@ const completedSession={};await recordLightingOperation(completedSession,'retent
 await recordLightingOperation(completedSession,'write',async()=>{}, {persist:async()=>{},cancelled:()=>true});assert.equal(completedSession.operations[1].status,'cancelled');
 await recordLightingOperation(failedSession,'download',async()=>{ran=true;},{persist:failedSave});assert.equal(ran,true);assert.equal(failedSession.operations.at(-1).status,'complete');
 console.log('PASS: before-first-report failure diagnostics, storage failure blocks callbacks, terminal failure/cancel/success and offline export remains available; memory only');
+
+// A slow log store must not postpone the click-bound picker, and a failed
+// store must still prevent opening the selected device.
+const {selectLightingDevice}=await import('../assets/lighting-test-plan.js');
+const order=[];let releaseSave;
+const pendingSave=new Promise(resolve=>{releaseSave=resolve;});
+const selected={id:'fake-device'};
+const selectedSession={};
+const selectionTask=selectLightingDevice((kind,body)=>recordLightingOperation(selectedSession,kind,body,{persist:async()=>{order.push('save');await pendingSave;}}),()=>{order.push('picker');return Promise.resolve([selected]);},async device=>{assert.equal(device,selected);order.push('open');});
+assert.deepEqual(order,['picker','save']);releaseSave();await selectionTask;
+assert.deepEqual(order,['picker','save','open','save']);
+let opened=false;
+await assert.rejects(selectLightingDevice((kind,body)=>recordLightingOperation({},kind,body,{persist:failedSave}),()=>Promise.reject(new Error('picker rejected')),async()=>{opened=true;}),/disk unavailable/);
+assert.equal(opened,false);
+await assert.rejects(selectLightingDevice((kind,body)=>recordLightingOperation({},kind,body,{persist:async()=>{}}),()=>{throw new Error('picker unavailable');},async()=>{opened=true;}),/picker unavailable/);
+assert.equal(opened,false);
+console.log('PASS: immediate permission picker, logged access ordering, rejected picker consumed when storage fails; memory only');

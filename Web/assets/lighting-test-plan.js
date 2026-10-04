@@ -60,3 +60,18 @@ export async function recordLightingOperation(session,kind,body,{persist,now=()=
   }
   if(failure)throw failure;return value;
 }
+
+// Invoke the permission picker in the original click task. Selecting a device
+// opens no transport; the logged operation still gates all device access.
+// Capture rejection immediately, even if logging fails before consuming it.
+export function selectLightingDevice(operation,requestDevice,body){
+  let selection;
+  try{selection=Promise.resolve(requestDevice()).then(devices=>({devices}),error=>({error}));}
+  catch(error){selection=Promise.resolve({error});}
+  return operation('connect-read',async()=>{
+    const result=await selection;
+    if(result.error)throw result.error;
+    requireThat(result.devices?.length===1,'未选择键盘。');
+    return body(result.devices[0]);
+  });
+}

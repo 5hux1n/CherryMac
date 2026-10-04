@@ -1,7 +1,7 @@
 import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.6.0';
 import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v=0.6.0';
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
-import {recordLightingOperation,lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
+import {selectLightingDevice,recordLightingOperation,lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
 import {takeLightingHandoff,saveBackup,download} from './storage.js?v=0.6.0';
 import {saveLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
@@ -63,16 +63,18 @@ if(handoffID!==null){
   history.replaceState(null,'',location.pathname);
   void operation('load-editor-plan',async()=>loadInput(takeLightingHandoff(sessionStorage,handoffID),'编辑区计划'));
 }
-$('lighting-connect').onclick=()=>operation('connect-read',async()=>{
-  const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘。');
+$('lighting-connect').onclick=()=>{
+  if(busy)return;
+  return selectLightingDevice(operation,()=>navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]}),async device=>{
   if(hid)await hid.close();
-  const session=new CherryHID(devices[0],{lightingResearch:true,log:async entry=>{
+  const session=new CherryHID(device,{lightingResearch:true,log:async entry=>{
     await saveLog(entry);artifacts.usb.push(clone(entry));
   },progress:message=>status(message),onDisconnect:error=>{gate.invalidate();status(error.message,true);render();}});
   hid=session;await session.open();const snapshot=await session.snapshot();
   artifacts.observations.push({kind:'connectedRead',at:new Date().toISOString(),snapshot:clone(snapshot)});await persistSession();
   status('完整配置已读取。连接与读取没有写入；请核对计划后用鼠标选择操作。');
-});
+  });
+};
 $('lighting-close').onclick=()=>operation('close-session',async()=>{await hid.close();status('会话已关闭。此操作不代表 USB 已拔出或键盘已断电。');});
 navigator.hid?.addEventListener('disconnect',event=>{
   if(event.device!==hid?.device)return;
