@@ -41,6 +41,8 @@ try{
   }
   const invalid=clone(builtin);invalid.snapshot.parameters[3]=5;assert.throws(()=>exportProfileWindowsLightingDraft(invalid,root));assert.throws(()=>reviewLightingDraft(invalid,baseline));
   await writeFile(input,JSON.stringify(saved));const roundtrip=join(dir,'roundtrip.json');execFileSync(binary,['--portable-profile-roundtrip',input,roundtrip],{stdio:'pipe'});assert.equal(JSON.parse(await readFile(roundtrip,'utf8')).lightingColorEncoding,'officialRGB');
+  const sourceFile=join(dir,'export-template.json');await writeFile(sourceFile,JSON.stringify(root));
+  for(const protectedPath of [input,sourceFile]){const protectedBytes=await readFile(protectedPath);assert.throws(()=>execFileSync(binary,['--export-lighting-draft',input,sourceFile,protectedPath],{stdio:'pipe'}));assert.deepEqual(await readFile(protectedPath),protectedBytes);}
   const before=await readFile(input);assert.throws(()=>execFileSync(binary,['--review-lighting-draft',input,base,input],{stdio:'pipe'}));assert.deepEqual(await readFile(input),before);
   console.log('PASS: native/Web draft parity, single brightness conversion, key/macro isolation, profile export parity, stored RGB template preservation, palette provenance, legacy rejection and input preservation; no HID');
 }finally{await rm(dir,{recursive:true,force:true});}
