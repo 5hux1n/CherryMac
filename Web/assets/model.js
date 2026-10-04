@@ -493,6 +493,32 @@ export function reviewLightingRestoreProgress(recovery,current){
   requireThat(matchedWritePrefixes.length>0,'配置不是本次恢复的完整分块前缀，停止覆盖。');
   return {format:'CherryMacLightingRestoreProgress',version:1,hardwareReady:false,matchedWritePrefixes,configurationMatchesOriginal:lightingConfigurationEqual(current,recovery.sourceRecord.original)};
 }
+export function assessLightingRestoreAttempt(attempt){
+  requireThat(attempt?.format==='CherryMacLightingRestoreAttempt'&&attempt.version===1&&attempt.hardwareReady===false&&typeof attempt.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(attempt.operationID)&&typeof attempt.failure==='string'&&new TextEncoder().encode(attempt.failure).length<=4096,'恢复执行记录格式无效。');
+  const initial=reviewLightingRestoreProgress(attempt.recovery,attempt.started),packets=initial.configurationMatchesOriginal?[]:lightingRestoreReports(attempt.recovery),traceReview=reviewLightingReportTrace(packets,attempt.trace);
+  let configurationMatchesOriginal=false,recoveryStatus='unavailable';
+  if(attempt.current!=null){validateSnapshot(attempt.current,true);configurationMatchesOriginal=lightingConfigurationEqual(attempt.current,attempt.recovery.sourceRecord.original);try{reviewLightingRestoreProgress(attempt.recovery,attempt.current);recoveryStatus=configurationMatchesOriginal?'unchanged':'available';}catch{recoveryStatus='unrecognized';}}
+  const status=attempt.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':!configurationMatchesOriginal?'readbackMismatch':initial.configurationMatchesOriginal?'alreadyMatched':'readbackMatched';
+  return {format:'CherryMacLightingRestoreAssessment',version:1,hardwareReady:false,traceReview,configurationMatchesOriginal,status,recoveryStatus};
+}
+export async function executeLightingRestore(recovery,{source,operationID=globalThis.crypto.randomUUID(),assertCurrent,cancelled,read,backup,persist,clock,wait,exchange}){
+  recovery=clone(recovery);lightingRestoreReports(recovery);
+  const check=async()=>{await assertCurrent();requireThat(!cancelled(),'灯效恢复已取消。');};
+  await check();const started=await read(),initial=reviewLightingRestoreProgress(recovery,started),reports=initial.configurationMatchesOriginal?[]:lightingRestoreReports(recovery);
+  const attempt={format:'CherryMacLightingRestoreAttempt',version:1,hardwareReady:false,operationID,recovery,started:clone(started),trace:{format:'CherryMacLightingTrace',version:1,source,entries:[]},current:null,failure:''};
+  assessLightingRestoreAttempt(attempt);await backup(clone(started));await persist(clone(attempt));await check();
+  const verified=await read();validateSnapshot(verified,true);requireThat(lightingConfigurationEqual(started,verified),'恢复备份后配置发生变化，未发送。');
+  for(const report of reports){
+    try{await check();await wait(report.delayMilliseconds);await check();}catch(error){attempt.failure=String(error.message||error);break;}
+    const entry={request:clone(report.request),sentMilliseconds:clock()};attempt.trace.entries.push(entry);assessLightingRestoreAttempt(attempt);await persist(clone(attempt));
+    try{await check();entry.reply=Array.from(await exchange(clone(report.request)));}catch(error){entry.error=String(error.message||error);}
+    entry.endedMilliseconds=clock();const assessment=assessLightingRestoreAttempt(attempt);await persist(clone(attempt));
+    if(assessment.traceReview.status==='failed'){attempt.failure=entry.error||'恢复回复校验失败。';break;}
+  }
+  try{await assertCurrent();const current=await read();validateSnapshot(current,true);await assertCurrent();attempt.current=clone(current);}catch(error){if(!attempt.failure)attempt.failure=String(error.message||error);}
+  if(!attempt.failure&&!assessLightingRestoreAttempt(attempt).configurationMatchesOriginal)attempt.failure='恢复读回与原始备份不一致。';
+  assessLightingRestoreAttempt(attempt);await persist(clone(attempt));return attempt;
+}
 export function assessLightingRecoveryRecord(record){
   requireThat(record?.format==='CherryMacLightingRecoveryRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'灯效恢复记录格式无效。');
   const target=officialLightingReadbackTarget(record.plan,record.original),traceReview=reviewOfficialLightingTrace(record.plan,record.trace);
@@ -532,8 +558,8 @@ export async function executeOfficialLightingCandidate(plan,baseline,{source,ope
   return {trace,current,readbackMatches:!failure&&matches,failure,record:final};
 }
 // Pure trace review. Accepted replies are not proof of flash persistence.
-export function reviewOfficialLightingTrace(plan,trace){
-  const expected=officialLightingReports(plan);
+export function reviewOfficialLightingTrace(plan,trace){return reviewLightingReportTrace(officialLightingReports(plan),trace);}
+function reviewLightingReportTrace(expected,trace){
   requireThat(trace?.format==='CherryMacLightingTrace'&&trace.version===1&&['simulation','usbTrace'].includes(trace.source)&&Array.isArray(trace.entries)&&trace.entries.length<=expected.length,'灯效日志格式无效。');
   let acceptedReports=0,previousEnd=0,status='incomplete',failedIndex=-1;
   trace.entries.forEach((entry,index)=>{

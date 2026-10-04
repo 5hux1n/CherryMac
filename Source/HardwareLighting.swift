@@ -7,14 +7,23 @@ extension HardwareWindowController {
         guard panel.runModal() == .OK,let url=panel.url else{return}
         do{
             let data=try Data(contentsOf:url);guard data.count<=3_000_000 else{throw HardwareError(message:"灯效恢复记录超过 3 MB。")}
-            let record=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data),review=try record.assess()
-            let state=["readbackMatched":"读回符合目标","readbackMismatch":"读回未符合目标","incomplete":"日志未完成","failed":"操作失败"][review.status] ?? review.status
-            let recovery=["available":"可分析原始数据恢复","unchanged":"配置与备份一致","unrecognized":"存在无法识别的配置变化","unavailable":"没有完整读回"][review.recoveryStatus] ?? review.recoveryStatus
-            message.stringValue="\(state)；\(recovery)。有效回复 \(review.traceReview.acceptedReports)/\(review.traceReview.expectedReports)。未修改键盘。"
+            let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+            let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+            let stateCode:String,recoveryCode:String,traceReview:WindowsProfile.OfficialLightingPlan.TraceReview,encoded:Data
+            if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
+                let attempt=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data),review=try attempt.assess()
+                stateCode=review.status;recoveryCode=review.recoveryStatus;traceReview=review.traceReview;encoded=try encoder.encode(review)
+            } else {
+                let record=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data),review=try record.assess()
+                stateCode=review.status;recoveryCode=review.recoveryStatus;traceReview=review.traceReview;encoded=try encoder.encode(review)
+            }
+            let state=["alreadyMatched":"恢复前已与备份一致","readbackMatched":"读回符合目标","readbackMismatch":"读回未符合目标","incomplete":"日志未完成","failed":"操作失败"][stateCode] ?? stateCode
+            let recovery=["available":"可分析原始数据恢复","unchanged":"配置与备份一致","unrecognized":"存在无法识别的配置变化","unavailable":"没有完整读回"][recoveryCode] ?? recoveryCode
+            message.stringValue="\(state)；\(recovery)。有效回复 \(traceReview.acceptedReports)/\(traceReview.expectedReports)。未修改键盘。"
             let save=NSSavePanel();save.nameFieldStringValue="CherryMac-灯效恢复分析.json"
             if save.runModal() == .OK,let output=save.url {
                 guard output.standardizedFileURL.resolvingSymlinksInPath() != url.standardizedFileURL.resolvingSymlinksInPath() else{throw HardwareError(message:"分析文件不能覆盖原始恢复记录。")}
-                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:output,options:.atomic)
+                try encoded.write(to:output,options:.atomic)
             }
         }catch{message.stringValue=error.localizedDescription}
     }

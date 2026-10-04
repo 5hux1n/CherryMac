@@ -480,6 +480,52 @@ enum WindowsProfile {
                 var matchedWritePrefixes:[Int];var configurationMatchesOriginal:Bool
             }
             struct Assessment:Codable{var reports:[Report];var progress:Progress}
+            struct Attempt:Codable {
+                var format="CherryMacLightingRestoreAttempt";var version=1;var hardwareReady=false
+                var operationID:String;var recovery:RecoveryPlan;var started:HardwareSnapshot
+                var trace:Trace;var current:HardwareSnapshot?;var failure:String
+                struct Assessment:Codable{var format="CherryMacLightingRestoreAssessment";var version=1;var hardwareReady=false;var traceReview:TraceReview;var configurationMatchesOriginal:Bool;var status:String;var recoveryStatus:String}
+                func assess()throws->Assessment {
+                    let allowed=CharacterSet(charactersIn:"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+                    guard format=="CherryMacLightingRestoreAttempt",version==1,!hardwareReady,!operationID.isEmpty,operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}),failure.utf8.count<=4096 else{throw HardwareError(message:"恢复执行记录格式无效。")}
+                    let initial=try recovery.reviewProgress(started),packets=initial.configurationMatchesOriginal ? []:try recovery.reports()
+                    let review=try OfficialLightingPlan.reviewTrace(trace,expected:packets)
+                    var matches=false,recoveryStatus="unavailable"
+                    if let current {
+                        try current.validate();guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"恢复记录读回不完整。")}
+                        matches=recovery.sourceRecord.plan.sameConfiguration(current,recovery.sourceRecord.original)
+                        do{_ = try recovery.reviewProgress(current);recoveryStatus=matches ? "unchanged":"available"}catch{recoveryStatus="unrecognized"}
+                    }
+                    let status = !failure.isEmpty || review.status=="failed" ? "failed":review.status != "complete" ? "incomplete":!matches ? "readbackMismatch":initial.configurationMatchesOriginal ? "alreadyMatched":"readbackMatched"
+                    return .init(traceReview:review,configurationMatchesOriginal:matches,status:status,recoveryStatus:recoveryStatus)
+                }
+            }
+            func execute(source:String,operationID:String=UUID().uuidString,assertCurrent:()throws->Void,cancelled:()->Bool,
+                         read:()throws->HardwareSnapshot,backup:(HardwareSnapshot)throws->Void,persist:(Attempt)throws->Void,
+                         clock:()->Int,wait:(Int)throws->Void,exchange:([UInt8])throws->[UInt8])throws->Attempt {
+                func check()throws{try assertCurrent();guard !cancelled() else{throw HardwareError(message:"灯效恢复已取消。")}}
+                _ = try reports();try check();let fresh=try read(),progress=try reviewProgress(fresh)
+                let packets=progress.configurationMatchesOriginal ? []:try reports()
+                var attempt=Attempt(operationID:operationID,recovery:self,started:fresh,trace:.init(format:"CherryMacLightingTrace",version:1,source:source,entries:[]),failure:"")
+                _ = try attempt.assess();try backup(fresh);try persist(attempt);try check()
+                let verified=try read();try verified.validate()
+                guard sourceRecord.plan.sameConfiguration(fresh,verified) else{throw HardwareError(message:"恢复备份后配置发生变化，未发送。")}
+                for packet in packets {
+                    do{try check();try wait(packet.delayMilliseconds);try check()}catch{attempt.failure=error.localizedDescription;break}
+                    let index=attempt.trace.entries.count
+                    attempt.trace.entries.append(.init(request:packet.request,sentMilliseconds:clock()))
+                    _ = try attempt.assess();try persist(attempt)
+                    do{try check();attempt.trace.entries[index].reply=try exchange(packet.request)}catch{attempt.trace.entries[index].error=error.localizedDescription}
+                    attempt.trace.entries[index].endedMilliseconds=clock()
+                    let review=try attempt.assess();try persist(attempt)
+                    if review.traceReview.status=="failed"{attempt.failure=attempt.trace.entries[index].error ?? "恢复回复校验失败。";break}
+                }
+                do{try assertCurrent();let value=try read();try value.validate();try assertCurrent();attempt.current=value}
+                catch{if attempt.failure.isEmpty{attempt.failure=error.localizedDescription}}
+                let finalReview=try attempt.assess()
+                if attempt.failure.isEmpty && !finalReview.configurationMatchesOriginal{attempt.failure="恢复读回与原始备份不一致。"}
+                _ = try attempt.assess();try persist(attempt);return attempt
+            }
             func reviewProgress(_ current:HardwareSnapshot)throws->Progress {
                 let packets=try reports();try current.validate()
                 guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"恢复读回缺少完整配置。")}
@@ -541,7 +587,7 @@ enum WindowsProfile {
                 return .init(operationID:operationID,status:status,traceReview:review,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedWritePrefixes:prefixes,restoreData:restore)
             }
         }
-        // Injectable transport only; deliberately not connected to CherryUSB.
+        // Injectable transport: this method installs no USB authorization itself.
         // The caller must exclusively own one current device/session. Durable
         // pending records precede exchange, so a crash cannot hide an attempt.
         func executeCandidate(baseline:HardwareSnapshot,source:String,operationID:String=UUID().uuidString,
@@ -583,8 +629,8 @@ enum WindowsProfile {
         }
         // A trace is untrusted evidence, never permission to send or proof of
         // persistence. A pending/failed exchange must be the final entry.
-        func reviewTrace(_ trace:Trace)throws->TraceReview {
-            let expected=try reports()
+        func reviewTrace(_ trace:Trace)throws->TraceReview {try Self.reviewTrace(trace,expected:reports())}
+        private static func reviewTrace(_ trace:Trace,expected:[Report])throws->TraceReview {
             guard trace.format=="CherryMacLightingTrace",trace.version==1,["simulation","usbTrace"].contains(trace.source),trace.entries.count<=expected.count else{throw HardwareError(message:"灯效日志格式无效。")}
             var accepted=0,previousEnd=0,status="incomplete",failedIndex = -1
             for (index,entry) in trace.entries.enumerated(){

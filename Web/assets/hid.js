@@ -1,4 +1,4 @@
-import {executeOfficialLightingCandidate,captureLightingMapping,requireThat,validateSnapshot} from './model.js?v=0.6.0';
+import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingMapping,requireThat,validateSnapshot} from './model.js?v=0.6.0';
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,LightingCandidateAuthorization,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -30,7 +30,10 @@ export class CherryHID{
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
     // Both entries use the same immutable packet authorization. Product
     // preview is explicitly gated by the PHP deployment environment.
-    if(lightingResearch===true)this.applyLightingCandidate=(plan,baseline,options)=>this.#applyLightingCandidate(plan,baseline,options);
+    if(lightingResearch===true){
+      this.applyLightingCandidate=(plan,baseline,options)=>this.#applyLightingCandidate(plan,baseline,options);
+      this.restoreLightingCandidate=(recovery,options)=>this.#restoreLightingCandidate(recovery,options);
+    }
     if(textProduct===true)this.withHostTextAuthorization=(authorization,gate,body)=>this.#withHostTextAuthorization(authorization,gate,body);
     if(macroResearch===true||macroProduct===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
     this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
@@ -76,6 +79,17 @@ export class CherryHID{
     requireThat(authorization instanceof MacroWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&gate&&typeof gate.check==='function'&&typeof body==='function','宏事务授权或释放检查无效。');
     this.#macroAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#macroAuthorization=null;this.#writeGate=null;}
+  }
+  async #restoreLightingCandidate(recovery,{gate,cancelled,backup,persist}){
+    recovery=structuredClone(recovery);const authorization=LightingCandidateAuthorization.recovery(recovery),device=this.device;
+    requireThat(gate&&typeof gate.check==='function'&&[cancelled,backup,persist].every(fn=>typeof fn==='function'),'恢复需要释放确认、取消、备份与日志接口。');
+    await this.tail;
+    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization,'恢复需要可用的新 USB 会话。');
+    this.stopHostTextObservation();this.#lightingAuthorization=authorization;this.#writeGate=gate;
+    try{return await executeLightingRestore(recovery,{source:'usbTrace',cancelled,backup,persist,
+      assertCurrent:()=>requireThat(!this.dead&&device.opened&&this.device===device&&this.#lightingAuthorization===authorization,'恢复 USB 会话已经改变。'),
+      read:()=>this.snapshot(),clock:()=>Math.floor(performance.now()),wait:sleep,exchange:request=>this.exchange(request)});
+    }finally{this.#lightingAuthorization=null;this.#writeGate=null;}
   }
   async #applyLightingCandidate(plan,baseline,{gate,cancelled,backup,persist}){
     plan=structuredClone(plan);baseline=structuredClone(baseline);

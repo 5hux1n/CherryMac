@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -302,8 +302,8 @@ $('lighting-record-file').onchange=()=>act(async()=>{
   const input=$('lighting-record-file'),file=input.files[0];input.value='';if(!file)return;
   $('lighting-record-result').textContent='';
   requireThat(file.size<=3_000_000,'灯效恢复记录超过 3 MB。');
-  const review=assessLightingRecoveryRecord(JSON.parse(await file.text()));
-  const state={readbackMatched:'读回符合目标',readbackMismatch:'读回未符合目标',incomplete:'日志未完成',failed:'操作失败'}[review.status];
+  const record=JSON.parse(await file.text()),review=record.format==='CherryMacLightingRestoreAttempt'?assessLightingRestoreAttempt(record):assessLightingRecoveryRecord(record);
+  const state={alreadyMatched:'恢复前已与备份一致',readbackMatched:'读回符合目标',readbackMismatch:'读回未符合目标',incomplete:'日志未完成',failed:'操作失败'}[review.status];
   const recovery={available:'可分析原始数据恢复',unchanged:'配置与备份一致',unrecognized:'存在无法识别的配置变化',unavailable:'没有完整读回'}[review.recoveryStatus];
   $('lighting-record-result').textContent=`${state}；${recovery}。有效回复 ${review.traceReview.acceptedReports}/${review.traceReview.expectedReports}。未修改键盘。`;
   download(review,'CherryMac-lighting-recovery-assessment.json');status('已完成本地分析并下载结果，未修改编辑区或键盘。');

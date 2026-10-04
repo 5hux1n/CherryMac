@@ -1283,6 +1283,24 @@ func runLightingExecutionChecks(){
     precondition(scope.complete)
     let poisoned=try! Plan.CandidateAuthorization(plan:plan,baseline:baseline)
     var bad=packets[0].request;bad[7]=255;mustReject{try poisoned.accept(bad,request:packets[0].request)};mustReject{try poisoned.validate(packets[0].request)}
+    let before=try! plan.expectedReadback(from:baseline)
+    let source=Plan.RecoveryRecord(operationID:"restore-check",plan:plan,original:baseline,trace:.init(format:"CherryMacLightingTrace",version:1,source:"simulation",entries:[]),failure:"timeout")
+    let recovery=Plan.RecoveryPlan(sourceRecord:source,before:before)
+    for mode in ["success","timeout","alreadyMatched","unknown"]{
+        var state=mode=="alreadyMatched" ? baseline:before,now=0,sends=0,backedUp=false
+        if mode=="unknown"{state.keymap[0] ^= 1}
+        do{
+            let attempt=try recovery.execute(source:"simulation",assertCurrent:{},cancelled:{false},read:{state},backup:{_ in backedUp=true},persist:{_ in},clock:{now},wait:{now+=$0},exchange:{request in
+                precondition(backedUp);sends+=1;now+=1
+                if request[3]==6{let offset=Int(request[5])+Int(request[6])*256;state.parameters.replaceSubrange(offset..<offset+Int(request[4]),with:request[8..<8+Int(request[4])])}
+                if mode=="timeout"{throw HardwareError(message:"timeout")};return request
+            })
+            let assessment=try attempt.assess()
+            if mode=="success"{precondition(assessment.status=="readbackMatched" && state==baseline && sends==5)}
+            else if mode=="alreadyMatched"{precondition(assessment.status=="alreadyMatched" && sends==0)}
+            else{precondition(mode=="timeout" && assessment.status=="failed" && sends==1)}
+        }catch{precondition(mode=="unknown" && sends==0)}
+    }
     for mode in ["success","backupFailure","pendingLogFailure","lostReply","badReply","cancel","stale","unrelatedChange"]{
         var state=baseline,now=0,sends=0,reads=0,backedUp=false,records:[Plan.RecoveryRecord]=[]
         do{
@@ -1306,7 +1324,7 @@ func runLightingExecutionChecks(){
             precondition(result.current != nil)
         }catch{precondition(["backupFailure","pendingLogFailure","stale"].contains(mode) && sends==0)}
     }
-    print("PASS: 8 lighting execution scenarios; injected memory transport, no HID")
+    print("PASS: 8 lighting and 4 restore scenarios plus ordered scopes; injected memory transport, no HID")
 }
 
 func runLightingDraftExportChecks(){

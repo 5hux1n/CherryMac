@@ -1269,8 +1269,15 @@ if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-recovery-rec
         let input=URL(fileURLWithPath:args[index+1]).standardizedFileURL.resolvingSymlinksInPath(),output=URL(fileURLWithPath:args[index+2]).standardizedFileURL.resolvingSymlinksInPath()
         guard input != output else{throw HardwareError(message:"分析不能覆盖原始恢复记录。")}
         let data=try Data(contentsOf:input);guard data.count<=3_000_000 else{throw HardwareError(message:"灯效恢复记录超过 3 MB。")}
-        let record=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data),review=try record.assess()
-        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:output,options:.atomic)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+        let encoded:Data
+        if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
+            let attempt=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data);encoded=try encoder.encode(attempt.assess())
+        } else {
+            let record=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data);encoded=try encoder.encode(record.assess())
+        }
+        try encoded.write(to:output,options:.atomic)
         print("PASS: lighting recovery record assessed offline; no HID");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }

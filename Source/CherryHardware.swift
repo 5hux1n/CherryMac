@@ -267,6 +267,19 @@ final class CherryUSB: CherryHardwareAccess {
     private var lightingAuthorization:WindowsProfile.OfficialLightingPlan.CandidateAuthorization?
     private var macroAuthorization:MacroWriteAuthorization?
     #if CHERRY_LIGHTING_TEST
+    func restoreLightingCandidate(_ recovery:WindowsProfile.OfficialLightingPlan.RecoveryPlan,
+                                  cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
+                                  persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
+        guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
+        let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(recovery:recovery)
+        stopHostTextObservation();lightingAuthorization=authorization;defer{lightingAuthorization=nil}
+        return try recovery.execute(source:"usbTrace",assertCurrent:{
+            guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"恢复 USB 会话已经改变。")}
+        },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
+        clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
+            if milliseconds>0{Thread.sleep(forTimeInterval:Double(milliseconds)/1000)}
+        },exchange:{try self.exchange($0)})
+    }
     // Only an explicitly compiled research entry can install this scope.
     func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,

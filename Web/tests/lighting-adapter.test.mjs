@@ -1,9 +1,13 @@
 // In-memory EventTarget only. No navigator.hid, browser or USB device access.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {execFileSync} from 'node:child_process';
 import {CherryHID} from '../assets/hid.js';
 import {LightingCandidateAuthorization} from '../assets/safety.js';
-import {clone,officialLightingReports} from '../assets/model.js';
+import {assessLightingRestoreAttempt,officialLightingReadbackTarget,clone,officialLightingReports} from '../assets/model.js';
 import {demoSnapshot} from '../assets/layout.js';
 const plan=()=>({format:'CherryMacOfficialLightingPlan',version:2,hardwareReady:false,bank:0,transportSelector:0,chunkCapacity:56,stages:[{name:'parameters',beginRequired:true,beginCommand:1,finishCommand:2,finishDelayMilliseconds:10,writes:[{command:6,offset:0,flag:85,data:[0,1,2,3,1,0,7,123,249]},{command:6,offset:21,flag:85,data:[1]},{command:6,offset:24,flag:85,data:[1]}]}]});
 class MemoryDevice extends EventTarget{
@@ -36,4 +40,22 @@ test('lighting report scope rejects altered, reordered, repeated and failed-sess
   for(const report of reports){scope.validate(report.request);scope.accept(report.request,report.request);assert.throws(()=>scope.validate(report.request));}
   assert.equal(scope.complete,true);
   const poisoned=new LightingCandidateAuthorization(plan(),demoSnapshot()),bad=clone(reports[0].request);bad[7]=255;assert.throws(()=>poisoned.accept(bad,reports[0].request));assert.throws(()=>poisoned.validate(reports[0].request));
+});
+test('reconnected research recovery resumes raw restore after a second lost reply and skips an already restored configuration',async()=>{
+  const original=demoSnapshot(),p=plan(),before=officialLightingReadbackTarget(p,original);
+  const sourceRecord={format:'CherryMacLightingRecoveryRecord',version:1,hardwareReady:false,operationID:'recovery-test',plan:p,original,trace:{format:'CherryMacLightingTrace',version:1,source:'simulation',entries:[]},current:null,failure:'timeout'};
+  const recovery={format:'CherryMacLightingRestorePlan',version:1,hardwareReady:false,sourceRecord,before},saved=[];
+  const options={gate:{check:()=>{}},cancelled:()=>false,backup:()=>{},persist:record=>saved.push(clone(record))};
+  const failedDevice=new MemoryDevice('timeout');failedDevice.s=clone(before);const failedHID=new CherryHID(failedDevice,{lightingResearch:true,timeout:30});await failedHID.open();
+  const failed=await failedHID.restoreLightingCandidate(recovery,options);assert.equal(assessLightingRestoreAttempt(failed).status,'failed');assert.equal(failedHID.dead,true);assert.equal(failedDevice.requests.filter(r=>[1,2,6].includes(r[3])).length,2);
+  const resumedDevice=new MemoryDevice('success');resumedDevice.s=clone(failedDevice.s);const resumedHID=new CherryHID(resumedDevice,{lightingResearch:true});await resumedHID.open();
+  const restored=await resumedHID.restoreLightingCandidate(recovery,options);assert.equal(assessLightingRestoreAttempt(restored).status,'readbackMatched');assert.deepEqual(resumedDevice.s,original);assert.deepEqual(saved.at(-1),restored);
+  const noChange=await resumedHID.restoreLightingCandidate(recovery,options);assert.equal(assessLightingRestoreAttempt(noChange).status,'alreadyMatched');assert.equal(noChange.trace.entries.length,0);
+  if(process.env.CHERRY_LIGHTING_MODEL_BINARY){
+    const dir=await mkdtemp(join(tmpdir(),'cherrymac-restore-attempt-'));
+    try{for(const attempt of [failed,restored,noChange]){const input=join(dir,'attempt.json'),output=join(dir,'assessment.json');await writeFile(input,JSON.stringify(attempt));execFileSync(process.env.CHERRY_LIGHTING_MODEL_BINARY,['--review-lighting-recovery-record',input,output],{stdio:'pipe'});assert.deepEqual(JSON.parse(await readFile(output,'utf8')),assessLightingRestoreAttempt(attempt));}}
+    finally{await rm(dir,{recursive:true,force:true});}
+  }
+  resumedDevice.s.keymap[0]^=1;const count=resumedDevice.requests.filter(r=>[1,2,6].includes(r[3])).length;await assert.rejects(()=>resumedHID.restoreLightingCandidate(recovery,options));assert.equal(resumedDevice.requests.filter(r=>[1,2,6].includes(r[3])).length,count);
+  await resumedHID.close();await failedHID.close();
 });
