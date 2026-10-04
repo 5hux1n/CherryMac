@@ -51,6 +51,15 @@ struct LightingMappingContext:Codable,Equatable {
         guard deviceInfo.count==34,deviceInfo==snapshot.deviceInfo else{throw HardwareError(message:"灯光映射与当前固件信息不一致，请重新读取。")}
         return try WindowsProfile.resolveLightingSlots(factoryKeymap:factoryKeymap,ledIndices:ledIndices)
     }
+    static func capture(snapshot:HardwareSnapshot,read:(UInt8,Int)throws->[UInt8])throws->LightingMappingContext {
+        try snapshot.validate()
+        let factory=try read(7,378),indices=try read(0x1B,126)
+        let verifiedFactory=try read(7,378),verifiedIndices=try read(0x1B,126)
+        let info=try read(3,34),keymap=try read(8,378)
+        guard factory==verifiedFactory,indices==verifiedIndices,info==snapshot.deviceInfo,keymap==snapshot.keymap else{throw HardwareError(message:"读取灯光映射期间配置发生变化，请重新读取。")}
+        let result=LightingMappingContext(deviceInfo:info,factoryKeymap:factory,ledIndices:indices)
+        _ = try result.slots(for:snapshot);return result
+    }
     func colorSlot(_ keySlot:Int)->Int? {
         guard (0..<126).contains(keySlot),ledIndices.count==126,ledIndices[keySlot]<126 else{return nil}
         return Int(ledIndices[keySlot])

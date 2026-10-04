@@ -1307,6 +1307,16 @@ func runLightingDraftExportChecks(){
         }
     }
     let mapping=LightingMappingContext(deviceInfo:snapshot.deviceInfo,factoryKeymap:factory,ledIndices:(0..<126).map{UInt8(($0+7)%126)})
+    var captureReads:[(UInt8,Int)]=[]
+    let captured=try! LightingMappingContext.capture(snapshot:snapshot){command,count in
+        captureReads.append((command,count))
+        switch command{case 7:return mapping.factoryKeymap;case 0x1B:return mapping.ledIndices;case 3:return snapshot.deviceInfo;default:return snapshot.keymap}
+    }
+    precondition(captured==mapping && captureReads.map{$0.0}==[7,0x1B,7,0x1B,3,8])
+    for failedCall in [3,4,5,6]{var call=0;rejected{_ = try LightingMappingContext.capture(snapshot:snapshot){command,count in
+        call+=1;var data:[UInt8];switch command{case 7:data=mapping.factoryKeymap;case 0x1B:data=mapping.ledIndices;case 3:data=snapshot.deviceInfo;default:data=snapshot.keymap}
+        if call==failedCall{data[0] ^= 1};return data
+    }}}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
     let mappedProfile=try! WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:mapping).profile
     precondition(try! HardwareProfile.decode(mappedProfile.encoded()).lightingMapping==mapping)

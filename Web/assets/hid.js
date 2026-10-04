@@ -1,4 +1,4 @@
-import {requireThat,validateSnapshot} from './model.js?v=0.6.0';
+import {captureLightingMapping,requireThat,validateSnapshot} from './model.js?v=0.6.0';
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -142,6 +142,12 @@ export class CherryHID{
     const before=await this.read(8,378),factory=await this.read(7,378),after=await this.read(8,378);
     requireThat(!this.dead&&this.device.opened&&generation===this.#configurationGeneration&&before.every((v,i)=>v===after[i]&&v===baseline.keymap[i]),'准备文本安装期间键位或读取基线发生变化，请重新读取。');
     return prepareHostTextInstallation(root,factory,baseline);
+  }
+  async readLightingMapping(snapshot){
+    requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
+    const device=this.device,generation=this.#configurationGeneration;
+    const mapping=await captureLightingMapping(snapshot,(command,count)=>this.read(command,count));
+    requireThat(!this.dead&&this.device===device&&device.opened&&generation===this.#configurationGeneration,'读取灯光映射期间 USB 会话或配置发生变化，请重新读取。');return mapping;
   }
   async snapshot(){
     this.progress('读取设备信息');const deviceInfo=await this.read(3,34);

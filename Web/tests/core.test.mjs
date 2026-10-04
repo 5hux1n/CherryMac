@@ -1,3 +1,4 @@
+import {backupConfiguration} from '../assets/storage.js';
 import {mergeMacroRecoveryDraft} from '../assets/product-macros.js';
 import {macroTestPlan,testMacro,testPlayback} from '../assets/macro-test-flow.js';
 import {waitForFiniteMacroCompletion,applyMacroWithStop} from '../assets/macro-session.js';
@@ -7,7 +8,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -26,7 +27,7 @@ class FakeDevice extends EventTarget{
   async open(){this.opened=true;}async close(){this.opened=false;}
   async sendReport(id,data){
     assert.equal(id,4);assert.equal(data.byteLength,63);const b=new Uint8Array([id,...data]);this.requests.push(b);const cmd=b[3],o=b[5]|b[6]<<8,n=b[4],r=b.slice();
-    const field=({3:'deviceInfo',5:'parameters',7:'factoryKeymap',8:'keymap',10:'colors',20:'macroData'})[cmd];
+    const field=({3:'deviceInfo',5:'parameters',7:'factoryKeymap',8:'keymap',10:'colors',20:'macroData',27:'ledIndices'})[cmd];
     if(field){r.set(this.s[field].slice(o,o+n),8);if(this.wrongReadback&&this.writeCount>=7&&cmd===8){r[8]^=1;this.wrongReadback=false;}}
     else{
       this.writeCount++;const target=({9:'keymap',11:'colors',21:'macroData',6:'parameters'})[cmd];assert.ok(target,`Unexpected command ${cmd}`);
@@ -973,4 +974,33 @@ test('portable lighting metadata drives mapped official colors and painting',()=
   const wrong=clone(mapping);wrong.deviceInfo[0]^=1;
   assert.throws(()=>importWindows(root,snapshot,{lightingMapping:wrong}),/固件/);assert.throws(()=>exportWindowsLightingDraft(snapshot,root,wrong),/固件/);
   const bad=clone(raw);bad.lightingMapping=wrong;assert.throws(()=>parseProfile(JSON.stringify(bad)),/固件/);
+});
+
+
+test('lighting metadata capture verifies table stability and baseline without writes',async()=>{
+  const snapshot=demoSnapshot(),factory=FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),indices=Array.from({length:126},(_,i)=>(i+7)%126);
+  const calls=[],arrays={7:factory,27:indices,3:snapshot.deviceInfo,8:snapshot.keymap};
+  const mapping=await captureLightingMapping(snapshot,async(cmd,count)=>{calls.push([cmd,count]);return clone(arrays[cmd]);});
+  assert.deepEqual(calls,[[7,378],[27,126],[7,378],[27,126],[3,34],[8,378]]);
+  assert.deepEqual(mapping,{deviceInfo:snapshot.deviceInfo,factoryKeymap:factory,ledIndices:indices});
+  for(const failedCall of [3,4,5,6]){let call=0;await assert.rejects(captureLightingMapping(snapshot,async cmd=>{const data=clone(arrays[cmd]);if(++call===failedCall)data[0]^=1;return data;}),/发生变化/);}
+  const invalid=clone(indices);invalid[0]=254;await assert.rejects(captureLightingMapping(snapshot,async cmd=>clone(cmd===27?invalid:arrays[cmd])),/索引/);
+});
+
+test('HID lighting metadata reads only known queries and rejects disconnect',async()=>{
+  const snapshot=demoSnapshot();snapshot.factoryKeymap=FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]);snapshot.ledIndices=Array.from({length:126},(_,i)=>(i+7)%126);
+  const {hid,device}=await transport(snapshot);const mapping=await hid.readLightingMapping(snapshot);
+  assert.deepEqual(mapping.ledIndices,snapshot.ledIndices);assert.equal(device.writeCount,0);
+  assert(device.requests.every(b=>[3,7,8,27].includes(b[3])&&b[7]===0&&b.slice(8).every(v=>v===0)));
+  const read=hid.read.bind(hid);let n=0;hid.read=async(...args)=>{const data=await read(...args);if(++n===6)await device.close();return data;};
+  await assert.rejects(hid.readLightingMapping(snapshot),/会话/);await hid.close();
+});
+
+
+test('backup downloads and imports retain lighting mapping while old snapshots stay compatible',()=>{
+  const snapshot=demoSnapshot(),lightingMapping={deviceInfo:clone(snapshot.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)};
+  const record={snapshot,lightingMapping},before=clone(record),backup=backupConfiguration(record),profile=parseProfile(JSON.stringify(backup));
+  assert.deepEqual(profile.lightingMapping,lightingMapping);assert.deepEqual(profile.snapshot,snapshot);assert.deepEqual(record,before);
+  assert.deepEqual(backupConfiguration({snapshot}),snapshot);
+  const bad=clone(record);bad.lightingMapping.deviceInfo[0]^=1;assert.throws(()=>backupConfiguration(bad),/固件/);
 });

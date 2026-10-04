@@ -193,6 +193,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var selected = "calculator"
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
+    var baselineLightingMapping:LightingMappingContext?
     var baselineWasRead=false
     var macroRecordingSheet:MacroRecordingSheet?
     var macroStepEditor:MacroStepEditor?
@@ -738,21 +739,27 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     func readKeyboardThen(_ completion:((HardwareSnapshot)->Void)? = nil){
         guard !busy else{return};suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在读取 USB 配置…"
         queue.async{[weak self] in
-            let result:Result<HardwareSnapshot,Error>=Result{
+            let result:Result<(snapshot:HardwareSnapshot,mapping:LightingMappingContext?,mappingError:String?),Error>=Result{
                 let usb=try CherryUSB(),log=try? HardwareOperationLog(kind:"read")
                 usb.trace=log?.trace
-                do{let result=try usb.completeSnapshot();log?.record("phase","complete");return result}
+                do{let snapshot=try usb.completeSnapshot();log?.record("phase","lighting-mapping-read")
+                    var mapping:LightingMappingContext?,mappingError:String?
+                    do{mapping=try usb.readLightingMapping(snapshot)}catch{mappingError=error.localizedDescription;log?.record("lighting-mapping-error",error.localizedDescription)}
+                    log?.record("phase","complete");return (snapshot,mapping,mappingError)}
                 catch{log?.record("phase","failed");log?.record("error",error.localizedDescription);throw error}
             }
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
-                switch result{case .success(let snapshot):
+                switch result{case .success(let read):
+                    let snapshot=read.snapshot
                     self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                    self.profile?.lightingMapping=read.mapping;self.baselineLightingMapping=read.mapping
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
                         let url=self.backupDirectory.appendingPathComponent("USB-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
                         try self.profile!.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
+                    if let error=read.mappingError{self.message.stringValue += "\n灯光映射未取得：\(error) 按键和宏读取结果已保留。"}
                     self.loadSelectedAssignment();self.update()
                     completion?(snapshot)
                 case .failure(let error):self.baseline=nil;self.connection.stringValue="USB 读取失败";self.message.stringValue=error.localizedDescription;self.update()}
@@ -1151,7 +1158,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
     func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
-    @objc func discardDraft(){guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
+    @objc func discardDraft(){guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);profile?.lightingMapping=baselineLightingMapping;message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     func windowWillClose(_ notification:Notification){
         #if CHERRY_MACRO_PRODUCT
         stopHostTextBridge()

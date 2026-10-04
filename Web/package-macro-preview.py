@@ -13,7 +13,7 @@ root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) != 2:
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.13.0'
+version = '0.14.0'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')
@@ -59,7 +59,7 @@ contents['README.md'] = '''# CherryMac 网页宏与文本预览
 
 “配置与备份”可导入同时包含键位、宏和文本的 Windows 官方 JSON：键位和宏进入编辑区，文本定义进入文本页；文本键保留当前键盘功能，需要单独安装。“导出 Windows 配置草稿”会合并宏编辑和文本页当前定义，保留共享引用与附加字段。同一键若同时有普通键位修改和文本绑定，会提示先解除冲突；导入、导出都不会自动写入。
 
-Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度、方向、全局颜色和逐键配色；需先导入包含完整颜色表的官方模板。隐藏颜色和未核对字段保留原值，设备设置继续沿用模板。导出文件不会向键盘写入。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
+Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度、方向、全局颜色和逐键配色；需先导入包含完整颜色表的官方模板。隐藏颜色和未核对字段保留原值，设备设置继续沿用模板。导出文件不会向键盘写入。点击读取时会另外核对默认键位和 LED 索引；取得的映射随普通配置和读取备份保存，用于预览与配色。映射读取失败时保留按键、宏读取结果并显示原因。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
 
 宏名称和录制偏好保存在当前浏览器的本地数据库；读取时只沿用与实际宏库和绑定相符的资料。建议导出配置、下载备份。清理网站数据或更换浏览器／网址会失去本地资料。“设备与诊断”可导出日志，文件不会上传。
 
@@ -67,7 +67,7 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 '''.encode()
 manifest = {'format': 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingWrite': False},
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 prefix = f'CherryMac-Web-MacroPreview-{version}/'

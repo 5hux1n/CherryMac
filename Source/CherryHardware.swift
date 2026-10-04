@@ -264,6 +264,12 @@ struct ReleasedKeyGate {
 // A session owns one run loop and is used only on the hardware serial queue.
 // The keyboard remains available to macOS; no seize/detach options are used.
 final class CherryUSB: CherryHardwareAccess {
+    func readLightingMapping(_ snapshot:HardwareSnapshot)throws->LightingMappingContext {
+        guard !transportDead,device != nil else{throw HardwareError(message:"USB 会话已失效，请重新连接。")}
+        let result=try LightingMappingContext.capture(snapshot:snapshot){command,count in try self.read(command,count:count)}
+        guard !transportDead,device != nil else{throw HardwareError(message:"读取灯光映射期间 USB 已断开。")};return result
+    }
+
     private var manager: IOHIDManager?
     private var device: IOHIDDevice?
     private let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)

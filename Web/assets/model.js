@@ -18,6 +18,13 @@ export function resolveLightingSlots(factoryKeymap,ledIndices){
     return null;
   });
 }
+export async function captureLightingMapping(snapshot,read){
+  validateSnapshot(snapshot);requireThat(typeof read==='function','灯光映射缺少读取接口。');snapshot=clone(snapshot);
+  const factory=clone(await read(7,378)),indices=clone(await read(0x1b,126));
+  const verifiedFactory=await read(7,378),verifiedIndices=await read(0x1b,126),info=await read(3,34),keymap=await read(8,378);
+  requireThat(equal(factory,verifiedFactory)&&equal(indices,verifiedIndices)&&equal(info,snapshot.deviceInfo)&&equal(keymap,snapshot.keymap),'读取灯光映射期间配置发生变化，请重新读取。');
+  const result={deviceInfo:clone(info),factoryKeymap:factory,ledIndices:indices};lightingMappingSlots(result,snapshot);return result;
+}
 export function lightingMappingSlots(mapping,snapshot){
   requireThat(mapping&&typeof mapping==='object'&&!Array.isArray(mapping)&&bytes(mapping.deviceInfo,34)&&equal(mapping.deviceInfo,snapshot.deviceInfo),'灯光映射与当前固件信息不一致，请重新读取。');
   return resolveLightingSlots(mapping.factoryKeymap,mapping.ledIndices);
