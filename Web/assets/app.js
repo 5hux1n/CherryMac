@@ -8,12 +8,15 @@ import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.
 import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
 import {HostTextStore,mergeHostTextDraft,textRecordPlan} from './product-text.js?v=0.6.0';
 import {saveLog,listLogs} from './logs.js?v=0.6.0';
+import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let recorder=null,recordingPreference=null,macroAbort=null;
 let profile=fromHardware(demo),baseline=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
 const textProduct=document.documentElement.dataset.textProduct==='true',textStore=new HostTextStore();
+let bridgeStorage=null;if(textProduct)try{bridgeStorage=sessionStorage;}catch{}
+const textBridge=textProduct?new HostTextBridge({storage:bridgeStorage}):null;
 let textRoot=null,textPending=null,textFactory=null;
 if(textProduct)pages.text=['文本快捷输入','安装触发键，管理主机文本配置。'];
 const supported=isSecureContext&&'hid' in navigator;
@@ -46,7 +49,7 @@ function render(){
   if(recorder)recordControls(true);
   $('cancel-macro-operation').hidden=!macroAbort;$('cancel-macro-operation').disabled=!macroAbort||macroAbort.signal.aborted;
   $('recover-macro').hidden=!macroProduct;$('recover-macro').disabled=busy||!online;
-  if(textProduct){$('text-edit-open').disabled=busy||!!recorder||!online||!textRoot;$('text-edit-value').disabled=busy;if(textFactory){const trigger=resolveHostTextTrigger(0x700+Number($('text-edit-key').value),textFactory),item=trigger&&textRoot.KeyList[trigger.logicalIndex];$('text-edit-remove').disabled=busy||item?.ActionLink!==1||textRoot.ActionInfo[item.ActionLinkIndex]?.ActionType!==3;}$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
+  if(textProduct){$('text-bridge-pair').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-code').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-start').disabled=busy||!!recorder||!textBridge.paired||!textRoot;$('text-bridge-stop').disabled=busy||!textBridge.paired;$('text-bridge-unpair').disabled=busy||!textBridge.paired;$('text-bridge-state').textContent=textBridge.paired?(textBridge.resuming?'Mac 联动待核对 · 配置操作前确认服务状态':`Mac 已联动 · ${({stopped:'服务已停止',preparing:'正在准备服务',observing:'文本服务已开启',failed:'服务发生错误'})[textBridge.state]}`):'尚未连接 Mac 服务';$('text-edit-open').disabled=busy||!!recorder||!online||!textRoot;$('text-edit-value').disabled=busy;if(textFactory){const trigger=resolveHostTextTrigger(0x700+Number($('text-edit-key').value),textFactory),item=trigger&&textRoot.KeyList[trigger.logicalIndex];$('text-edit-remove').disabled=busy||item?.ActionLink!==1||textRoot.ActionInfo[item.ActionLinkIndex]?.ActionType!==3;}$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
   if(busy)$('connect').disabled=true;
   renderMacroSummary();
 }
@@ -92,7 +95,7 @@ function renderSteps(){
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];if(p.macroModes)delete p.macroModes[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
 async function read(){const s=await hid.snapshot();baseline=clone(s);profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status('已读取完整配置并保存本地备份。编辑后点击“写入按键”才会修改键盘。');}
-async function operation(fn){if(busy)return;hid?.stopHostTextObservation();if(textProduct){textFactory=null;$('text-editor').hidden=true;}busy=true;render();try{await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
+async function operation(fn){if(busy)return;hid?.stopHostTextObservation();if(textProduct){textFactory=null;$('text-editor').hidden=true;}busy=true;render();try{if(textBridge?.paired)await textBridge.suspend();await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
 function switchTab(next){if(!pages[next])return;tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
 for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
@@ -172,9 +175,9 @@ let recordDestination=null;
 const recordClock=()=>Math.floor(performance.now());
 function recordControls(active){for(const id of ['record-start','record-timing','record-delay','record-placement','record-mouse','macro-list','macro-name','save-macro','assign-macro','unassign-macro','delete-macro','copy-macro','clear-macros','macro-insert','add-pair'])$(id).disabled=active;$('record-stop').disabled=!active;$('record-cancel').disabled=!active;document.querySelectorAll('#macro-steps button,#macro-steps input,#macro-steps select').forEach(node=>node.disabled=active);}
 function cancelRecording(reason){if(!recorder)return;recorder.cancel();recorder=null;recordDestination=null;recordControls(false);render();$('record-status').textContent=reason;$('record-area').textContent='录制已取消 · 原步骤保留';}
-$('record-start').onclick=event=>{if(busy||profile.macroBindings==null)return;if(event.ctrlKey||event.shiftKey||event.altKey||event.metaKey){$('record-status').textContent='请先松开修饰键，再开始录制。';return;}try{const place=$('record-placement').value;let insertionIndex=null;
+$('record-start').onclick=event=>{if(busy||profile.macroBindings==null)return;if(event.ctrlKey||event.shiftKey||event.altKey||event.metaKey){$('record-status').textContent='请先松开修饰键，再开始录制。';return;}void operation(async()=>{try{const place=$('record-placement').value;let insertionIndex=null;
   if(place==='append')insertionIndex=steps.length;else if(place!=='replace'){const [where,raw]=place.split(':');requireThat(['before','after'].includes(where),'请选择有效录制位置。');insertionIndex=Number(raw);requireThat(Number.isInteger(insertionIndex)&&insertionIndex>=0&&insertionIndex<steps.length,'请选择有效录制位置。');if(where==='after')insertionIndex++;}
-  recordDestination={originalSteps:clone(steps),insertionIndex};recorder=new MacroRecorder({timing:$('record-timing').value,fixedMilliseconds:Number($('record-delay').value),startedMilliseconds:recordClock()});recordControls(true);$('record-area').textContent='正在录制 · 完全松开按键后点击停止';$('record-status').textContent='0 个事件';$('record-area').focus();}catch(error){$('record-status').textContent=error.message;}};
+  recordDestination={originalSteps:clone(steps),insertionIndex};recorder=new MacroRecorder({timing:$('record-timing').value,fixedMilliseconds:Number($('record-delay').value),startedMilliseconds:recordClock()});recordControls(true);$('record-area').textContent='正在录制 · 完全松开按键后点击停止';$('record-status').textContent='0 个事件';$('record-area').focus();}catch(error){$('record-status').textContent=error.message;}});};
 $('record-stop').onclick=()=>{if(!recorder)return;try{const m=recorder.finish($('macro-name').value.trim()||'录制宏',recordDestination??{});steps=clone(m.steps);recordingPreference=m.recordingDelay;recorder=null;recordDestination=null;recordControls(false);renderSteps();render();$('record-status').textContent=`已采用 ${steps.length} 个事件，点击保存宏保留。`;}catch(error){$('record-status').textContent=error.message;$('record-area').focus();}};
 $('record-cancel').onclick=()=>cancelRecording('录制已取消，原步骤保留。');
 function observeRecording(event,usage,pressed,kind){if(!recorder||!event.isTrusted)return;try{recorder.observe({usage,pressed,kind,milliseconds:recordClock(),repeatEvent:!!event.repeat});$('record-status').textContent=`${recorder.steps.length} 个事件 · ${recorder.held.size} 个尚未松开`;}catch(error){cancelRecording(error.message);}}
@@ -190,6 +193,16 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
 
 
 if(textProduct){
+  $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
+  $('text-bridge-start').onclick=()=>operation(async()=>{
+    requireThat(textRoot&&equal(textRoot,await textStore.active()),'请先安装此文本配置，或载入已保存配置；未写入的编辑不能启用。');
+    if(hid&&!hid.dead)await hid.close();hid=null;
+    await textBridge.activate(clone(textRoot));status('已交给 Mac 准备文本服务。切换目标应用后使用；服务状态会自动更新。');
+  });
+  $('text-bridge-stop').onclick=()=>operation(async()=>status('Mac 文本服务已停止，配置接口已释放。'));
+  $('text-bridge-unpair').onclick=()=>operation(async()=>{await textBridge.unpair();status('Mac 联动已解除，文本服务保持关闭。');});
+  setInterval(()=>{if(textBridge.paired&&!busy)void textBridge.status().then(()=>render(),error=>{status(error.message,true);render();});},10000);
+  window.addEventListener('pagehide',()=>{if(textBridge.paired)void textBridge.request('unpair',{},textBridge.token,{keepalive:true}).catch(()=>{});});
   $('text-history-import').onclick=()=>{if(!busy)$('text-history-file').click();};
   $('text-history-file').onchange=()=>{
     const file=$('text-history-file').files[0];$('text-history-file').value='';if(!file)return;

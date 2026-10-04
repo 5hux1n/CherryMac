@@ -1182,6 +1182,11 @@ if CommandLine.arguments.contains("--calculator-key-test"){
 }
 #endif
 #if CHERRY_MACRO_PRODUCT
+if let index=CommandLine.arguments.firstIndex(of:"--host-text-bridge-server-fixture"),CommandLine.arguments.count==index+2 {
+    Task{@MainActor in do{let server=try makeHostTextBridgeFixture(URL(fileURLWithPath:CommandLine.arguments[index+1]));while true{try await Task.sleep(nanoseconds:10_000_000_000);withExtendedLifetime(server){}}}catch{fputs("\(error.localizedDescription)\n",stderr);exit(1)}}
+    RunLoop.main.run();exit(1)
+}
+if CommandLine.arguments.contains("--host-text-bridge-self-test"){Task{@MainActor in runHostTextBridgeChecks();exit(0)};RunLoop.main.run();exit(1)}
 if let index=CommandLine.arguments.firstIndex(of:"--host-text-archive-roundtrip") {
     func roundtripTextArchive()throws {
         guard CommandLine.arguments.count==index+3 else{throw HardwareError(message:"需要输入与输出文件路径。")}

@@ -203,6 +203,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var hostTextJSON:Data?
     let hostTextStore=HostTextConfigurationStore()
     var hostTextEditor:HostTextEditor?
+    var hostTextBridge:HostTextBridgeHTTP?
+    var hostTextBridgeSession:HostTextBridgeSession?
+    var hostTextBridgeTimer:Timer?
+    var hostTextBridgeOwnsText=false
     let hostTextFile=NSTextField(wrappingLabelWithString:"尚未选择文本配置")
     let hostTextState=NSTextField(wrappingLabelWithString:"文本服务未开启")
     lazy var hostTextService=HostTextService(onState:{[weak self] state in self?.hostTextState.stringValue=state})
@@ -349,6 +353,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("恢复最近文本安装…",#selector(restoreHostText)),238,393,240,32,in:text)
         place(button("导出文本恢复记录…",#selector(exportHostTextRecords)),8,438,230,32,in:text)
         place(button("导入文本恢复记录…",#selector(importHostTextRecords)),258,438,230,32,in:text)
+        place(button("网页联动…",#selector(configureHostTextBridge)),528,438,180,32,in:text)
         place(label("开发预览，尚待统一真机验收。安装会显示改动并保存完整备份；只修改文本绑定键。恢复后服务保持关闭。读取、写入或重连后需重新启用服务。恢复记录可在 Mac 与网页间导入；已有不同记录保留。",12),8,490,850,62,in:text)
         #endif
         place(message,192,787,925,58)
@@ -364,6 +369,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     func suspendHostTextForConfiguration(){
         #if CHERRY_MACRO_PRODUCT
+        hostTextBridgeOwnsText=false
         let shutdown=hostTextService.stopForConfiguration()
         hostTextState.stringValue="文本服务已停止"
         queue.async{shutdown()}
@@ -413,6 +419,68 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard response == .OK,let url=panel.url else{return}
             do{try data.write(to:url,options:.atomic);self?.hostTextState.stringValue="文本配置已导出。"}catch{self?.hostTextState.stringValue=error.localizedDescription}
         }
+    }
+    @objc func configureHostTextBridge(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        let alert=NSAlert();alert.messageText="网页联动"
+        alert.informativeText="开启后，把联动码粘贴到网页文本页。网页可启停 Mac 文本服务；配置操作前会等待服务释放 USB。联动码仅本次运行有效。"
+        let enabled=hostTextBridge != nil
+        alert.addButton(withTitle:enabled ? "复制联动码":"开启并复制联动码");alert.addButton(withTitle:enabled ? "关闭联动":"取消")
+        if enabled{alert.addButton(withTitle:"取消")}
+        alert.beginSheetModal(for:window){[weak self] response in
+            guard let self else{return}
+            if response == .alertFirstButtonReturn {
+                do{
+                    if self.hostTextBridge==nil {
+                        let session=HostTextBridgeSession();self.hostTextBridgeSession=session
+                        let server=try HostTextBridgeHTTP(handler:{[weak self] request,completion in Task{@MainActor [weak self] in
+                            guard let self else{completion(HostTextBridgeRequest.response(status:503));return};self.handleHostTextBridge(request,completion:completion)
+                        }},onState:{[weak self] ready,message in Task{@MainActor [weak self] in
+                            guard let self,self.hostTextBridgeSession===session else{return}
+                            if !ready{self.stopHostTextBridge()};self.hostTextState.stringValue=message
+                        }})
+                        self.hostTextBridge=server;server.start()
+                        let timer=Timer(timeInterval:15,repeats:true){[weak self] _ in Task{@MainActor [weak self] in self?.expireHostTextBridge()}}
+                        self.hostTextBridgeTimer=timer;RunLoop.main.add(timer,forMode:.common)
+                    }
+                    guard let token=self.hostTextBridgeSession?.token else{return}
+                    NSPasteboard.general.clearContents();NSPasteboard.general.setString(token,forType:.string)
+                    self.hostTextState.stringValue="联动码已复制，请在网页文本页粘贴并连接。"
+                }catch{self.stopHostTextBridge();self.hostTextState.stringValue=error.localizedDescription}
+            }else if enabled,response == .alertSecondButtonReturn{self.stopHostTextBridge();self.hostTextState.stringValue="网页联动已关闭，文本服务已停止。"}
+        }
+    }
+    func stopHostTextBridge(){hostTextBridgeTimer?.invalidate();hostTextBridgeTimer=nil;hostTextBridge?.stop();hostTextBridge=nil;hostTextBridgeSession=nil;suspendHostTextForConfiguration()}
+    func expireHostTextBridge(){
+        if hostTextBridgeSession?.expired()==true{hostTextBridgeSession?.reset();if hostTextBridgeOwnsText{suspendHostTextForConfiguration();hostTextState.stringValue="网页联动已超时，文本服务已停止。"}}
+    }
+    func hostTextBridgeStatus()->[String:Any]{["format":"CherryMacHostTextBridge","version":1,"state":hostTextBridgeOwnsText ? hostTextService.stage.rawValue:"stopped","busy":busy]}
+    func handleHostTextBridge(_ request:HostTextBridgeRequest,completion:@escaping HostTextBridgeHTTP.Completion){
+        let origin=request.headers["origin"]
+        do{
+            expireHostTextBridge()
+            guard let session=hostTextBridgeSession,hostTextBridge != nil else{throw HardwareError(message:"网页联动未开启。")}
+            try session.authorize(request)
+            guard let body=try JSONSerialization.jsonObject(with:request.body) as? [String:Any] else{throw HardwareError(message:"联动请求需要 JSON 对象。")}
+            switch request.path {
+            case "/v1/pair","/v1/status":completion(HostTextBridgeRequest.response(origin:origin,object:hostTextBridgeStatus()))
+            case "/v1/activate":
+                guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,window?.isVisible==true,let root=body["officialJSON"] as? [String:Any] else{throw HardwareError(message:"请先完成客户端当前操作，并保持配置窗口开启。")}
+                let data=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys]);try loadHostTextProfile(data,name:"网页文本配置")
+                try hostTextService.start(officialJSON:data);hostTextBridgeOwnsText=true
+                completion(HostTextBridgeRequest.response(origin:origin,object:hostTextBridgeStatus()))
+            case "/v1/suspend","/v1/unpair":
+                guard !busy,macroRecordingSheet==nil else{throw HardwareError(message:"客户端正在处理配置，请稍后重试。")}
+                suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+                queue.async{[weak self] in DispatchQueue.main.async{[weak self] in
+                    guard let self else{completion(HostTextBridgeRequest.response(status:503,origin:origin));return}
+                    self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                    if request.path=="/v1/unpair"{session.reset()}
+                    completion(HostTextBridgeRequest.response(origin:origin,object:self.hostTextBridgeStatus()))
+                }}
+            default:throw HardwareError(message:"联动请求不支持。")
+            }
+        }catch{completion(HostTextBridgeRequest.response(status:409,origin:origin,object:["error":error.localizedDescription]))}
     }
     @objc func exportHostTextRecords(){
         guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
@@ -1046,7 +1114,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
     func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
     @objc func discardDraft(){guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
-    func windowWillClose(_ notification:Notification){suspendHostTextForConfiguration()}
+    func windowWillClose(_ notification:Notification){
+        #if CHERRY_MACRO_PRODUCT
+        stopHostTextBridge()
+        #else
+        suspendHostTextForConfiguration()
+        #endif
+    }
     @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作。把目标键设为“打开系统计算器”，保存到编辑区后点击“写入键位”。"}catch{message.stringValue=error.localizedDescription}}
 }
 

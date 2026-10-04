@@ -11,7 +11,7 @@ import {promisify} from 'node:util';
 const web=fileURLToPath(new URL('../',import.meta.url));
 const socket=createServer();await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
 const server=spawn('php',['-S',`127.0.0.1:${port}`,'-t',web],{env:{...process.env,CHERRY_TEXT_PRODUCT:'1'},stdio:'ignore'});
-let browser;
+let browser,bridgeFixture,bridgeDirectory;
 try{
   const url=`http://127.0.0.1:${port}/`;
   for(let attempt=0;;attempt++){try{await fetch(url);break;}catch(error){if(attempt>50)throw error;await new Promise(resolve=>setTimeout(resolve,50));}}
@@ -88,6 +88,34 @@ try{
     const returned=await nativeImport.evaluate(async value=>{const store=new (await import('/assets/product-text.js')).HostTextStore();await store.importRecords(value);return store.exportRecords();},native);
     assert.deepEqual(returned,native);await nativeImport.close();
   }
+  if(process.env.CHERRY_TEXT_BRIDGE_NATIVE){
+    bridgeDirectory=await mkdtemp(join(tmpdir(),'CherryMacBridgeFixture-'));const file=join(bridgeDirectory,'fixture.json');
+    bridgeFixture=spawn(process.env.CHERRY_TEXT_BRIDGE_NATIVE,['--host-text-bridge-server-fixture',file],{stdio:'ignore'});
+    let token;
+    for(let attempt=0;;attempt++){
+      try{token=JSON.parse(await readFile(file,'utf8')).token;break;}catch(error){if(bridgeFixture.exitCode!==null||attempt>=100)throw new Error('Native loopback fixture did not start; no real service was contacted.');await new Promise(resolve=>setTimeout(resolve,50));}
+    }
+    const networkErrors=[];page.on('console',message=>{if(message.type()==='error')networkErrors.push(message.text());});
+    await page.locator('#text-bridge-code').fill(token);await page.locator('#text-bridge-pair').click();await page.waitForFunction(()=>document.querySelector('#text-bridge-state').textContent.includes('Mac 已联动')||(!document.querySelector('#text-bridge-pair').disabled&&document.querySelector('#status').classList.contains('error')));
+    assert.match(await page.locator('#text-bridge-state').textContent(),/Mac 已联动/,`${await page.locator('#status').textContent()} ${networkErrors.join('\n')}`);
+    assert.equal(await page.locator('#text-bridge-code').inputValue(),'');
+    await page.locator('#text-bridge-start').click();await page.waitForFunction(()=>document.querySelector('#text-bridge-state').textContent.includes('文本服务已开启'));
+    await page.locator('#tab-macros').click();await page.locator('#macro-recording summary').click();await page.locator('#record-start').click();await page.waitForFunction(()=>document.querySelector('#record-area').textContent.includes('正在录制'));
+    assert.match(await page.locator('#text-bridge-state').textContent(),/服务已停止/);await page.locator('#record-cancel').click();await page.locator('#tab-text').click();
+    await page.locator('#text-bridge-start').click();await page.waitForFunction(()=>document.querySelector('#text-bridge-state').textContent.includes('文本服务已开启'));
+    const other=await browser.newPage();await other.goto(url);await other.locator('#tab-text').click();await other.locator('#text-bridge-code').fill(token);await other.locator('#text-bridge-pair').click();
+    await other.waitForFunction(()=>document.querySelector('#status').textContent.includes('其他网页占用'));await other.close();
+    await page.reload();await page.locator('#tab-text').click();
+    assert.match(await page.locator('#text-bridge-state').textContent(),/Mac.*联动/);
+    await page.locator('#text-bridge-stop').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('配置接口已释放'));
+    await page.route('http://127.0.0.1:32247/v1/suspend',route=>route.abort());
+    await page.locator('#connect').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('配置操作已停止'));
+    assert.equal(await page.evaluate(()=>window.hidRequests),0);
+    assert.equal(await page.locator('#text-bridge-code').isDisabled(),false);
+    await page.unroute('http://127.0.0.1:32247/v1/suspend');
+    await page.locator('#text-bridge-unpair').click();await page.waitForFunction(()=>document.querySelector('#text-bridge-state').textContent.includes('尚未连接'));
+    assert.equal(await page.evaluate(()=>window.hidRequests),0);
+  }
   const editing=await browser.newPage();
   await editing.addInitScript(()=>{
     window.fakeWrites=0;
@@ -115,5 +143,5 @@ try{
   const removing=editing.waitForEvent('download');await editing.locator('#text-export').click();const cleared=JSON.parse(await readFile(await (await removing).path(),'utf8'));
   assert.equal(cleared.KeyList[17].ActionLink,0);assert.equal(cleared.KeyList[17].Assignment,cleared.KeyList[17].DefaultAssignment);
   assert.equal(await editing.evaluate(()=>window.fakeWrites),0);
-  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection, archive import and draft preservation; zero real HID requests; editor uses read-only fake transport'+(process.env.CHERRY_TEXT_NATIVE&&process.env.CHERRY_TEXT_ARCHIVE_FIXTURE?'; bidirectional native archive parity':''));
-}finally{if(browser)await browser.close();server.kill('SIGTERM');}
+  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection, archive import and draft preservation; zero real HID requests; editor uses read-only fake transport'+(process.env.CHERRY_TEXT_NATIVE&&process.env.CHERRY_TEXT_ARCHIVE_FIXTURE?'; bidirectional native archive parity':'')+(process.env.CHERRY_TEXT_BRIDGE_NATIVE?'; real loopback HTTP with mock text executor, reload and failed-stop gating':''));
+}finally{if(browser)await browser.close();server.kill('SIGTERM');if(bridgeFixture){if(bridgeFixture.exitCode===null){bridgeFixture.kill('SIGTERM');await new Promise(resolve=>bridgeFixture.once('exit',resolve));}}if(bridgeDirectory)await rm(bridgeDirectory,{recursive:true,force:true});}

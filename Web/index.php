@@ -7,7 +7,8 @@ header('Cache-Control: no-cache');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 header('Permissions-Policy: hid=(self)');
-header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+$textConnections = $textProduct ? "'self' http://127.0.0.1:32247" : "'self'";
+header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src $textConnections; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
 ?>
 <!doctype html>
 <html lang="zh-CN" data-macro-product="<?= $macroProduct ? 'true' : 'false' ?>" data-text-product="<?= $textProduct ? 'true' : 'false' ?>">
@@ -53,7 +54,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
 <p id="text-summary" class="help">尚未选择文本配置。</p><div class="form-row"><button id="text-edit-open">编辑文本绑定</button></div><fieldset id="text-editor" class="text-editor" hidden><legend>编辑文本配置</legend><div class="form-row"><label>按键<select id="text-edit-key"></select></label><label>名称<input id="text-edit-name" maxlength="160" value="文本"></label></div><label>文本<textarea id="text-edit-value" rows="6"></textarea></label><div class="form-row"><button id="text-edit-save">采用文本绑定</button><button id="text-edit-remove">解除并恢复默认</button><button id="text-edit-cancel">取消编辑</button></div><p class="help">仅修改文本配置。核对安装后才改写键盘；换行按官方文本格式保存。</p></fieldset><div id="text-bindings" class="changes"></div>
 <div class="form-row"><button id="text-install" class="primary">准备安装文本绑定</button><button id="text-restore">准备恢复最近安装</button><button id="text-history">导出文本恢复记录</button><button id="text-history-import">导入文本恢复记录</button><input id="text-history-file" type="file" accept=".json,application/json" hidden></div>
 <p class="help">只修改文本绑定键，灯效和宏区保留；写入前备份，完成后完整读回。文本内容存于当前浏览器的网站数据中，不上传到服务器。清理网站数据前请导出配置和恢复记录。</p>
-<div class="divider"></div><h3>在 Mac 应用里输入文本</h3><p class="help">浏览器不能向其他应用输入文本。Mac 服务联动尚未接入。安装后先断开网页 USB 连接，将导出的同一份文本 JSON 载入客户端“文本”页，再显式开启服务。返回网页修改配置前，先停止客户端文本服务。此预览尚待统一真机验收。</p></div>
+<div class="divider"></div><h3>在 Mac 应用里输入文本</h3><p class="help">在客户端“文本”页点击“网页联动”，开启并复制联动码，在这里粘贴并连接。安装并保存配置后，可直接启用 Mac 文本服务；网页会先断开 USB，配置操作前再等待 Mac 停止服务。此预览尚待统一真机验收。</p><div class="form-row"><label>本次联动码<input id="text-bridge-code" type="password" autocomplete="off" maxlength="64"></label><button id="text-bridge-pair">连接 Mac 服务</button></div><p id="text-bridge-state" class="help">尚未连接 Mac 服务。</p><div class="form-row"><button id="text-bridge-start">启用 Mac 文本服务</button><button id="text-bridge-stop">停止文本服务</button><button id="text-bridge-unpair">解除联动</button></div></div>
 <?php endif; ?>
 <div id="pane-device" role="tabpanel" aria-labelledby="tab-device" hidden><h2>设备与诊断</h2><p class="muted">连接状态、配置读取和问题排查。</p><div class="device-summary"><h3>MX 3.0S Pokémon Wireless</h3><p id="device-status">尚未连接键盘</p><p class="help">配置接口使用 USB 数据线及有线模式。浏览器需要 Chrome 或 Edge。</p></div><details class="advanced"><summary>当前写入范围</summary><p class="help">0.1.0 写入灯效后发生过键盘熄灯、无法使用的情况。原因尚未确认，灯效写入继续关闭。<?= $textProduct ? ($macroProduct ? '开发预览分别发送按键、宏与文本绑定；灯效草稿不随它们写入。' : '文本安装预览可分别写入普通按键和文本绑定，宏与灯效写入仍关闭。') : ($macroProduct ? '宏开发预览分别发送按键与宏；普通键、宏和灯效草稿不会混写。' : '宏写入仍关闭，当前仅开放独立按键写入。') ?>请关闭旧版页面，保留已恢复正常的配置。</p></details><div class="divider"></div><h3>排查资料</h3><p class="muted">下载本地备份、编辑区配置及操作阶段与 USB 请求、回复记录，便于对比。文件包含按键与宏内容，仅保存到你的电脑，不会自动上传。</p><button id="diagnostics">导出排查资料</button><div class="divider"></div><h3>其他设备设置</h3><p class="help">Win 锁、6 键／全键模式、回报率等官方功能正在核对协议，确认后会在此提供；当前不会改写这些设置。</p></div>
     </section>

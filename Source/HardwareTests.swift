@@ -1170,3 +1170,51 @@ private func runMacroExecutionEvidenceTests(){
     precondition(overflow.observations.count==65536 && (try! overflow.assessment(milliseconds:71000)).failure=="captureOverflow")
     print("PASS: passive macro execution evidence checks exact counts, keyboard/mouse identity, two unbounded cycles, explicit stop, final releases and quiet observation; rejects extra/mismatched events, clock regression and invalid stop (no hardware I/O)")
 }
+
+#if CHERRY_MACRO_PRODUCT
+@MainActor func runHostTextBridgeChecks(){
+    func raw(_ path:String="/v1/pair",token:String="invalid",client:String=UUID().uuidString,origin:String="http://127.0.0.1:8768",extra:String="",body:String="{}")->Data{
+        Data("POST \(path) HTTP/1.1\r\nHost: 127.0.0.1:32247\r\nOrigin: \(origin)\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nX-CherryMac-Token: \(token)\r\nX-CherryMac-Client: \(client)\r\n\(extra)\r\n\(body)".utf8)
+    }
+    let session=HostTextBridgeSession(),client=UUID().uuidString,bytes=raw(token:session.token,client:client)
+    precondition((try! HostTextBridgeRequest.parse(bytes.dropLast()))==nil)
+    let pair=try! HostTextBridgeRequest.parse(bytes)!
+    try! session.authorize(pair,now:10)
+    let status=try! HostTextBridgeRequest.parse(raw("/v1/status",token:session.token,client:client))!
+    try! session.authorize(status,now:20)
+    precondition(!session.expired(now:140) && session.expired(now:141))
+    for invalid in [raw(token:"bad",client:client),raw(token:session.token),raw(token:session.token,client:client,origin:"https://other.example")]{
+        do{try session.authorize(HostTextBridgeRequest.parse(invalid)!,now:30);preconditionFailure("unauthorized bridge request accepted")}catch{}
+    }
+    precondition(session.expired(now:141))
+    for invalid in [raw(extra:"Content-Length: 2\r\n"),raw(extra:"Transfer-Encoding: chunked\r\n"),raw(origin:"http://public.example"),bytes+Data("extra".utf8)]{
+        do{_ = try HostTextBridgeRequest.parse(invalid);preconditionFailure("invalid bridge framing accepted")}catch{}
+    }
+    session.reset();do{try session.authorize(status);preconditionFailure("status must not pair a reset session")}catch{}
+    try! session.authorize(pair)
+    precondition(!HostTextBridgeRequest.validOrigin("https://example.com/path") && HostTextBridgeRequest.validOrigin("https://example.com"))
+    print("PASS: bounded bridge HTTP parsing, exact tab/origin authentication and expiry (no network listener, HID or permissions)")
+}
+
+// Only used by the isolated browser acceptance test. Commands update synthetic
+// state, never HostTextService, AX, CGEvents, files in the user's store or USB.
+@MainActor func makeHostTextBridgeFixture(_ output:URL)throws->HostTextBridgeHTTP {
+    let session=HostTextBridgeSession(),token=session.token;var stage="stopped"
+    let server=try HostTextBridgeHTTP(handler:{request,completion in Task{@MainActor in
+        do{
+            try session.authorize(request)
+            if request.path=="/v1/activate"{
+                guard let body=try JSONSerialization.jsonObject(with:request.body) as? [String:Any],let root=body["officialJSON"] as? [String:Any] else{throw HardwareError(message:"fixture JSON missing")}
+                _ = try WindowsProfile.templateRoot(JSONSerialization.data(withJSONObject:root));stage="observing"
+            }
+            if ["/v1/suspend","/v1/unpair"].contains(request.path){stage="stopped"}
+            if request.path=="/v1/unpair"{session.reset()}
+            completion(HostTextBridgeRequest.response(origin:request.headers["origin"],object:["format":"CherryMacHostTextBridge","version":1,"state":stage,"busy":false]))
+        }catch{completion(HostTextBridgeRequest.response(status:409,origin:request.headers["origin"],object:["error":error.localizedDescription]))}
+    }},onState:{ready,_ in
+        guard ready else{exit(1)}
+        do{try JSONSerialization.data(withJSONObject:["fixture":true,"token":token]).write(to:output,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:output.path)}catch{exit(1)}
+    })
+    server.start();return server
+}
+#endif
