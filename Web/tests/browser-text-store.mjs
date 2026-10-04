@@ -1,10 +1,13 @@
 // Focused IDB/page check. No device enumeration, selection or input observation.
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,execFile} from 'node:child_process';
 import {createServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {promisify} from 'node:util';
 const web=fileURLToPath(new URL('../',import.meta.url));
 const socket=createServer();await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
 const server=spawn('php',['-S',`127.0.0.1:${port}`,'-t',web],{env:{...process.env,CHERRY_TEXT_PRODUCT:'1'},stdio:'ignore'});
@@ -60,9 +63,18 @@ try{
   assert.match(await page.locator('#text-summary').textContent(),/official-text.json/);
   assert.equal(await page.evaluate(()=>window.hidRequests),0);assert.deepEqual(errors,[]);
   const archive=await page.evaluate(()=>window.textArchive),importing=await browser.newPage();
+  let portable=archive;
+  if(process.env.CHERRY_TEXT_NATIVE){
+    const directory=await mkdtemp(join(tmpdir(),'CherryMacTextParity-'));
+    try{
+      const source=join(directory,'web.json'),output=join(directory,'mac.json');await writeFile(source,JSON.stringify(archive),{mode:0o600});
+      await promisify(execFile)(process.env.CHERRY_TEXT_NATIVE,['--host-text-archive-roundtrip',source,output],{timeout:30000});
+      portable=JSON.parse(await readFile(output,'utf8'));assert.deepEqual(portable,archive);
+    }finally{await rm(directory,{recursive:true,force:true});}
+  }
   await importing.addInitScript(()=>{window.hidRequests=0;Object.defineProperty(navigator,'hid',{value:{getDevices:async()=>{window.hidRequests++;throw new Error('real HID disabled');},requestDevice:async()=>{window.hidRequests++;throw new Error('real HID disabled');}},configurable:true});});
   await importing.goto(url);await importing.locator('#tab-text').click();
-  await importing.locator('#text-history-file').setInputFiles({name:'recovery.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(archive))});
+  await importing.locator('#text-history-file').setInputFiles({name:'recovery.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(portable))});
   await importing.waitForFunction(()=>document.querySelector('#status').textContent.includes('已导入 4 条'));
   const imported=await importing.evaluate(async()=>new (await import('/assets/product-text.js')).HostTextStore().exportRecords());assert.deepEqual(imported,archive);
   assert.equal(await importing.evaluate(()=>window.hidRequests),0);assert.equal(await importing.locator('#text-restore').isDisabled(),true);
@@ -70,6 +82,12 @@ try{
   await importing.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));
   assert.deepEqual(await importing.evaluate(async()=>new (await import('/assets/product-text.js')).HostTextStore().exportRecords()),archive);
   await importing.close();
+  if(process.env.CHERRY_TEXT_ARCHIVE_FIXTURE){
+    const native=JSON.parse(await readFile(process.env.CHERRY_TEXT_ARCHIVE_FIXTURE,'utf8')),nativeImport=await browser.newPage();
+    await nativeImport.goto(url);
+    const returned=await nativeImport.evaluate(async value=>{const store=new (await import('/assets/product-text.js')).HostTextStore();await store.importRecords(value);return store.exportRecords();},native);
+    assert.deepEqual(returned,native);await nativeImport.close();
+  }
   const editing=await browser.newPage();
   await editing.addInitScript(()=>{
     window.fakeWrites=0;
@@ -97,5 +115,5 @@ try{
   const removing=editing.waitForEvent('download');await editing.locator('#text-export').click();const cleared=JSON.parse(await readFile(await (await removing).path(),'utf8'));
   assert.equal(cleared.KeyList[17].ActionLink,0);assert.equal(cleared.KeyList[17].Assignment,cleared.KeyList[17].DefaultAssignment);
   assert.equal(await editing.evaluate(()=>window.fakeWrites),0);
-  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection, archive import and draft preservation; zero real HID requests; editor uses read-only fake transport');
+  console.log('PASS: text page, real IndexedDB staging/commit/rollback, stale-tab rejection, archive import and draft preservation; zero real HID requests; editor uses read-only fake transport'+(process.env.CHERRY_TEXT_NATIVE&&process.env.CHERRY_TEXT_ARCHIVE_FIXTURE?'; bidirectional native archive parity':''));
 }finally{if(browser)await browser.close();server.kill('SIGTERM');}

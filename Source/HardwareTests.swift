@@ -672,6 +672,11 @@ func runHostTextPlanChecks(){
     do{try textStore.commit(staged);preconditionFailure("failed text stage must not commit")}catch{}
     let first=try! textStore.prepare(installation);try! textStore.commit(first)
     precondition(try! textStore.activeConfiguration()==installationData && textStore.latest()?.phase == .installed)
+    let stale=try! textStore.prepare(installation),identical=try! textStore.prepare(installation)
+    try! HostTextConfigurationStore(directory:textStore.directory).commit(identical)
+    do{try textStore.commit(stale);preconditionFailure("stale instance must not replace identical newer definition")}catch{}
+    do{try textStore.validateRestoration(stale);preconditionFailure("uncommitted identical record must not claim newer version")}catch{}
+    try! textStore.restored(identical)
     var replacementRoot=try! WindowsProfile.templateRoot(installationData)
     var replacementActions=replacementRoot["ActionInfo"] as! [[String:Any]]
     replacementActions[0]["ActionContent"]=["ActionText":"替换文本"]
@@ -683,6 +688,24 @@ func runHostTextPlanChecks(){
     do{try textStore.validateRestoration(first);preconditionFailure("restoring an older record must reject a newer host definition")}catch{}
     try! textStore.restored(second);precondition((try! textStore.activeConfiguration())==installationData)
     try! textStore.restored(first);precondition((try! textStore.activeConfiguration())==nil)
+    let archive=try! textStore.exportRecords(),importedStore=HostTextConfigurationStore(directory:logDirectory.appendingPathComponent("imported-store"))
+    if let path=ProcessInfo.processInfo.environment["CHERRY_TEXT_ARCHIVE_FIXTURE"]{try! archive.write(to:URL(fileURLWithPath:path),options:.atomic);try! FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:path)}
+    precondition(try! importedStore.importRecords(archive)==5)
+    precondition(try! importedStore.latest()?.id==second.id && importedStore.activeConfiguration()==nil)
+    precondition(try! importedStore.importRecords(archive)==5)
+    var brokenArchive=try! JSONSerialization.jsonObject(with:archive) as! [String:Any];brokenArchive["activeID"]=UUID().uuidString
+    do{_ = try importedStore.importRecords(JSONSerialization.data(withJSONObject:brokenArchive));preconditionFailure("invalid archive must not replace state")}catch{}
+    precondition(try! importedStore.exportRecords()==archive)
+    let legacyDirectory=logDirectory.appendingPathComponent("legacy-store");try! FileManager.default.createDirectory(at:legacyDirectory,withIntermediateDirectories:true)
+    var legacyFirst=first;legacyFirst.phase = .installed
+    let legacyRecord=try! JSONEncoder().encode(legacyFirst)
+    try! legacyRecord.write(to:legacyDirectory.appendingPathComponent("\(first.id).json"))
+    try! JSONEncoder().encode(first.id).write(to:legacyDirectory.appendingPathComponent("latest.json"))
+    try! JSONSerialization.data(withJSONObject:["format":"CherryMacHostTextConfiguration","version":1,"officialJSON":installationData.base64EncodedString()]).write(to:legacyDirectory.appendingPathComponent("active.json"))
+    let legacyStore=HostTextConfigurationStore(directory:legacyDirectory)
+    precondition(try! legacyStore.activeConfiguration()==installationData)
+    _ = try! legacyStore.prepare(installation)
+    precondition((try! Data(contentsOf:legacyDirectory.appendingPathComponent("\(first.id).json")))==legacyRecord)
     current.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let inactive=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
     precondition(inactive.binding(eventValue:0x766)==nil && routing.binding(eventValue:0x766)?.plan.originalText=="中😀")

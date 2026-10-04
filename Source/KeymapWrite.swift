@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // Immutable, transaction-specific permission: exact original/target blocks only.
 // Lighting, macros, firmware commands and internal/hidden keys are excluded.
@@ -256,6 +257,7 @@ struct HostTextInstallationRecord:Codable,Equatable {
     let factoryKeymap:[UInt8]
     let before:HardwareSnapshot
     let previousConfiguration:Data?
+    var previousID:String? = nil
     var phase:Phase
     func installation()throws->WindowsProfile.HostTextInstallation {
         guard format=="CherryMacHostTextInstallation",version==1,UUID(uuidString:id) != nil else{throw HardwareError(message:"文本安装记录格式无效。")}
@@ -264,72 +266,157 @@ struct HostTextInstallationRecord:Codable,Equatable {
     }
 }
 final class HostTextConfigurationStore {
-    private struct Active:Codable {var format="CherryMacHostTextConfiguration";var version=1;let officialJSON:Data}
+    private struct LegacyActive:Codable {let format:String;let version:Int;let officialJSON:Data}
+    private struct State:Codable,Equatable {
+        var active:Data? = nil
+        var activeID:String? = nil
+        var latest:String? = nil
+        var records:[HostTextInstallationRecord] = []
+    }
     let directory:URL
     init(directory:URL?=nil){self.directory=directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HostText")}
-    private var activeURL:URL{directory.appendingPathComponent("active.json")}
-    private var latestURL:URL{directory.appendingPathComponent("latest.json")}
-    private func recordURL(_ id:String)throws->URL {
-        guard UUID(uuidString:id) != nil else{throw HardwareError(message:"文本安装记录编号无效。")}
-        return directory.appendingPathComponent("\(id).json")
-    }
-    private func persist<T:Encodable>(_ value:T,to url:URL)throws {
+    private var stateURL:URL{directory.appendingPathComponent("state-v2.json")}
+    // The lock covers the complete read/compare/atomic-write, including imports.
+    // Construction does no I/O. Only explicit configuration operations enter it.
+    private func locked<T>(_ body:()throws->T)throws->T {
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
-        let data=try JSONEncoder().encode(value)
-        try data.write(to:url,options:.atomic)
-        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
-        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"文本配置保存校验失败。")}
+        let descriptor=Darwin.open(directory.appendingPathComponent(".lock").path,O_CREAT|O_RDWR|O_NOFOLLOW,0o600)
+        guard descriptor>=0 else{throw HardwareError(message:"无法打开文本配置锁。")}
+        defer{Darwin.close(descriptor)}
+        guard flock(descriptor,LOCK_EX)==0 else{throw HardwareError(message:"无法锁定文本配置。")}
+        defer{flock(descriptor,LOCK_UN)}
+        return try body()
     }
     private func read<T:Decodable>(_ type:T.Type,from url:URL)throws->T {
         let data=try Data(contentsOf:url)
-        guard data.count<=4_000_000 else{throw HardwareError(message:"文本配置记录过大。")}
+        guard data.count<=16_000_000 else{throw HardwareError(message:"文本配置记录过大。")}
         do{return try JSONDecoder().decode(type,from:data)}catch{throw HardwareError(message:"文本配置记录无法解析。")}
     }
-    func activeConfiguration()throws->Data? {
-        guard FileManager.default.fileExists(atPath:activeURL.path) else{return nil}
-        let active=try read(Active.self,from:activeURL)
-        guard active.format=="CherryMacHostTextConfiguration",active.version==1 else{throw HardwareError(message:"已保存文本配置格式无效。")}
-        _ = try WindowsProfile.templateRoot(active.officialJSON)
-        return active.officialJSON
+    private func sameDefinition(_ first:Data?,_ second:Data?)throws->Bool {
+        guard let first,let second else{return first==nil && second==nil}
+        return try NSDictionary(dictionary:WindowsProfile.templateRoot(first)).isEqual(to:WindowsProfile.templateRoot(second))
     }
+    private func validate(_ state:State)throws {
+        guard state.records.count<=128 else{throw HardwareError(message:"文本安装历史超过容量。")}
+        var seen:[String:HostTextInstallationRecord]=[:]
+        for record in state.records {
+            _ = try record.installation()
+            guard seen[record.id]==nil,record.createdAt.timeIntervalSince1970.isFinite else{throw HardwareError(message:"文本恢复记录编号重复或日期无效。")}
+            if let previous=record.previousID {
+                guard let ancestor=seen[previous],try sameDefinition(ancestor.officialJSON,record.previousConfiguration) else{throw HardwareError(message:"文本恢复记录的先前版本不完整。")}
+            }else{guard record.previousConfiguration==nil else{throw HardwareError(message:"文本恢复记录缺少先前版本编号。")}}
+            seen[record.id]=record
+        }
+        guard state.latest.map({seen[$0] != nil}) ?? state.records.isEmpty else{throw HardwareError(message:"最近文本恢复记录不存在。")}
+        if let id=state.activeID {
+            guard let record=seen[id],record.phase == .installed || record.phase == .failed,try sameDefinition(record.officialJSON,state.active) else{throw HardwareError(message:"当前文本定义与版本不一致。")}
+        }else{guard state.active==nil else{throw HardwareError(message:"当前文本定义缺少版本编号。")}}
+    }
+    private func load()throws->State {
+        if FileManager.default.fileExists(atPath:stateURL.path){let state=try read(State.self,from:stateURL);try validate(state);return state}
+        // Preserve legacy files. Unique ancestry can be migrated; ambiguous
+        // content-only identities are rejected rather than guessed.
+        var state=State()
+        let files=try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:nil)
+        for url in files where url.pathExtension=="json" && UUID(uuidString:url.deletingPathExtension().lastPathComponent) != nil {
+            state.records.append(try read(HostTextInstallationRecord.self,from:url))
+        }
+        state.records.sort{$0.createdAt<$1.createdAt}
+        for index in state.records.indices {
+            if let previous=state.records[index].previousConfiguration,state.records[index].previousID==nil {
+                let candidates=try state.records[..<index].filter{try sameDefinition($0.officialJSON,previous)}
+                guard candidates.count==1 else{throw HardwareError(message:"旧文本记录的版本关系不明确，请保留原文件。")}
+                state.records[index].previousID=candidates[0].id
+            }
+        }
+        let latestURL=directory.appendingPathComponent("latest.json"),activeURL=directory.appendingPathComponent("active.json")
+        if FileManager.default.fileExists(atPath:latestURL.path){state.latest=try read(String.self,from:latestURL)}
+        if FileManager.default.fileExists(atPath:activeURL.path){
+            let active=try read(LegacyActive.self,from:activeURL)
+            guard active.format=="CherryMacHostTextConfiguration",active.version==1 else{throw HardwareError(message:"旧文本定义格式无效。")}
+            let candidates=try state.records.filter{try sameDefinition($0.officialJSON,active.officialJSON) && ($0.phase == .installed || $0.phase == .failed)}
+            guard candidates.count==1 else{throw HardwareError(message:"旧文本定义的版本关系不明确，请保留原文件。")}
+            state.active=active.officialJSON;state.activeID=candidates[0].id
+        }
+        try validate(state);return state
+    }
+    private func save(_ state:State)throws {
+        try validate(state);_ = try archive(state)
+        let data=try JSONEncoder().encode(state)
+        guard data.count<=16_000_000 else{throw HardwareError(message:"文本配置记录过大，请导出保留。")}
+        try data.write(to:stateURL,options:.atomic)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:stateURL.path)
+        guard try Data(contentsOf:stateURL)==data else{throw HardwareError(message:"文本配置保存校验失败。")}
+    }
+    private func changed<T>(_ body:(inout State)throws->T)throws->T {
+        try locked{var state=try load();let result=try body(&state);try save(state);return result}
+    }
+    private func checked(_ state:State,_ record:HostTextInstallationRecord)throws->Int {
+        guard let index=state.records.firstIndex(where:{$0.id==record.id}) else{throw HardwareError(message:"文本恢复记录不存在。")}
+        let saved=state.records[index]
+        guard try sameDefinition(saved.officialJSON,record.officialJSON),saved.factoryKeymap==record.factoryKeymap,saved.before==record.before,try sameDefinition(saved.previousConfiguration,record.previousConfiguration),saved.previousID==record.previousID else{throw HardwareError(message:"文本安装记录已变化，未覆盖。")}
+        return index
+    }
+    private func restoring(_ state:State,_ record:HostTextInstallationRecord)throws->Int {
+        let index=try checked(state,record),saved=state.records[index]
+        let installed=try sameDefinition(state.active,saved.officialJSON),previous=try sameDefinition(state.active,saved.previousConfiguration)
+        guard (state.activeID==saved.id && installed) || (state.activeID==saved.previousID && previous) else{throw HardwareError(message:"主机文本配置版本已变化，未恢复安装。")}
+        return index
+    }
+    func activeConfiguration()throws->Data?{try locked{try load().active}}
+    func latest()throws->HostTextInstallationRecord?{try locked{let state=try load();return state.records.first{$0.id==state.latest}}}
     func prepare(_ installation:WindowsProfile.HostTextInstallation)throws->HostTextInstallationRecord {
-        let record=HostTextInstallationRecord(id:UUID().uuidString,createdAt:Date(),officialJSON:installation.officialJSON,factoryKeymap:installation.factoryKeymap,before:installation.before,previousConfiguration:try activeConfiguration(),phase:.prepared)
-        _ = try record.installation()
-        try persist(record,to:recordURL(record.id));try persist(record.id,to:latestURL)
-        return record
-    }
-    func latest()throws->HostTextInstallationRecord? {
-        guard FileManager.default.fileExists(atPath:latestURL.path) else{return nil}
-        let id=try read(String.self,from:latestURL),record=try read(HostTextInstallationRecord.self,from:recordURL(id))
-        guard record.id==id else{throw HardwareError(message:"文本安装记录编号不一致。")}
-        _ = try record.installation();return record
-    }
-    private func checked(_ record:HostTextInstallationRecord)throws->HostTextInstallationRecord {
-        let saved=try read(HostTextInstallationRecord.self,from:recordURL(record.id))
-        guard saved.id==record.id,saved.officialJSON==record.officialJSON,saved.factoryKeymap==record.factoryKeymap,saved.before==record.before,saved.previousConfiguration==record.previousConfiguration else{throw HardwareError(message:"文本安装记录已变化，未覆盖。")}
-        _ = try saved.installation();return saved
+        try changed{state in
+            guard state.records.count<128 else{throw HardwareError(message:"文本安装历史已满，请先导出记录。")}
+            let record=HostTextInstallationRecord(id:UUID().uuidString,createdAt:Date(),officialJSON:installation.officialJSON,factoryKeymap:installation.factoryKeymap,before:installation.before,previousConfiguration:state.active,previousID:state.activeID,phase:.prepared)
+            state.records.append(record);state.latest=record.id;return record
+        }
     }
     func commit(_ record:HostTextInstallationRecord)throws {
-        var saved=try checked(record)
-        guard saved.phase == .prepared else{throw HardwareError(message:"文本安装记录当前不能提交。")}
-        guard try activeConfiguration()==record.previousConfiguration else{throw HardwareError(message:"主机文本配置已变化，未替换。")}
-        saved.phase = .installed;try persist(saved,to:recordURL(saved.id))
-        try persist(Active(officialJSON:saved.officialJSON),to:activeURL)
+        try changed{state in
+            let index=try checked(state,record),saved=state.records[index]
+            guard saved.phase == .prepared,state.activeID==saved.previousID,try sameDefinition(state.active,saved.previousConfiguration) else{throw HardwareError(message:"主机文本配置版本已变化或记录不能提交。")}
+            state.records[index].phase = .installed;state.active=saved.officialJSON;state.activeID=saved.id
+        }
     }
-    func failed(_ record:HostTextInstallationRecord)throws {
-        var saved=try checked(record)
-        guard saved.phase != .restored else{return}
-        saved.phase = .failed;try persist(saved,to:recordURL(saved.id))
-    }
-    func validateRestoration(_ record:HostTextInstallationRecord)throws {
-        let saved=try checked(record),current=try activeConfiguration()
-        guard current==saved.officialJSON || current==saved.previousConfiguration else{throw HardwareError(message:"主机文本配置已变化，未恢复安装。")}
-    }
+    func failed(_ record:HostTextInstallationRecord)throws{try changed{state in let index=try checked(state,record);if state.records[index].phase != .restored{state.records[index].phase = .failed}}}
+    func validateRestoration(_ record:HostTextInstallationRecord)throws{try locked{_ = try restoring(load(),record)}}
     func restored(_ record:HostTextInstallationRecord)throws {
-        try validateRestoration(record)
-        var saved=try checked(record)
-        if let previous=saved.previousConfiguration{try persist(Active(officialJSON:previous),to:activeURL)}
-        else if FileManager.default.fileExists(atPath:activeURL.path){try FileManager.default.removeItem(at:activeURL)}
-        saved.phase = .restored;try persist(saved,to:recordURL(saved.id))
+        try changed{state in let index=try restoring(state,record),saved=state.records[index];state.active=saved.previousConfiguration;state.activeID=saved.previousID;state.records[index].phase = .restored}
+    }
+    // Portable JSON matches the browser's archive exactly: JSON objects rather
+    // than base64 Data and ISO record dates; hardware dates retain their epoch.
+    private func archive(_ state:State)throws->Data {
+        func object(_ data:Data?)throws->Any{if let data{return try WindowsProfile.templateRoot(data)};return NSNull()}
+        let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+        let records=try state.records.map{record->[String:Any] in
+            ["format":record.format,"version":record.version,"id":record.id,"date":formatter.string(from:record.createdAt),"officialJSON":try object(record.officialJSON),"factoryKeymap":record.factoryKeymap,"before":try JSONSerialization.jsonObject(with:JSONEncoder().encode(record.before)),"previousConfiguration":try object(record.previousConfiguration),"previousID":record.previousID as Any? ?? NSNull(),"phase":record.phase.rawValue]
+        }
+        let root:[String:Any]=["format":"CherryMacHostTextStore","version":1,"active":try object(state.active),"activeID":state.activeID as Any? ?? NSNull(),"latest":state.latest as Any? ?? NSNull(),"records":records]
+        let data=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys,.withoutEscapingSlashes])
+        guard data.count<=8_000_000 else{throw HardwareError(message:"文本恢复记录超过 8 MB。")};return data
+    }
+    func exportRecords()throws->Data{try locked{try archive(load())}}
+    private func decodeArchive(_ data:Data)throws->State {
+        guard data.count<=8_000_000,let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],root["format"] as? String=="CherryMacHostTextStore",try WindowsProfile.integer(root["version"],"version",range:1...1)==1,let records=root["records"] as? [[String:Any]],records.count<=128 else{throw HardwareError(message:"文本恢复记录格式或容量无效。")}
+        func optionalID(_ value:Any?)throws->String?{if value is NSNull{return nil};guard let id=value as? String,UUID(uuidString:id) != nil else{throw HardwareError(message:"文本恢复记录版本编号无效。")};return id}
+        func definition(_ value:Any?)throws->Data?{if value is NSNull{return nil};guard let value=value as? [String:Any] else{throw HardwareError(message:"文本恢复记录定义无效。")};let data=try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]);_ = try WindowsProfile.templateRoot(data);return data}
+        let fractional=ISO8601DateFormatter();fractional.formatOptions=[.withInternetDateTime,.withFractionalSeconds];let plain=ISO8601DateFormatter()
+        var state=State();state.active=try definition(root["active"]);state.activeID=try optionalID(root["activeID"]);state.latest=try optionalID(root["latest"])
+        for item in records {
+            guard item["format"] as? String=="CherryMacHostTextInstallation",try WindowsProfile.integer(item["version"],"version",range:1...1)==1,let id=try optionalID(item["id"]),let date=item["date"] as? String,let createdAt=fractional.date(from:date) ?? plain.date(from:date),let phaseName=item["phase"] as? String,let phase=HostTextInstallationRecord.Phase(rawValue:phaseName),let json=try definition(item["officialJSON"]),let before=item["before"] as? [String:Any],let factory=item["factoryKeymap"] as? [Any],factory.count==378 else{throw HardwareError(message:"文本恢复记录内容无效。")}
+            let bytes=try factory.map{UInt8(try WindowsProfile.integer($0,"factoryKeymap",range:0...255))}
+            let snapshot=try JSONDecoder().decode(HardwareSnapshot.self,from:JSONSerialization.data(withJSONObject:before))
+            state.records.append(HostTextInstallationRecord(id:id,createdAt:createdAt,officialJSON:json,factoryKeymap:bytes,before:snapshot,previousConfiguration:try definition(item["previousConfiguration"]),previousID:try optionalID(item["previousID"]),phase:phase))
+        }
+        try validate(state);return state
+    }
+    func importRecords(_ data:Data)throws->Int {
+        let imported=try decodeArchive(data)
+        return try changed{state in
+            if try NSDictionary(dictionary:JSONSerialization.jsonObject(with:archive(state)) as! [String:Any]).isEqual(to:JSONSerialization.jsonObject(with:archive(imported)) as! [String:Any]){return imported.records.count}
+            guard state.records.isEmpty,state.active==nil,state.latest==nil else{throw HardwareError(message:"Mac 已有文本记录，未覆盖。请保留原记录。")}
+            state=imported;return state.records.count
+        }
     }
 }

@@ -347,7 +347,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(hostTextState,8,312,850,64,in:text)
         place(button("安装文本绑定…",#selector(installHostText)),8,393,210,32,in:text)
         place(button("恢复最近文本安装…",#selector(restoreHostText)),238,393,240,32,in:text)
-        place(label("开发预览，尚待统一真机验收。安装会显示改动并保存完整备份；只修改文本绑定键。恢复后服务保持关闭。读取、写入或重连后需重新启用服务。文本内容保存在 Mac 配置中。",12),8,454,850,80,in:text)
+        place(button("导出文本恢复记录…",#selector(exportHostTextRecords)),8,438,230,32,in:text)
+        place(button("导入文本恢复记录…",#selector(importHostTextRecords)),258,438,230,32,in:text)
+        place(label("开发预览，尚待统一真机验收。安装会显示改动并保存完整备份；只修改文本绑定键。恢复后服务保持关闭。读取、写入或重连后需重新启用服务。恢复记录可在 Mac 与网页间导入；已有不同记录保留。",12),8,490,850,62,in:text)
         #endif
         place(message,192,787,925,58)
         for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与绑定键",#selector(writeMacros))]{
@@ -410,6 +412,38 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         panel.beginSheetModal(for:window){[weak self] response in
             guard response == .OK,let url=panel.url else{return}
             do{try data.write(to:url,options:.atomic);self?.hostTextState.stringValue="文本配置已导出。"}catch{self?.hostTextState.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func exportHostTextRecords(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-文本恢复记录.json"
+        panel.beginSheetModal(for:window){[weak self] response in
+            guard response == .OK,let self,let url=panel.url else{return}
+            self.busy=true;self.controls.forEach{$0.isEnabled=false};let store=self.hostTextStore
+            self.queue.async{[weak self] in
+                let result=Result<Void,Error>{let data=try store.exportRecords();try data.write(to:url,options:.atomic)}
+                DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                    do{try result.get();self.hostTextState.stringValue="文本恢复记录已导出，可在 Mac 或网页导入。"}catch{self.hostTextState.stringValue=error.localizedDescription}
+                }
+            }
+        }
+    }
+    @objc func importHostTextRecords(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:window){[weak self] response in
+            guard response == .OK,let self,let url=panel.url else{return}
+            self.suspendHostTextForConfiguration();self.busy=true;self.controls.forEach{$0.isEnabled=false};let store=self.hostTextStore
+            self.queue.async{[weak self] in
+                let result=Result<Int,Error>{
+                    let attributes=try FileManager.default.attributesOfItem(atPath:url.path)
+                    guard ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= 8_000_000 else{throw HardwareError(message:"文本恢复记录超过 8 MB。")}
+                    return try store.importRecords(Data(contentsOf:url))
+                }
+                DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                    do{let count=try result.get();self.hostTextState.stringValue="已导入 \(count) 条文本恢复记录，键盘未改写，服务保持关闭。恢复前请读取键盘并核对确认。"}catch{self.hostTextState.stringValue=error.localizedDescription}
+                }
+            }
         }
     }
     @objc func editHostText(){

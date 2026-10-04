@@ -1182,6 +1182,17 @@ if CommandLine.arguments.contains("--calculator-key-test"){
 }
 #endif
 #if CHERRY_MACRO_PRODUCT
+if let index=CommandLine.arguments.firstIndex(of:"--host-text-archive-roundtrip") {
+    func roundtripTextArchive()throws {
+        guard CommandLine.arguments.count==index+3 else{throw HardwareError(message:"需要输入与输出文件路径。")}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacTextArchive-\(UUID().uuidString)")
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let store=HostTextConfigurationStore(directory:directory)
+        _ = try store.importRecords(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+1])))
+        try store.exportRecords().write(to:URL(fileURLWithPath:CommandLine.arguments[index+2]),options:.atomic)
+    }
+    do{try roundtripTextArchive();exit(0)}catch{fputs("\(error.localizedDescription)\n",stderr);exit(1)}
+}
 if CommandLine.arguments.contains("--host-text-dispatch-self-test"){
     Task{@MainActor in await runHostTextDispatchChecks();exit(0)}
     RunLoop.main.run();exit(1)
