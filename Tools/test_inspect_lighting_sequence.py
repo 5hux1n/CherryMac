@@ -34,6 +34,8 @@ class MemoryPE:
         self.put(0x77F604 + 0x2BC, struct.pack('<I', 0x500790))
         for address, encoded in audit.CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
+        for address, encoded in audit.BEGIN_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
 
         self.put(0x77F604 + 0x2C4, struct.pack('<I', 0x501190))
         for address, encoded in audit.COLOR_CHECKS.items():
@@ -66,6 +68,14 @@ class MemoryPE:
 
 
 class LightingAuditTests(unittest.TestCase):
+    def test_begin_report_and_status_checks(self):
+        result = audit.audit_begin(MemoryPE())
+        self.assertEqual(result['headerBytes4Through7'], [0, 0, 0, 0])
+        for address in (0x4D9F01, 0x4D9F39, 0x4DA053, 0x4DA09C):
+            pe = MemoryPE();pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'begin instruction'):
+                audit.audit_begin(pe)
+
     def test_separate_transport_word_and_selected_bank_caller(self):
         result = audit.audit_transport_and_bank(MemoryPE())
         self.assertEqual(result['registryTrailingWord']['initialValue'], 0)

@@ -429,11 +429,42 @@ enum WindowsProfile {
     // File-only head/tail preparation for 500790's traced 01CE branch.
     struct OfficialLightingPlan:Codable,Equatable {
         struct Write:Codable,Equatable{var command:Int;var offset:Int;var flag:Int;var data:[UInt8]}
-        struct Stage:Codable,Equatable{var name:String;var beginRequired:Bool;var writes:[Write];var finishCommand:Int;var finishDelayMilliseconds:Int}
+        struct Stage:Codable,Equatable{var name:String;var beginRequired:Bool;var beginCommand:Int;var writes:[Write];var finishCommand:Int;var finishDelayMilliseconds:Int}
         var format="CherryMacOfficialLightingPlan"
-        var version=1
+        var version=2
         var hardwareReady=false
         var bank:Int;var transportSelector:Int;var chunkCapacity:Int;var stages:[Stage]
+        struct Report:Codable,Equatable {
+            var stage:Int;var kind:String;var delayMilliseconds:Int;var request:[UInt8]
+            func validateReply(_ reply:[UInt8])throws {
+                try CherryPacket.validate(reply,request:request)
+                guard reply[4..<8].elementsEqual(request[4..<8])else{throw HardwareError(message:"灯效候选回复的偏移或状态不匹配。")}
+            }
+        }
+        // Offline rendering only. Rebuild the bounded stage graph before
+        // accepting a saved/mutable plan; never pass this to a USB sender.
+        func reports()throws->[Report]{
+            guard format=="CherryMacOfficialLightingPlan",version==2,!hardwareReady,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity),let parameters=stages.first,parameters.writes.count>=3 else{throw HardwareError(message:"灯效候选计划格式无效。")}
+            let head=parameters.writes.dropLast(2).flatMap{$0.data},tail=parameters.writes[parameters.writes.count-2].data
+            guard head.count==9,head[0]==UInt8(bank),CherryLighting.modes.contains(where:{$0.1==head[1]}),head[2]<=4,head[3]<=4,head[4]<=1,head[5]<=1,tail.count==1 else{throw HardwareError(message:"灯效候选参数布局无效。")}
+            let begin=transportSelector==1 ? 0x81:1,finish=transportSelector==1 ? 0x82:2,flag=transportSelector==1 ? 0:0x55
+            func chunks(_ command:Int,_ offset:Int,_ flag:Int,_ data:[UInt8])->[Write]{stride(from:0,to:data.count,by:chunkCapacity).map{start in .init(command:command,offset:offset+start,flag:flag,data:Array(data[start..<min(data.count,start+chunkCapacity)]))}}
+            let writes=chunks(6,bank*64,flag,head)+chunks(6,bank*64+21,flag,tail)+chunks(6,bank*64+24,flag,[1])
+            var expected=[Stage(name:"parameters",beginRequired:parameters.beginRequired,beginCommand:begin,writes:writes,finishCommand:finish,finishDelayMilliseconds:10)]
+            if head[1]==8 {
+                guard stages.count==2 else{throw HardwareError(message:"缺少独立颜色阶段。")}
+                let colors=stages[1].writes.flatMap{$0.data}
+                guard colors.count==378 else{throw HardwareError(message:"颜色阶段长度无效。")}
+                expected.append(.init(name:"customColors",beginRequired:parameters.beginRequired,beginCommand:begin,writes:chunks(transportSelector==1 ? 0x8B:0x0B,bank*512,0,colors),finishCommand:finish,finishDelayMilliseconds:10))
+            }
+            guard stages==expected else{throw HardwareError(message:"灯效候选计划的指令顺序或写入范围被修改。")}
+            var result:[Report]=[]
+            for (index,stage) in stages.enumerated(){
+                if stage.beginRequired{result.append(.init(stage:index,kind:"begin",delayMilliseconds:0,request:try CherryPacket.make(UInt8(stage.beginCommand))))}
+                for write in stage.writes{result.append(.init(stage:index,kind:"data",delayMilliseconds:0,request:try CherryPacket.make(UInt8(write.command),payload:[UInt8(write.data.count),UInt8(write.offset&255),UInt8(write.offset>>8),UInt8(write.flag)]+write.data)))}
+                result.append(.init(stage:index,kind:"finish",delayMilliseconds:stage.finishDelayMilliseconds,request:try CherryPacket.make(UInt8(stage.finishCommand))))
+            };return result
+        }
     }
     // A candidate sequence for the traced parameter/custom-load methods only.
     // This is not HardwareWritePlan and cannot authorize any USB operation.
@@ -450,11 +481,12 @@ enum WindowsProfile {
         var writes=chunks(6,bank*64,flag,parameters.head)
         writes+=chunks(6,bank*64+21,flag,[parameters.lightOpenFlag])
         writes+=chunks(6,bank*64+24,flag,[1])
-        var stages=[OfficialLightingPlan.Stage(name:"parameters",beginRequired:beginRequired,writes:writes,finishCommand:finish,finishDelayMilliseconds:10)]
+        let begin=transportSelector==1 ? 0x81:1
+        var stages=[OfficialLightingPlan.Stage(name:"parameters",beginRequired:beginRequired,beginCommand:begin,writes:writes,finishCommand:finish,finishDelayMilliseconds:10)]
         if parameters.head[1]==8 {
             guard let lightingMapping else{throw HardwareError(message:"官方逐键颜色计划需要有效 LED 映射。")}
             let colors=try prepareOfficialCustomColors(data,baseline:baseline,lightingMapping:lightingMapping)
-            stages.append(.init(name:"customColors",beginRequired:beginRequired,writes:chunks(transportSelector==1 ? 0x8B:0x0B,bank*512,0,colors),finishCommand:finish,finishDelayMilliseconds:10))
+            stages.append(.init(name:"customColors",beginRequired:beginRequired,beginCommand:begin,writes:chunks(transportSelector==1 ? 0x8B:0x0B,bank*512,0,colors),finishCommand:finish,finishDelayMilliseconds:10))
         }
         return .init(bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,stages:stages)
     }

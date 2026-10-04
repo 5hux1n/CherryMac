@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {planOfficialLighting,prepareOfficialLightingParameters,prepareOfficialCustomColors,officialCustomColors,officialRawChannelRange,captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {officialLightingReports,planOfficialLighting,prepareOfficialLightingParameters,prepareOfficialCustomColors,officialCustomColors,officialRawChannelRange,captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -1049,6 +1049,11 @@ test('official lighting candidate plans preserve stage boundaries, address range
   const mapping={deviceInfo:clone(snapshot.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)},before=clone({root,snapshot,mapping});
   const options={bank:3,transportSelector:0,chunkCapacity:56,beginRequired:true},plan=planOfficialLighting(root,snapshot,mapping,options);
   assert.equal(plan.hardwareReady,false);assert.deepEqual(plan.stages.map(s=>s.name),['parameters','customColors']);
+  const reports=officialLightingReports(plan);assert.equal(reports.length,14);
+  assert.deepEqual(reports.filter(r=>r.kind==='begin').map(r=>r.request.slice(3,8)),[[1,0,0,0,0],[1,0,0,0,0]]);
+  for(const report of reports)validateReply(report.request,report.request);
+  const badReply=[...reports[0].request];badReply[7]=255;assert.throws(()=>validateReply(badReply,reports[0].request));
+  for(const change of [p=>p.stages[0].writes[0].offset++,p=>p.stages[0].finishCommand=1,p=>p.stages[1].writes[0].command=9,p=>p.hardwareReady=true]){const bad=clone(plan);change(bad);assert.throws(()=>officialLightingReports(bad));}
   assert.deepEqual(plan.stages[0].writes.map(w=>[w.command,w.offset,w.flag,w.data.length]),[[6,192,85,9],[6,213,85,1],[6,216,85,1]]);
   assert.deepEqual(plan.stages[0].writes[0].data,[3,8,2,3,1,0,7,123,249]);
   assert.deepEqual(plan.stages[1].writes.flatMap(w=>w.data),prepareOfficialCustomColors(root,snapshot,mapping));
@@ -1056,6 +1061,7 @@ test('official lighting candidate plans preserve stage boundaries, address range
   assert.ok(plan.stages.every(s=>s.beginRequired&&s.finishCommand===2&&s.finishDelayMilliseconds===10));
   const alternate=planOfficialLighting(root,snapshot,mapping,{...options,bank:127,transportSelector:1,chunkCapacity:7,beginRequired:false});
   assert.equal(alternate.stages[0].writes[0].flag,0);assert.equal(alternate.stages[1].writes[0].command,139);assert.equal(alternate.stages[1].finishCommand,130);
+  const highReports=officialLightingReports(alternate);assert.ok(!highReports.some(r=>r.kind==='begin'));const highColor=highReports.find(r=>r.request[3]===139);const wrongOffset=[...highColor.request];wrongOffset[5]^=1;assert.throws(()=>validateReply(wrongOffset,highColor.request));
   assert.ok(alternate.stages.flatMap(s=>s.writes).every(w=>w.offset+w.data.length<=65536&&w.data.length<=7));
   for(const invalid of [{bank:128},{chunkCapacity:57},{chunkCapacity:0},{transportSelector:true},{beginRequired:1}])assert.throws(()=>planOfficialLighting(root,snapshot,mapping,{...options,...invalid}));
   assert.throws(()=>planOfficialLighting(root,snapshot,null,options),/LED/);

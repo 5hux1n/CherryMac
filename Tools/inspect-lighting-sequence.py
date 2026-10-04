@@ -27,6 +27,30 @@ CHECKS = {
     0x500A94: '8a8d57ffffff', 0x500A9A: '888d05ffffff', 0x500AB8: 'c68508ffffff01',
 }
 
+BEGIN_CHECKS = {
+    0x4D9EF0: '0fb74844', 0x4D9EF4: '83f901', 0x4D9EF7: '750f',
+    0x4D9F01: 'c64405bc81', 0x4D9F10: 'c64415bc01',
+    0x4D9F39: 'c64415bc00', 0x4D9F62: 'c6440dbc00',
+    0x4D9F8B: 'c6440dbc00', 0x4D9FB4: 'c6440dbc00',
+    0x4D9FF2: '038d70ffffff', 0x4DA00E: '884415bc',
+    0x4DA022: '884c15bc', 0x4DA053: 'e828f3ffff',
+    0x4DA07B: '83bd5cffffff01', 0x4DA09C: '3dff000000',
+    0x4DA0BA: '3dfe000000',
+}
+
+
+def audit_begin(pe):
+    for address, encoded in BEGIN_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected begin instruction at {address:#x}')
+    return {'helper': '0x4d9eb0', 'instructionChecks': len(BEGIN_CHECKS),
+            'command': '0x81 when transport+0x44 == 1; 0x01 otherwise',
+            'headerBytes4Through7': [0, 0, 0, 0],
+            'checksum': 'sum bytes 3 through 63; low/high bytes at 1/2',
+            'failure': 'Exchange result must equal 1; FF/FE reply statuses return errors',
+            'limits': 'Report construction and helper result only. Actual caller begin guard and accepted firmware behavior remain unproven; no HID.'}
+
 
 # Exact word-load, compare and conditional-jump bytes; no general x86 emulator.
 PREDICATES = [
@@ -492,6 +516,7 @@ def audit_sequence(pe):
         'selectorAudit': audit_selector(pe),
         'deviceIdentityAudit': audit_device_identity(pe),
         'transportBankAudit': audit_transport_and_bank(pe),
+        'beginAudit': audit_begin(pe),
         'colorAudit': audit_colors(pe),
         'brightnessAudit': audit_brightness(pe),
         'mappingAudit': audit_mapping(pe),

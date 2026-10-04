@@ -1238,6 +1238,17 @@ if let index=CommandLine.arguments.firstIndex(of:"--plan-official-lighting") {
         print("PASS: candidate lighting plan exported; no HID and no write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-plan") {
+    do{
+        guard CommandLine.arguments.count==index+3 else{throw HardwareError(message:"需要候选计划和报告输出路径。")}
+        let data=try Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+1]))
+        guard data.count<=1_000_000 else{throw HardwareError(message:"灯效候选计划文件过大。")}
+        let plan=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.self,from:data)
+        let reports=try plan.reports(),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(reports).write(to:URL(fileURLWithPath:CommandLine.arguments[index+2]),options:.atomic)
+        print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if CommandLine.arguments.contains("--lighting-draft-self-test"){runLightingDraftExportChecks();exit(0)}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)

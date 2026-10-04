@@ -447,11 +447,29 @@ export function planOfficialLighting(template,baseline,lightingMapping,{bank,tra
   requireThat(modes.some(([code])=>code===parameters.head[1]),'此灯效不在本型号已核对的模式列表中。');
   const finishCommand=transportSelector===1?0x82:2,flag=transportSelector===1?0:0x55;
   const chunks=(command,offset,flag,data)=>Array.from({length:Math.ceil(data.length/chunkCapacity)},(_,i)=>({command,offset:offset+i*chunkCapacity,flag,data:data.slice(i*chunkCapacity,(i+1)*chunkCapacity)}));
-  const stage=(name,writes)=>({name,beginRequired,writes,finishCommand,finishDelayMilliseconds:10});
+  const stage=(name,writes)=>({name,beginRequired,beginCommand:transportSelector===1?0x81:1,writes,finishCommand,finishDelayMilliseconds:10});
   const stages=[stage('parameters',[...chunks(6,bank*64,flag,parameters.head),...chunks(6,bank*64+21,flag,[parameters.lightOpenFlag]),...chunks(6,bank*64+24,flag,[1])])];
   if(parameters.head[1]===8){requireThat(lightingMapping!=null,'官方逐键颜色计划需要有效 LED 映射。');stages.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,prepareOfficialCustomColors(template,baseline,lightingMapping))));}
-  return {format:'CherryMacOfficialLightingPlan',version:1,hardwareReady:false,bank,transportSelector,chunkCapacity,stages};
+  return {format:'CherryMacOfficialLightingPlan',version:2,hardwareReady:false,bank,transportSelector,chunkCapacity,stages};
 }
+// Offline rendering only; this object is never a transport authorization.
+export function officialLightingReports(plan){
+  requireThat(plan?.format==='CherryMacOfficialLightingPlan'&&plan.version===2&&plan.hardwareReady===false&&Number.isInteger(plan.bank)&&plan.bank>=0&&plan.bank<=127&&[0,1].includes(plan.transportSelector)&&Number.isInteger(plan.chunkCapacity)&&plan.chunkCapacity>=1&&plan.chunkCapacity<=56&&Array.isArray(plan.stages),'灯效候选计划格式无效。');
+  const {bank,transportSelector,chunkCapacity}=plan,parameters=plan.stages[0];
+  requireThat(parameters&&typeof parameters.beginRequired==='boolean'&&Array.isArray(parameters.writes)&&parameters.writes.length>=3,'灯效候选参数布局无效。');
+  const head=parameters.writes.slice(0,-2).flatMap(w=>w.data),tail=parameters.writes.at(-2).data;
+  requireThat(bytes(head,9)&&head[0]===bank&&modes.some(([code])=>code===head[1])&&head[2]<=4&&head[3]<=4&&head[4]<=1&&head[5]<=1&&bytes(tail,1),'灯效候选参数布局无效。');
+  const beginCommand=transportSelector===1?0x81:1,finishCommand=transportSelector===1?0x82:2,flag=transportSelector===1?0:0x55;
+  const chunks=(command,offset,flag,data)=>Array.from({length:Math.ceil(data.length/chunkCapacity)},(_,i)=>({command,offset:offset+i*chunkCapacity,flag,data:data.slice(i*chunkCapacity,(i+1)*chunkCapacity)}));
+  const stage=(name,writes)=>({name,beginRequired:parameters.beginRequired,beginCommand,writes,finishCommand,finishDelayMilliseconds:10});
+  const expected=[stage('parameters',[...chunks(6,bank*64,flag,head),...chunks(6,bank*64+21,flag,tail),...chunks(6,bank*64+24,flag,[1])])];
+  if(head[1]===8){requireThat(plan.stages.length===2&&Array.isArray(plan.stages[1].writes),'缺少独立颜色阶段。');const colors=plan.stages[1].writes.flatMap(w=>w.data);requireThat(bytes(colors,378),'颜色阶段长度无效。');expected.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,colors)));}
+  // Compare fields independent of JSON object property order.
+  requireThat(plan.stages.length===expected.length&&plan.stages.every((s,i)=>{const e=expected[i];return s.name===e.name&&s.beginRequired===e.beginRequired&&s.beginCommand===e.beginCommand&&s.finishCommand===e.finishCommand&&s.finishDelayMilliseconds===e.finishDelayMilliseconds&&s.writes.length===e.writes.length&&s.writes.every((w,j)=>{const v=e.writes[j];return w.command===v.command&&w.offset===v.offset&&w.flag===v.flag&&equal(w.data,v.data);});}),'灯效候选计划的指令顺序或写入范围被修改。');
+  const encode=(command,payload=[])=>{const b=Array(64).fill(0);b[0]=4;b[3]=command;b.splice(4,payload.length,...payload);const sum=b.slice(3).reduce((n,v)=>n+v,0);b[1]=sum&255;b[2]=sum>>8;return b;};
+  return expected.flatMap((s,index)=>[...(s.beginRequired?[{stage:index,kind:'begin',delayMilliseconds:0,request:encode(s.beginCommand)}]:[]),...s.writes.map(w=>({stage:index,kind:'data',delayMilliseconds:0,request:encode(w.command,[w.data.length,w.offset&255,w.offset>>8,w.flag,...w.data])})),{stage:index,kind:'finish',delayMilliseconds:10,request:encode(s.finishCommand)}]);
+}
+
 export function prepareOfficialLightingParameters(template,bank){
   validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=255&&template.LightInfo,'需要完整官方灯效参数和可表示为单字节的配置编号。');

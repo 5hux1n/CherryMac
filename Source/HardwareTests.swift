@@ -1350,9 +1350,19 @@ func runLightingDraftExportChecks(){
     precondition(plan.stages[0].writes.map{$0.offset}==[192,213,216] && plan.stages[0].writes[0].data==parameters.head)
     precondition(plan.stages[1].writes.flatMap{$0.data}==prepared && plan.stages[1].writes.last!.data.count==42)
     precondition(plan.stages.allSatisfy{$0.beginRequired && $0.finishCommand==2 && $0.finishDelayMilliseconds==10})
+    let reports=try! plan.reports()
+    precondition(reports.count==14 && reports.filter{$0.kind=="begin"}.allSatisfy{$0.request[3]==1 && $0.request[4..<8].allSatisfy{$0==0}})
+    for report in reports{try! report.validateReply(report.request)}
+    var badReply=reports[0].request;badReply[7]=255;rejected{try reports[0].validateReply(badReply)}
+    var badPlan=plan;badPlan.stages[0].writes[0].offset+=1;rejected{_ = try badPlan.reports()}
+    badPlan=plan;badPlan.stages[0].finishCommand=1;rejected{_ = try badPlan.reports()}
     let alternate=try! WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:127,transportSelector:1,chunkCapacity:7,beginRequired:false)
     precondition(alternate.stages[0].writes[0].flag==0 && alternate.stages[1].writes[0].command==139 && alternate.stages[1].finishCommand==130)
     precondition(alternate.stages.flatMap{$0.writes}.allSatisfy{$0.offset+$0.data.count<=65536 && $0.data.count<=7})
+    let alternateReports=try! alternate.reports()
+    precondition(!alternateReports.contains{$0.kind=="begin"})
+    let highColor=alternateReports.first{$0.request[3]==139}!
+    badReply=highColor.request;badReply[5] ^= 1;rejected{try highColor.validateReply(badReply)}
     rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:nil,bank:3,transportSelector:0,chunkCapacity:56,beginRequired:true)}
     rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:128,transportSelector:0,chunkCapacity:56,beginRequired:true)}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
