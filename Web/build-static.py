@@ -10,8 +10,11 @@ assert '<?php' not in page and '<?=' not in page
 # GitHub Pages cannot send custom headers; retain the applicable policy as HTML metadata.
 policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:32247; object-src 'none'; base-uri 'none'"
 page = page.replace('<head>', '<head><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="' + policy + '">', 1)
-(out / 'index.html').write_text(page)
-shutil.copytree(root / 'assets', out / 'assets')
+app = out / 'app'
+app.mkdir()
+(app / 'index.html').write_text(page)
+shutil.copytree(root / 'assets', app / 'assets')
+shutil.copytree(root / 'homepage', out, dirs_exist_ok=True)
 (out / '.nojekyll').touch()
 (out / 'CNAME').write_text('cherrymac.goforit.si\n')
 print(out)
