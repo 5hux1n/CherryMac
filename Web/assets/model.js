@@ -439,6 +439,19 @@ export function officialCustomColors(raw,brightness){
   const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];return raw.map(value=>(value*coefficient)>>8);
 }
 // Pure file conversion; caller bank is not inferred from read-back parameters.
+export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
+  validateSnapshot(baseline,true);
+  requireThat(Number.isInteger(bank)&&bank>=0&&bank<=127&&[0,1].includes(transportSelector)&&Number.isInteger(chunkCapacity)&&chunkCapacity>=1&&chunkCapacity<=56&&typeof beginRequired==='boolean','配置地址、传输分支或报告容量超出离线计划范围。');
+  if(lightingMapping!=null)lightingMappingSlots(lightingMapping,baseline);
+  const parameters=prepareOfficialLightingParameters(template,bank);
+  requireThat(modes.some(([code])=>code===parameters.head[1]),'此灯效不在本型号已核对的模式列表中。');
+  const finishCommand=transportSelector===1?0x82:2,flag=transportSelector===1?0:0x55;
+  const chunks=(command,offset,flag,data)=>Array.from({length:Math.ceil(data.length/chunkCapacity)},(_,i)=>({command,offset:offset+i*chunkCapacity,flag,data:data.slice(i*chunkCapacity,(i+1)*chunkCapacity)}));
+  const stage=(name,writes)=>({name,beginRequired,writes,finishCommand,finishDelayMilliseconds:10});
+  const stages=[stage('parameters',[...chunks(6,bank*64,flag,parameters.head),...chunks(6,bank*64+21,flag,[parameters.lightOpenFlag]),...chunks(6,bank*64+24,flag,[1])])];
+  if(parameters.head[1]===8){requireThat(lightingMapping!=null,'官方逐键颜色计划需要有效 LED 映射。');stages.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,prepareOfficialCustomColors(template,baseline,lightingMapping))));}
+  return {format:'CherryMacOfficialLightingPlan',version:1,hardwareReady:false,bank,transportSelector,chunkCapacity,stages};
+}
 export function prepareOfficialLightingParameters(template,bank){
   validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=255&&template.LightInfo,'需要完整官方灯效参数和可表示为单字节的配置编号。');

@@ -1226,6 +1226,18 @@ if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-draft") {
         print("PASS: lighting draft file conversion only; no HID");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--plan-official-lighting") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+8,let bank=Int(args[index+3]),let transport=Int(args[index+4]),let capacity=Int(args[index+5]),["0","1"].contains(args[index+6])else{throw HardwareError(message:"需要配置、官方模板、配置编号、传输字段、分块容量、开始标志 0/1 和输出路径。")}
+        let profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:args[index+1])))
+        let template=try Data(contentsOf:URL(fileURLWithPath:args[index+2]))
+        let plan=try WindowsProfile.planOfficialLighting(template,baseline:profile.snapshot,lightingMapping:profile.lightingMapping,bank:bank,transportSelector:transport,chunkCapacity:capacity,beginRequired:args[index+6]=="1")
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(plan).write(to:URL(fileURLWithPath:args[index+7]),options:.atomic)
+        print("PASS: candidate lighting plan exported; no HID and no write authorization");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if CommandLine.arguments.contains("--lighting-draft-self-test"){runLightingDraftExportChecks();exit(0)}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)

@@ -427,6 +427,37 @@ enum WindowsProfile {
         return try encodeKeysAndMacros(profile,template:JSONSerialization.data(withJSONObject:root,options:.sortedKeys),preservingTextIndices:textIndices)
     }
     // File-only head/tail preparation for 500790's traced 01CE branch.
+    struct OfficialLightingPlan:Codable,Equatable {
+        struct Write:Codable,Equatable{var command:Int;var offset:Int;var flag:Int;var data:[UInt8]}
+        struct Stage:Codable,Equatable{var name:String;var beginRequired:Bool;var writes:[Write];var finishCommand:Int;var finishDelayMilliseconds:Int}
+        var format="CherryMacOfficialLightingPlan"
+        var version=1
+        var hardwareReady=false
+        var bank:Int;var transportSelector:Int;var chunkCapacity:Int;var stages:[Stage]
+    }
+    // A candidate sequence for the traced parameter/custom-load methods only.
+    // This is not HardwareWritePlan and cannot authorize any USB operation.
+    static func planOfficialLighting(_ data:Data,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext?,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
+        try baseline.validate()
+        guard baseline.colors != nil,baseline.macroData != nil,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity)else{throw HardwareError(message:"需要完整基线，且配置地址、传输分支和报告容量须在离线计划范围内。")}
+        if let lightingMapping{_ = try lightingMapping.slots(for:baseline)}
+        let parameters=try prepareOfficialLightingParameters(data,bank:bank)
+        guard CherryLighting.modes.contains(where:{$0.1==parameters.head[1]})else{throw HardwareError(message:"此灯效不在本型号已核对的模式列表中。")}
+        let finish=transportSelector==1 ? 0x82:2,flag=transportSelector==1 ? 0:0x55
+        func chunks(_ command:Int,_ offset:Int,_ flag:Int,_ bytes:[UInt8])->[OfficialLightingPlan.Write]{
+            stride(from:0,to:bytes.count,by:chunkCapacity).map{start in .init(command:command,offset:offset+start,flag:flag,data:Array(bytes[start..<min(bytes.count,start+chunkCapacity)]))}
+        }
+        var writes=chunks(6,bank*64,flag,parameters.head)
+        writes+=chunks(6,bank*64+21,flag,[parameters.lightOpenFlag])
+        writes+=chunks(6,bank*64+24,flag,[1])
+        var stages=[OfficialLightingPlan.Stage(name:"parameters",beginRequired:beginRequired,writes:writes,finishCommand:finish,finishDelayMilliseconds:10)]
+        if parameters.head[1]==8 {
+            guard let lightingMapping else{throw HardwareError(message:"官方逐键颜色计划需要有效 LED 映射。")}
+            let colors=try prepareOfficialCustomColors(data,baseline:baseline,lightingMapping:lightingMapping)
+            stages.append(.init(name:"customColors",beginRequired:beginRequired,writes:chunks(transportSelector==1 ? 0x8B:0x0B,bank*512,0,colors),finishCommand:finish,finishDelayMilliseconds:10))
+        }
+        return .init(bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,stages:stages)
+    }
     // Bank is an explicit caller input, not an inference from a read-back bank.
     static func prepareOfficialLightingParameters(_ data:Data,bank:Int)throws->(head:[UInt8],lightOpenFlag:UInt8){
         let root=try templateRoot(data)

@@ -1343,6 +1343,18 @@ func runLightingDraftExportChecks(){
     let prepared=try! WindowsProfile.prepareOfficialCustomColors(colorData,baseline:snapshot,lightingMapping:mapping)
     let mapped=Set(try! mapping.slots(for:snapshot).compactMap{$0})
     for slot in 0..<126{precondition(Array(prepared[slot*3..<slot*3+3])==(mapped.contains(slot) ? [134,67,0]:[0,0,0]))}
+    var planRoot=parameterRoot;planRoot["CustomLightMode"]=colorRoot["CustomLightMode"]
+    let planData=try! JSONSerialization.data(withJSONObject:planRoot)
+    let plan=try! WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:3,transportSelector:0,chunkCapacity:56,beginRequired:true)
+    precondition(!plan.hardwareReady && plan.stages.map{$0.name}==["parameters","customColors"])
+    precondition(plan.stages[0].writes.map{$0.offset}==[192,213,216] && plan.stages[0].writes[0].data==parameters.head)
+    precondition(plan.stages[1].writes.flatMap{$0.data}==prepared && plan.stages[1].writes.last!.data.count==42)
+    precondition(plan.stages.allSatisfy{$0.beginRequired && $0.finishCommand==2 && $0.finishDelayMilliseconds==10})
+    let alternate=try! WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:127,transportSelector:1,chunkCapacity:7,beginRequired:false)
+    precondition(alternate.stages[0].writes[0].flag==0 && alternate.stages[1].writes[0].command==139 && alternate.stages[1].finishCommand==130)
+    precondition(alternate.stages.flatMap{$0.writes}.allSatisfy{$0.offset+$0.data.count<=65536 && $0.data.count<=7})
+    rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:nil,bank:3,transportSelector:0,chunkCapacity:56,beginRequired:true)}
+    rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:128,transportSelector:0,chunkCapacity:56,beginRequired:true)}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
     let mappedProfile=try! WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:mapping).profile
     precondition(try! HardwareProfile.decode(mappedProfile.encoded()).lightingMapping==mapping)
