@@ -1232,10 +1232,13 @@ if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-draft") {
 }
 if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-draft") {
     do{
-        guard CommandLine.arguments.count==index+4 else{throw HardwareError(message:"需要配置、官方模板和输出路径。")}
-        let profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+1])))
-        let template=try Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+2]))
-        try WindowsProfile.encodeLightingDraft(profile.snapshot,template:template,lightingMapping:profile.lightingMapping).write(to:URL(fileURLWithPath:CommandLine.arguments[index+3]),options:.atomic)
+        let args=CommandLine.arguments
+        guard args.count==index+4 else{throw HardwareError(message:"需要配置、官方模板和输出路径。")}
+        let inputs=[args[index+1],args[index+2]].map{URL(fileURLWithPath:$0)},output=URL(fileURLWithPath:args[index+3])
+        guard !inputs.contains(where:{$0.standardizedFileURL.resolvingSymlinksInPath()==output.standardizedFileURL.resolvingSymlinksInPath()})else{throw HardwareError(message:"不能覆盖输入配置或模板。")}
+        let files=try inputs.map{url->Data in let data=try Data(contentsOf:url);guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")};return data}
+        let profile=try HardwareProfile.decode(files[0])
+        try WindowsProfile.encodeProfileLightingDraft(profile,template:files[1]).write(to:output,options:.atomic)
         print("PASS: lighting draft file conversion only; no HID");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }

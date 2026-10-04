@@ -1092,11 +1092,12 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             #else
             keyData=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8));includesText=false
             #endif
-            let data=try WindowsProfile.encodeLightingDraft(p.snapshot,template:keyData,lightingMapping:p.lightingMapping)
+            let data=try WindowsProfile.encodeProfileLightingDraft(p,template:keyData)
+            let lightingNote=p.lightingColorEncoding == .officialRGB ? "包含当前灯效草稿":"包含当前内置灯效；逐键配色沿用导入模板"
             let panel=NSSavePanel();panel.nameFieldStringValue="CHERRY-配置草稿.json"
             panel.beginSheetModal(for:window!){[weak self] result in
                 guard result == .OK,let url=panel.url else{return}
-                do{try data.write(to:url,options:.atomic);self?.message.stringValue=includesText ? "已合并导出 Windows 格式键位、宏与文本；包含当前灯效草稿；设备设置沿用导入模板。":"已导出 Windows 格式键位与宏；包含当前灯效草稿；设备设置沿用导入模板。"}
+                do{try data.write(to:url,options:.atomic);self?.message.stringValue=includesText ? "已合并导出 Windows 格式键位、宏与文本；\(lightingNote)；设备设置沿用导入模板。":"已导出 Windows 格式键位与宏；\(lightingNote)；设备设置沿用导入模板。"}
                 catch{self?.message.stringValue=error.localizedDescription}
             }
         }catch{message.stringValue=error.localizedDescription}

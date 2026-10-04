@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {demoSnapshot} from '../assets/layout.js';
 import {WINDOWS_DEFAULTS,FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
-import {clone,fromHardware,importWindows,parseProfile,lightingMappingSlots,reviewLightingDraft} from '../assets/model.js';
+import {clone,fromHardware,importWindows,parseProfile,lightingMappingSlots,reviewLightingDraft,exportProfileWindowsLightingDraft} from '../assets/model.js';
 import {mergeMacroRecoveryDraft} from '../assets/product-macros.js';
 const binary=process.argv[2];assert.ok(binary);
 const baseline=demoSnapshot(),mapping={deviceInfo:clone(baseline.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)};
@@ -28,7 +28,19 @@ try{
     const bad=clone(draft);if(encoding===undefined)delete bad.lightingColorEncoding;else bad.lightingColorEncoding=encoding;
     assert.throws(()=>reviewLightingDraft(bad,baseline));await writeFile(input,JSON.stringify(bad));assert.throws(()=>execFileSync(binary,['--review-lighting-draft',input,base,output],{stdio:'pipe'}));
   }
+  const stored=clone(builtin);stored.windowsTemplateJSON=JSON.stringify(root);stored.lightingColorEncoding='hardwareRGB';stored.snapshot.colors.fill(64);
+  for(const profile of [saved,builtin,stored]){
+    const source=JSON.parse(profile.windowsTemplateJSON),templateFile=join(dir,'template.json');await writeFile(input,JSON.stringify(profile));await writeFile(templateFile,JSON.stringify(source));
+    execFileSync(binary,['--export-lighting-draft',input,templateFile,output],{stdio:'pipe'});
+    const expected=exportProfileWindowsLightingDraft(profile,source);assert.deepEqual(JSON.parse(await readFile(output,'utf8')),expected);
+    if(profile===stored){assert.deepEqual(expected.CustomLightMode,root.CustomLightMode);assert.deepEqual(expected.CustomLightMode.LightColorInfo[0][0],{Red:255,Green:128,Blue:1,Alpha:0});}
+  }
+  for(const encoding of [undefined,'hardwareRGB']){
+    const bad=clone(saved);if(encoding===undefined)delete bad.lightingColorEncoding;else bad.lightingColorEncoding=encoding;
+    assert.throws(()=>exportProfileWindowsLightingDraft(bad,root));await writeFile(input,JSON.stringify(bad));const templateFile=join(dir,'template.json');await writeFile(templateFile,JSON.stringify(root));assert.throws(()=>execFileSync(binary,['--export-lighting-draft',input,templateFile,output],{stdio:'pipe'}));
+  }
+  const invalid=clone(builtin);invalid.snapshot.parameters[3]=5;assert.throws(()=>exportProfileWindowsLightingDraft(invalid,root));assert.throws(()=>reviewLightingDraft(invalid,baseline));
   await writeFile(input,JSON.stringify(saved));const roundtrip=join(dir,'roundtrip.json');execFileSync(binary,['--portable-profile-roundtrip',input,roundtrip],{stdio:'pipe'});assert.equal(JSON.parse(await readFile(roundtrip,'utf8')).lightingColorEncoding,'officialRGB');
   const before=await readFile(input);assert.throws(()=>execFileSync(binary,['--review-lighting-draft',input,base,input],{stdio:'pipe'}));assert.deepEqual(await readFile(input),before);
-  console.log('PASS: native/Web draft parity, single brightness conversion, key/macro isolation, palette provenance, legacy rejection and input preservation; no HID');
+  console.log('PASS: native/Web draft parity, single brightness conversion, key/macro isolation, profile export parity, stored RGB template preservation, palette provenance, legacy rejection and input preservation; no HID');
 }finally{await rm(dir,{recursive:true,force:true});}

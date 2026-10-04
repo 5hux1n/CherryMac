@@ -372,6 +372,16 @@ export function exportWindowsKeysMacrosAndText(profile,template,textConfiguratio
   root.ActionInfo=actions;return exportWindowsKeysAndMacros(profile,root,{preservingTextIndices});
 }
 // File-only conversion; unknown light fields and unmapped colors survive.
+// A profile-aware export preserves the distinction between raw and stored RGB.
+export function exportProfileWindowsLightingDraft(profile,template){
+  validateProfile(profile);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
+  if(profile.lightingColorEncoding==='officialRGB'&&root.CustomLightMode!=null)return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
+  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。');
+  const light=root.LightInfo,selected=MODE_CODES.indexOf(p[1]);
+  requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数或官方模板无效，不能导出。');
+  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的官方配置文件过大。');return root;
+}
 export function exportWindowsLightingDraft(snapshot,template,lightingMapping=null){
   validateSnapshot(snapshot,true);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   const light=root.LightInfo,custom=root.CustomLightMode,groups=custom?.LightColorInfo;
@@ -444,14 +454,8 @@ export function officialCustomColors(raw,brightness){
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');
-  let template=JSON.parse(profile.windowsTemplateJSON);const p=profile.snapshot.parameters;
-  if(p[1]===8){
-    requireThat(profile.lightingColorEncoding==='officialRGB','逐键写入核对需要先导入 Windows 官方配色，避免把读回颜色重复降低亮度。');requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
-    template=exportWindowsLightingDraft(profile.snapshot,template,profile.lightingMapping);
-  }else{
-    requireThat(template.LightInfo&&MODE_CODES.includes(p[1]),'灯效模板或模式无效。');
-    Object.assign(template.LightInfo,{SelectItem:MODE_CODES.indexOf(p[1]),Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
-  }
+  if(profile.snapshot.parameters[1]===8)requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
+  const template=exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON));
   const plan=planOfficialLighting(template,baseline,profile.lightingMapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true}),target=officialLightingReadbackTarget(plan,baseline);
   return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3)))};
 }

@@ -718,18 +718,8 @@ enum WindowsProfile {
     static func reviewLightingDraft(_ profile:HardwareProfile,baseline:HardwareSnapshot)throws->LightingDraftReview {
         try profile.validate();try baseline.validate();try profile.snapshot.validate()
         guard profile.snapshot.deviceInfo==baseline.deviceInfo,let template=profile.windowsTemplateJSON else{throw HardwareError(message:"请先读取键盘并导入本型号的 Windows 官方 JSON。")}
-        let parameters=profile.snapshot.parameters;let data:Data
-        if parameters[1]==8 {
-            guard profile.lightingColorEncoding == .officialRGB else{throw HardwareError(message:"逐键写入核对需要先导入 Windows 官方配色，避免把读回颜色重复降低亮度。")}
-            guard profile.lightingMapping != nil else{throw HardwareError(message:"逐键写入核对需要读取灯光映射。")}
-            data=try encodeLightingDraft(profile.snapshot,template:Data(template.utf8),lightingMapping:profile.lightingMapping)
-        } else {
-            var root=try templateRoot(Data(template.utf8))
-            guard var light=root["LightInfo"] as? [String:Any],let selected=modeCodes.firstIndex(of:parameters[1]) else{throw HardwareError(message:"灯效模板或模式无效。")}
-            light["SelectItem"]=selected;light["Light"]=Int(parameters[2]);light["Speed"]=4-Int(parameters[3]);light["Fx"]=Int(parameters[4]);light["MultiColor"]=Int(parameters[5])
-            for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(parameters[6+offset])}
-            root["LightInfo"]=light;data=try JSONSerialization.data(withJSONObject:root)
-        }
+        if profile.snapshot.parameters[1]==8,profile.lightingMapping==nil{throw HardwareError(message:"逐键写入核对需要读取灯光映射。")}
+        let data=try encodeProfileLightingDraft(profile,template:Data(template.utf8))
         let plan=try planOfficialLighting(data,baseline:baseline,lightingMapping:profile.lightingMapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         let target=try plan.expectedReadback(from:baseline)
         return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]})
@@ -789,6 +779,21 @@ enum WindowsProfile {
     }
     // File-only draft export. Parameters outside 1...8 and unmapped logical
     // template colors remain untouched; this does not authorize a lighting write.
+    // Product exports must never reinterpret brightness-scaled readback RGB as raw RGB.
+    static func encodeProfileLightingDraft(_ profile:HardwareProfile,template:Data)throws->Data {
+        try profile.validate();var root=try templateRoot(template)
+        if profile.lightingColorEncoding == .officialRGB,root["CustomLightMode"] is [String:Any] {
+            return try encodeLightingDraft(profile.snapshot,template:template,lightingMapping:profile.lightingMapping)
+        }
+        let p=profile.snapshot.parameters
+        guard p[1] != 8 else{throw HardwareError(message:"自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。")}
+        guard var light=root["LightInfo"] as? [String:Any],CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数或官方模板无效，不能导出。")}
+        light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
+        for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(p[6+offset])}
+        root["LightInfo"]=light
+        let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
+        guard output.count<=1_000_000 else{throw HardwareError(message:"导出的官方配置文件过大。")};return output
+    }
     static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data,lightingMapping:LightingMappingContext?=nil)throws->Data {
         try snapshot.validate();var root=try templateRoot(template)
         guard var light=root["LightInfo"] as? [String:Any],var custom=root["CustomLightMode"] as? [String:Any],

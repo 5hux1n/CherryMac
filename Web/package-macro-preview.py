@@ -13,7 +13,7 @@ root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) != 2:
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.17.0'
+version = '0.18.0'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')
@@ -64,6 +64,8 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 宏名称和录制偏好保存在当前浏览器的本地数据库；读取时只沿用与实际宏库和绑定相符的资料。建议导出配置、下载备份。清理网站数据或更换浏览器／网址会失去本地资料。“设备与诊断”可导出日志，文件不会上传。
 
 本包不含研究测试页面，也没有启动真机测试。请等统一验收安排后再进行写入测试。
+
+灯效页的“核对灯效写入”仅生成本地计划，不写入键盘。自定义配色核对和 Windows 草稿导出需要明确的官方原始 RGB；直接读回或来源未知的颜色不能直接转为原始配色。内置灯效遇到读回颜色时保留官方模板里的逐键配色。
 '''.encode()
 manifest = {'format': 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
