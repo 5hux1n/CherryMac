@@ -1276,6 +1276,17 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-restore-plan") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+3 else{throw HardwareError(message:"需要恢复记录和计划输出路径。")}
+        let input=URL(fileURLWithPath:args[index+1]),output=URL(fileURLWithPath:args[index+2])
+        guard input.standardizedFileURL.resolvingSymlinksInPath() != output.standardizedFileURL.resolvingSymlinksInPath() else{throw HardwareError(message:"不能覆盖原始恢复记录。")}
+        let plan=try WindowsProfile.restorePlanFromRecord(Data(contentsOf:input)),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(plan).write(to:output,options:.atomic)
+        print("PASS: raw restore plan exported offline; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-restore") {
     do{
         let args=CommandLine.arguments

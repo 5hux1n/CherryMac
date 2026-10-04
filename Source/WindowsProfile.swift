@@ -719,6 +719,22 @@ enum WindowsProfile {
             };return result
         }
     }
+    static func restorePlanFromRecord(_ data:Data)throws->OfficialLightingPlan.RecoveryPlan {
+        guard data.count<=3_000_000 else{throw HardwareError(message:"灯效恢复记录超过 3 MB。")}
+        let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+        let plan:OfficialLightingPlan.RecoveryPlan;let state:String
+        if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
+            let attempt=try JSONDecoder().decode(OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data),assessment=try attempt.assess()
+            state=assessment.recoveryStatus;plan=attempt.recovery
+        } else {
+            let record=try JSONDecoder().decode(OfficialLightingPlan.RecoveryRecord.self,from:data),assessment=try record.assess()
+            state=assessment.recoveryStatus
+            guard let current=record.current else{throw HardwareError(message:"记录没有完整读回，不能生成恢复计划。")}
+            plan = .init(sourceRecord:record,before:current)
+        }
+        guard ["available","unchanged"].contains(state)else{throw HardwareError(message:state=="unrecognized" ? "记录包含范围外或无法识别的变化，不能生成恢复计划。":"记录没有完整读回，不能生成恢复计划。")}
+        _ = try plan.reports();return plan
+    }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot

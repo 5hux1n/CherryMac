@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -11,7 +11,7 @@ import {saveLog,listLogs} from './logs.js?v=0.6.0';
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
-let recorder=null,recordingPreference=null,macroAbort=null;
+let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
 const textProduct=document.documentElement.dataset.textProduct==='true',textStore=new HostTextStore();
@@ -44,6 +44,7 @@ function render(){
   let pollingWords=null;try{if(profile.windowsTemplateJSON)pollingWords=officialSystemStageWords(JSON.parse(profile.windowsTemplateJSON));}catch{}
   $('polling-draft-summary').textContent=pollingWords?`当前官方草稿：${[125,250,500,1000][pollingWords[3]]?`${[125,250,500,1000][pollingWords[3]]} Hz`:`原始索引 ${pollingWords[3]}（尚未核对）`}；尚未写入键盘。`:'请先导入包含设备设置的官方配置。';
   $('save-polling-draft').disabled=busy||!pollingWords;
+  $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('review-lighting').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
@@ -312,14 +313,19 @@ if(textProduct){
   };
 }
 
+$('export-lighting-restore-plan').onclick=()=>act(()=>{
+  requireThat(lightingRecordForPlan,'请先检查含完整、可识别读回的灯效恢复记录。');
+  const recovery=lightingRestorePlanFromRecord(lightingRecordForPlan);download(recovery,'CherryMac-lighting-restore-plan.json');status('已导出原始数据恢复计划，尚未执行；计划依据记录中的保存状态，实际恢复前需要重新读取配置。');
+});
 $('inspect-lighting-record').onclick=()=>{if(!busy)$('lighting-record-file').click();};
 $('lighting-record-file').onchange=()=>act(async()=>{
   const input=$('lighting-record-file'),file=input.files[0];input.value='';if(!file)return;
-  $('lighting-record-result').textContent='';
+  lightingRecordForPlan=null;$('export-lighting-restore-plan').disabled=true;$('lighting-record-result').textContent='';
   requireThat(file.size<=3_000_000,'灯效恢复记录超过 3 MB。');
   const record=JSON.parse(await file.text()),review=record.format==='CherryMacLightingRestoreAttempt'?assessLightingRestoreAttempt(record):assessLightingRecoveryRecord(record);
   const state={alreadyMatched:'恢复前已与备份一致',readbackMatched:'读回符合目标',readbackMismatch:'读回未符合目标',incomplete:'日志未完成',failed:'操作失败'}[review.status];
   const recovery={available:'可分析原始数据恢复',unchanged:'配置与备份一致',unrecognized:'存在无法识别的配置变化',unavailable:'没有完整读回'}[review.recoveryStatus];
   $('lighting-record-result').textContent=`${state}；${recovery}。有效回复 ${review.traceReview.acceptedReports}/${review.traceReview.expectedReports}。未修改键盘。`;
+  if(['available','unchanged'].includes(review.recoveryStatus))lightingRecordForPlan=clone(record);
   download(review,'CherryMac-lighting-recovery-assessment.json');status('已完成本地分析并下载结果，未修改编辑区或键盘。');
 });

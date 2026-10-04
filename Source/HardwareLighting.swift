@@ -20,10 +20,19 @@ extension HardwareWindowController {
             let state=["alreadyMatched":"恢复前已与备份一致","readbackMatched":"读回符合目标","readbackMismatch":"读回未符合目标","incomplete":"日志未完成","failed":"操作失败"][stateCode] ?? stateCode
             let recovery=["available":"可分析原始数据恢复","unchanged":"配置与备份一致","unrecognized":"存在无法识别的配置变化","unavailable":"没有完整读回"][recoveryCode] ?? recoveryCode
             message.stringValue="\(state)；\(recovery)。有效回复 \(traceReview.acceptedReports)/\(traceReview.expectedReports)。未修改键盘。"
-            let save=NSSavePanel();save.nameFieldStringValue="CherryMac-灯效恢复分析.json"
+            let prompt=NSAlert();prompt.messageText="灯效恢复记录";prompt.informativeText=message.stringValue+"\n可导出恢复计划供后续核对；计划依据文件中的保存状态，实际恢复前仍需重新读取键盘。导出不会执行恢复。"
+            prompt.addButton(withTitle:"导出分析…")
+            let canPlan=["available","unchanged"].contains(recoveryCode)
+            if canPlan{prompt.addButton(withTitle:"导出恢复计划…")}
+            prompt.addButton(withTitle:"返回")
+            let choice=prompt.runModal();let exportingPlan=canPlan && choice==NSApplication.ModalResponse.alertSecondButtonReturn
+            guard choice==NSApplication.ModalResponse.alertFirstButtonReturn || exportingPlan else{return}
+            let outputData=exportingPlan ? try encoder.encode(WindowsProfile.restorePlanFromRecord(data)):encoded
+            let save=NSSavePanel();save.nameFieldStringValue=exportingPlan ? "CherryMac-灯效恢复计划.json":"CherryMac-灯效恢复分析.json"
             if save.runModal() == .OK,let output=save.url {
                 guard output.standardizedFileURL.resolvingSymlinksInPath() != url.standardizedFileURL.resolvingSymlinksInPath() else{throw HardwareError(message:"分析文件不能覆盖原始恢复记录。")}
-                try encoded.write(to:output,options:.atomic)
+                try outputData.write(to:output,options:.atomic)
+                message.stringValue=exportingPlan ? "已导出原始数据恢复计划，尚未执行；实际恢复前需要重新读取配置。":"已导出恢复分析，未修改键盘。"
             }
         }catch{message.stringValue=error.localizedDescription}
     }

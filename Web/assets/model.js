@@ -544,6 +544,17 @@ export async function executeLightingRestore(recovery,{source,operationID=global
   if(!attempt.failure&&!assessLightingRestoreAttempt(attempt).configurationMatchesOriginal)attempt.failure='恢复读回与原始备份不一致。';
   assessLightingRestoreAttempt(attempt);await persist(clone(attempt));return attempt;
 }
+export function lightingRestorePlanFromRecord(record){
+  let recovery,state;
+  if(record?.format==='CherryMacLightingRestoreAttempt'){
+    state=assessLightingRestoreAttempt(record).recoveryStatus;recovery=clone(record.recovery);
+  }else{
+    state=assessLightingRecoveryRecord(record).recoveryStatus;requireThat(record.current!=null,'记录没有完整读回，不能生成恢复计划。');
+    recovery={format:'CherryMacLightingRestorePlan',version:1,hardwareReady:false,sourceRecord:clone(record),before:clone(record.current)};
+  }
+  requireThat(['available','unchanged'].includes(state),state==='unrecognized'?'记录包含范围外或无法识别的变化，不能生成恢复计划。':'记录没有完整读回，不能生成恢复计划。');
+  lightingRestoreReports(recovery);return recovery;
+}
 export function assessLightingRecoveryRecord(record){
   requireThat(record?.format==='CherryMacLightingRecoveryRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'灯效恢复记录格式无效。');
   const target=officialLightingReadbackTarget(record.plan,record.original),traceReview=reviewOfficialLightingTrace(record.plan,record.trace);
