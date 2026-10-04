@@ -6,3 +6,6 @@ build/
 __pycache__/
 
 node_modules
+
+# Generated static web application
+/Web/static-dist/
