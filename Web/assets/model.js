@@ -280,7 +280,7 @@ function officialMacroSource(profile,macro){
 }
 // Template-based building block. Lighting/device fields are copied unchanged;
 // the full exporter must update and validate those separately before UI use.
-export function exportWindowsKeysAndMacros(profile,template){
+export function exportWindowsKeysAndMacros(profile,template,{preservingTextIndices=new Set()}={}){
   validateProfile(profile);const snapshot=resolveMacros(profile),root=clone(template);
   validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
@@ -302,13 +302,35 @@ export function exportWindowsKeysAndMacros(profile,template){
       if(winInt(k.ActionLink??0,'ActionLink',0,1)===1){const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,old.length-1);requireThat(remap.has(index),'内部位置引用旧宏，无法无损导出。');k.ActionLinkIndex=remap.get(index);}return;
     }
     const b=snapshot.keymap.slice(slot*3,slot*3+3);
-    if([0x70,0x71].includes(b[0])){const playback=decodeMacroBinding(b,profile.macros.length);k.ActionLink=1;k.ActionLinkIndex=add(b[1],playback);k.Assignment=k.DefaultAssignment;}
+    if(preservingTextIndices.has(i)||equal(b,[0xa1,0,0])){
+      requireThat(winInt(k.ActionLink??0,'ActionLink',0,1)===1,'文本键缺少官方文本定义，无法导出。');
+      const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,old.length-1);requireThat(remap.has(index),'文本动作索引无效，无法导出。');
+      const plan=officialHostTextPlan(old[index]);requireThat(!equal(b,[0xa1,0,0])||plan.marker!==null,'已安装文本键对应空定义，无法导出。');k.ActionLinkIndex=remap.get(index);
+    }else if([0x70,0x71].includes(b[0])){const playback=decodeMacroBinding(b,profile.macros.length);k.ActionLink=1;k.ActionLinkIndex=add(b[1],playback);k.Assignment=k.DefaultAssignment;}
     else{requireThat([0x20,0x30].includes(b[0]),'此按键动作尚不能导出到官方格式。');k.Assignment=b[0]*65536+b[1]*256+b[2];k.ActionLink=0;k.ActionLinkIndex=-1;}
   });
   // Official actions with different modes import as separate library items.
   // Check that representation still fits before returning a usable document.
   encodeBank(emitted);root.ActionInfo=actions;
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
+}
+export function exportWindowsKeysMacrosAndText(profile,template,textConfiguration,baseline){
+  validateSnapshot(baseline,true);const snapshot=resolveMacros(profile),root=clone(template),text=clone(textConfiguration);
+  for(const value of [root,text])validateWindowsTemplate(value,new TextEncoder().encode(JSON.stringify(value)).length);
+  requireThat(Array.isArray(text.ActionInfo),'文本配置缺少动作列表。');requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
+  const actions=root.ActionInfo??[],mapped=new Map(),preservingTextIndices=new Set();
+  text.ActionInfo.forEach((a,i)=>{if(winInt(a?.ActionType,'ActionType',0,4)!==3)return;officialHostTextPlan(a);
+    const old=actions.findIndex(value=>canonicalJSON(value)===canonicalJSON(a));mapped.set(i,old<0?actions.length:old);if(old<0)actions.push(a);
+  });
+  text.KeyList.forEach((k,i)=>{
+    if(winInt(k.ActionLink??0,'ActionLink',0,1)!==1)return;
+    const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,text.ActionInfo.length-1);requireThat(text.ActionInfo[index],'文本配置动作引用无效。');if(!mapped.has(index))return;
+    const slot=physicalSlot(WINDOWS_DEFAULTS[i]);requireThat(slot!==undefined&&![6,71].includes(slot),'内部或隐藏文本键尚不能合并导出。');
+    const b=snapshot.keymap.slice(slot*3,slot*3+3);requireThat(equal(b,[0xa1,0,0])||equal(b,baseline.keymap.slice(slot*3,slot*3+3)),'同一个键同时有键位／宏修改和文本绑定，请先在对应页面解除冲突再导出。');
+    root.KeyList[i].ActionLink=1;root.KeyList[i].ActionLinkIndex=mapped.get(index);root.KeyList[i].Assignment=k.Assignment??k.DefaultAssignment;preservingTextIndices.add(i);
+  });
+  root.KeyList.forEach((k,i)=>{const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot!==undefined&&equal(snapshot.keymap.slice(slot*3,slot*3+3),[0xa1,0,0]))requireThat(preservingTextIndices.has(i),'有已安装文本键缺少当前文本定义或待解除，请先核对文本页再导出。');});
+  root.ActionInfo=actions;return exportWindowsKeysAndMacros(profile,root,{preservingTextIndices});
 }
 export function importWindows(root,baseline,{deferHostText=false}={}){
   officialSystemStageWords(root);

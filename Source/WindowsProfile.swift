@@ -297,7 +297,7 @@ enum WindowsProfile {
     }
     // Intermediate exporter: update keys/macros in an official template while
     // preserving lighting, device settings and unrelated/unknown fields.
-    static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data)throws->Data {
+    static func encodeKeysAndMacros(_ profile:HardwareProfile,template:Data,preservingTextIndices:Set<Int>=[])throws->Data {
         try profile.validate();let snapshot=try profile.resolvedMacros()
         var root=try templateRoot(template),keys=root["KeyList"] as! [[String:Any]]
         if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
@@ -340,7 +340,14 @@ enum WindowsProfile {
                 };continue
             }
             let bytes=Array(snapshot.keymap[slot*3..<slot*3+3])
-            if [UInt8(0x70),0x71].contains(bytes[0]){
+            if preservingTextIndices.contains(i) || bytes==[0xA1,0,0] {
+                guard try integer(keys[i]["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 else{throw HardwareError(message:"文本键缺少官方文本定义，无法导出。")}
+                let index=try integer(keys[i]["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,old.count-1))
+                guard old.indices.contains(index),let mapped=remap[index] else{throw HardwareError(message:"文本动作索引无效，无法导出。")}
+                let plan=try HostTextPlan(action:old[index])
+                guard bytes != [0xA1,0,0] || plan.marker != nil else{throw HardwareError(message:"已安装文本键对应空定义，无法导出。")}
+                keys[i]["ActionLinkIndex"]=mapped
+            }else if [UInt8(0x70),0x71].contains(bytes[0]){
                 let playback=try CherryMacroCodec.playback(bytes,macroCount:profile.macros.count)
                 keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=try add(Int(bytes[1]),playback);keys[i]["Assignment"]=keys[i]["DefaultAssignment"]
             }else{
@@ -353,6 +360,40 @@ enum WindowsProfile {
         root["KeyList"]=keys;root["ActionInfo"]=actions
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
         guard output.count<=1_000_000 else{throw HardwareError(message:"导出的配置文件过大。")};return output
+    }
+    // Text page definitions are authoritative only for their referenced text
+    // keys. Normal edits on those keys must be resolved rather than overwritten.
+    static func encodeKeysMacrosAndText(_ profile:HardwareProfile,template:Data,textConfiguration:Data,baseline:HardwareSnapshot)throws->Data {
+        try baseline.validate();let snapshot=try profile.resolvedMacros()
+        var root=try templateRoot(template);let text=try templateRoot(textConfiguration)
+        var keys=root["KeyList"] as! [[String:Any]]
+        guard let textActions=text["ActionInfo"] as? [[String:Any]] else{throw HardwareError(message:"文本配置缺少动作列表。")}
+        if let value=root["ActionInfo"],!(value is NSNull),!(value is [[String:Any]]){throw HardwareError(message:"Windows 动作结构无效。")}
+        var actions=root["ActionInfo"] as? [[String:Any]] ?? [],textIndices:Set<Int>=[],mapped:[Int:Int]=[:]
+        for (index,action) in textActions.enumerated(){
+            if try integer(action["ActionType"],"ActionType",range:0...4) != 3{continue}
+            _ = try HostTextPlan(action:action)
+            let canonical=try JSONSerialization.data(withJSONObject:action,options:.sortedKeys)
+            if let old=try actions.firstIndex(where:{try JSONSerialization.data(withJSONObject:$0,options:.sortedKeys)==canonical}){mapped[index]=old}
+            else{mapped[index]=actions.count;actions.append(action)}
+        }
+        for (i,key) in (text["KeyList"] as! [[String:Any]]).enumerated(){
+            guard try integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 else{continue}
+            let index=try integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,textActions.count-1))
+            guard textActions.indices.contains(index) else{throw HardwareError(message:"文本配置动作引用无效。")}
+            guard let action=mapped[index] else{continue}
+            guard let slot=physicalSlot(defaults[i]),![6,71].contains(slot) else{throw HardwareError(message:"内部或隐藏文本键尚不能合并导出。")}
+            let bytes=Array(snapshot.keymap[slot*3..<slot*3+3])
+            guard bytes==[0xA1,0,0] || bytes==Array(baseline.keymap[slot*3..<slot*3+3]) else{throw HardwareError(message:"同一个键同时有键位／宏修改和文本绑定，请先在对应页面解除冲突再导出。")}
+            keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=action
+            keys[i]["Assignment"]=key["Assignment"] ?? key["DefaultAssignment"]
+            textIndices.insert(i)
+        }
+        for i in keys.indices {
+            if let slot=physicalSlot(defaults[i]),Array(snapshot.keymap[slot*3..<slot*3+3])==[0xA1,0,0],!textIndices.contains(i){throw HardwareError(message:"有已安装文本键缺少当前文本定义或待解除，请先核对文本页再导出。")}
+        }
+        root["KeyList"]=keys;root["ActionInfo"]=actions
+        return try encodeKeysAndMacros(profile,template:JSONSerialization.data(withJSONObject:root,options:.sortedKeys),preservingTextIndices:textIndices)
     }
     static func decode(_ data:Data,baseline:HardwareSnapshot,deferHostText:Bool=false)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}

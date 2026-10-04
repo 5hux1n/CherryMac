@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -870,4 +870,24 @@ test('mixed official import defers text and retains its live macro binding and m
   assert.deepEqual(JSON.parse(p.windowsTemplateJSON),root);assert.deepEqual(baseline,before);
   root.ActionInfo[0].ActionContent.ActionText=17;
   assert.throws(()=>parseProfile(JSON.stringify(root),baseline,{deferHostText:true}),/文本/);assert.deepEqual(baseline,before);
+});
+
+test('mixed official export remaps shared text and macro actions and rejects conflicting drafts',()=>{
+  const baseline=demoSnapshot(),root=windowsFixture();
+  root.ActionInfo=[officialMacroAction(macro),{ActionType:3,ActionName:'Shared',ActionTextFlag:1,opaque:{id:42},ActionContent:{ActionText:'旧文本',vendor:7}}];
+  root.KeyList[0].ActionLink=1;root.KeyList[0].ActionLinkIndex=0;
+  for(const i of [17,18]){root.KeyList[i].ActionLink=1;root.KeyList[i].ActionLinkIndex=1;}
+  const p=importWindows(root,baseline,{deferHostText:true}),text=clone(root);text.ActionInfo[1].ActionContent.ActionText='新文本😀\r\n';
+  const before=clone({p,root,text,baseline}),out=exportWindowsKeysMacrosAndText(p,root,text,baseline);
+  assert.equal(out.ActionInfo[out.KeyList[0].ActionLinkIndex].ActionType,2);
+  assert.equal(out.KeyList[17].ActionLinkIndex,out.KeyList[18].ActionLinkIndex);
+  assert.deepEqual(out.ActionInfo[out.KeyList[17].ActionLinkIndex],text.ActionInfo[1]);
+  assert.deepEqual(exportWindowsKeysMacrosAndText(p,out,text,baseline),out);
+  const round=importWindows(out,baseline,{deferHostText:true});assert.deepEqual(round.macros.find(m=>m.name===round.macroBindings[keys.find(k=>k.id==='esc').slot]).steps,macro.steps);
+  const installed=clone(p);installed.snapshot.keymap.splice(306,3,0xa1,0,0);
+  const saved=exportWindowsKeysMacrosAndText(installed,root,text,baseline);assert.equal(saved.ActionInfo[saved.KeyList[17].ActionLinkIndex].ActionContent.ActionText,text.ActionInfo[1].ActionContent.ActionText);
+  const conflict=clone(p);conflict.snapshot.keymap.splice(306,3,0x20,0,6);assert.throws(()=>exportWindowsKeysMacrosAndText(conflict,root,text,baseline),/解除冲突/);
+  const removed=clone(text);removed.KeyList[17].ActionLink=0;removed.KeyList[17].ActionLinkIndex=-1;assert.throws(()=>exportWindowsKeysMacrosAndText(installed,root,removed,baseline),/缺少当前文本定义/);
+  const malformed=clone(text);malformed.KeyList[17].ActionLinkIndex=999;assert.throws(()=>exportWindowsKeysMacrosAndText(p,root,malformed,baseline));
+  assert.deepEqual({p,root,text,baseline},before);
 });

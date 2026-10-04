@@ -315,7 +315,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
         place(button("导入配置…",#selector(importProfile)),8,94,180,32,in:files)
         place(button("导出配置…",#selector(exportProfile)),208,94,180,32,in:files)
+        #if CHERRY_MACRO_PRODUCT
+        place(button("导出 Windows 键位、宏与文本…",#selector(exportWindowsProfile)),408,94,280,32,in:files)
+        #else
         place(button("导出 Windows 键位与宏…",#selector(exportWindowsProfile)),408,94,280,32,in:files)
+        #endif
         place(label("备份与撤销",17,.semibold),8,160,850,27,in:files)
         place(button("打开自动备份",#selector(openBackups)),8,205,180,32,in:files)
         place(button("撤销编辑区修改",#selector(discardDraft)),208,205,210,32,in:files)
@@ -323,7 +327,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #if CHERRY_MACRO_PRODUCT
         place(button("恢复最近宏写入",#selector(restoreLastMacros)),678,205,195,32,in:files)
         #endif
+        #if CHERRY_MACRO_PRODUCT
+        place(label("Windows 导出需要已导入的官方模板，合并键位、宏和文本页选中的定义。同一个键若有键位修改与文本绑定，请先解除冲突。灯效和设备设置沿用模板；导入和导出不修改键盘。",12),8,261,850,62,in:files)
+        #else
         place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导出先导入官方模板，只更新键位与宏；灯效和设备设置沿用模板。导入和撤销不修改键盘。",12),8,261,850,62,in:files)
+        #endif
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -1067,11 +1075,24 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard !busy,let p=profile else{message.stringValue="请先读取或导入配置。";return}
         do{
             guard let template=p.windowsTemplateJSON else{throw HardwareError(message:"请先导入本型号的 Windows 官方 JSON，作为导出模板。")}
-            let data=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8))
-            let panel=NSSavePanel();panel.nameFieldStringValue="CHERRY-键位与宏.json"
+            let data:Data;let includesText:Bool
+            #if CHERRY_MACRO_PRODUCT
+            if let hostTextJSON {
+                guard let baseline else{throw HardwareError(message:"合并文本导出需要当前读取基线，请先读取键盘。")}
+                data=try WindowsProfile.encodeKeysMacrosAndText(p,template:Data(template.utf8),textConfiguration:hostTextJSON,baseline:baseline);includesText=true
+            }else{data=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8));includesText=false}
+            #else
+            data=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8));includesText=false
+            #endif
+            let panel=NSSavePanel()
+            #if CHERRY_MACRO_PRODUCT
+            panel.nameFieldStringValue=includesText ? "CHERRY-键位宏与文本.json":"CHERRY-键位与宏.json"
+            #else
+            panel.nameFieldStringValue="CHERRY-键位与宏.json"
+            #endif
             panel.beginSheetModal(for:window!){[weak self] result in
                 guard result == .OK,let url=panel.url else{return}
-                do{try data.write(to:url,options:.atomic);self?.message.stringValue="已导出 Windows 格式键位与宏；灯效和设备设置沿用导入模板。"}
+                do{try data.write(to:url,options:.atomic);self?.message.stringValue=includesText ? "已合并导出 Windows 格式键位、宏与文本；灯效和设备设置沿用导入模板。":"已导出 Windows 格式键位与宏；灯效和设备设置沿用导入模板。"}
                 catch{self?.message.stringValue=error.localizedDescription}
             }
         }catch{message.stringValue=error.localizedDescription}

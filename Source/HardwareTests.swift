@@ -1241,8 +1241,25 @@ func runMixedOfficialImportChecks(){
     precondition(imported.profile.macroBindings?[WindowsProfile.physicalSlot(WindowsProfile.defaults[0])!]==new.name)
     let retained=try! WindowsProfile.templateRoot(Data(imported.profile.windowsTemplateJSON!.utf8))
     precondition((retained["ActionInfo"] as! [[String:Any]])[0]["ActionTextFlag"] as! Int==1)
+    var text=root,textActions=text["ActionInfo"] as! [[String:Any]]
+    textActions[0]["ActionContent"]=["ActionText":"新文本😀\r\n","opaque":7];textActions[0]["opaque"]=["id":42];text["ActionInfo"]=textActions
+    var sharedKeys=keys;sharedKeys[18]["ActionLink"]=1;sharedKeys[18]["ActionLinkIndex"]=0;text["KeyList"]=sharedKeys
+    let textData=try! JSONSerialization.data(withJSONObject:text,options:.sortedKeys)
+    let exported=try! WindowsProfile.encodeKeysMacrosAndText(imported.profile,template:encoded(),textConfiguration:textData,baseline:baseline)
+    let out=try! WindowsProfile.templateRoot(exported),outKeys=out["KeyList"] as! [[String:Any]],outActions=out["ActionInfo"] as! [[String:Any]]
+    let ti=outKeys[17]["ActionLinkIndex"] as! Int,mi=outKeys[0]["ActionLinkIndex"] as! Int
+    precondition(ti==outKeys[18]["ActionLinkIndex"] as! Int && outActions[mi]["ActionType"] as! Int==2)
+    precondition((outActions[ti]["ActionContent"] as! [String:Any])["ActionText"] as! String=="新文本😀\r\n")
+    precondition((outActions[ti]["opaque"] as! [String:Int])["id"]==42)
+    precondition(try! WindowsProfile.encodeKeysMacrosAndText(imported.profile,template:exported,textConfiguration:textData,baseline:baseline)==exported)
+    var installed=imported.profile;installed.macroBindings?.removeValue(forKey:102);installed.macroModes?.removeValue(forKey:102);installed.snapshot.keymap.replaceSubrange(306..<309,with:[0xA1,0,0])
+    _ = try! WindowsProfile.encodeKeysMacrosAndText(installed,template:encoded(),textConfiguration:textData,baseline:baseline)
+    var conflict=installed;conflict.snapshot.keymap.replaceSubrange(306..<309,with:[0x20,0,6])
+    rejected{_ = try WindowsProfile.encodeKeysMacrosAndText(conflict,template:encoded(),textConfiguration:textData,baseline:baseline)}
+    sharedKeys[17]["ActionLink"]=0;sharedKeys[17]["ActionLinkIndex"] = -1;text["KeyList"]=sharedKeys
+    rejected{_ = try WindowsProfile.encodeKeysMacrosAndText(installed,template:encoded(),textConfiguration:JSONSerialization.data(withJSONObject:text),baseline:baseline)}
     root["ActionInfo"]=[["ActionType":3,"ActionContent":["ActionText":17]],try! WindowsProfile.macroAction(new)]
     rejected{_ = try WindowsProfile.decode(encoded(),baseline:baseline,deferHostText:true)}
     precondition(original.snapshot==baseline)
-    print("PASS: mixed official macro/text import preserves live held binding; invalid import rejected (no HID or permissions)")
+    print("PASS: mixed macro/text import and export; shared references, metadata, installed marker and conflicting drafts (no HID or permissions)")
 }
