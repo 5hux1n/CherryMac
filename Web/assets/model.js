@@ -470,6 +470,23 @@ export function officialLightingReports(plan){
   return expected.flatMap((s,index)=>[...(s.beginRequired?[{stage:index,kind:'begin',delayMilliseconds:0,request:encode(s.beginCommand)}]:[]),...s.writes.map(w=>({stage:index,kind:'data',delayMilliseconds:0,request:encode(w.command,[w.data.length,w.offset&255,w.offset>>8,w.flag,...w.data])})),{stage:index,kind:'finish',delayMilliseconds:10,request:encode(s.finishCommand)}]);
 }
 
+const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+const applyLightingCandidate=(snapshot,write)=>{const result=clone(snapshot),field=write.command===6?'parameters':'colors';result[field].splice(write.offset,write.data.length,...write.data);return result;};
+export function officialLightingReadbackTarget(plan,baseline){
+  officialLightingReports(plan);validateSnapshot(baseline,true);
+  requireThat(plan.bank===0&&baseline.parameters[0]===0,'读回模型仅支持有完整基线的配置 0，不能推断其他配置区。');
+  return plan.stages.flatMap(s=>s.writes).reduce(applyLightingCandidate,clone(baseline));
+}
+export function officialLightingRecoveryReview(plan,original,current){
+  officialLightingReadbackTarget(plan,original);validateSnapshot(current,true);
+  const writes=plan.stages.flatMap(s=>s.writes),matchedWritePrefixes=[];let state=clone(original);
+  if(lightingConfigurationEqual(current,state))matchedWritePrefixes.push(0);
+  writes.forEach((write,index)=>{state=applyLightingCandidate(state,write);if(lightingConfigurationEqual(current,state))matchedWritePrefixes.push(index+1);});
+  requireThat(matchedWritePrefixes.length>0,'当前配置不是本次原表／目标或完整分块前缀，停止自动恢复分析。');
+  const restoreData=writes.flatMap(write=>{const field=write.command===6?'parameters':'colors',data=original[field].slice(write.offset,write.offset+write.data.length),now=current[field].slice(write.offset,write.offset+write.data.length);return equal(data,now)?[]:[{command:write.command,offset:write.offset,flag:write.flag,data}];});
+  return {format:'CherryMacLightingRecoveryReview',version:1,hardwareReady:false,matchedWritePrefixes,requiresRecovery:!lightingConfigurationEqual(current,original),restoreData};
+}
+
 export function prepareOfficialLightingParameters(template,bank){
   validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=255&&template.LightInfo,'需要完整官方灯效参数和可表示为单字节的配置编号。');

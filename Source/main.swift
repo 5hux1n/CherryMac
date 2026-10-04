@@ -1249,6 +1249,21 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--review-official-lighting") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+5 else{throw HardwareError(message:"需要候选计划、原始配置、当前配置和分析输出路径。")}
+        let data=try Data(contentsOf:URL(fileURLWithPath:args[index+1]))
+        guard data.count<=1_000_000 else{throw HardwareError(message:"灯效候选计划文件过大。")}
+        let plan=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.self,from:data)
+        let original=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:args[index+2])))
+        let current=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:args[index+3])))
+        let review=try plan.recoveryReview(original:original.snapshot,current:current.snapshot)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(review).write(to:URL(fileURLWithPath:args[index+4]),options:.atomic)
+        print("PASS: lighting recovery reviewed offline; no HID or restore authorization");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if CommandLine.arguments.contains("--lighting-draft-self-test"){runLightingDraftExportChecks();exit(0)}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)

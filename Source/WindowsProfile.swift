@@ -441,6 +441,42 @@ enum WindowsProfile {
                 guard reply[4..<8].elementsEqual(request[4..<8])else{throw HardwareError(message:"灯效候选回复的偏移或状态不匹配。")}
             }
         }
+        struct RecoveryReview:Codable,Equatable {
+            var format="CherryMacLightingRecoveryReview";var version=1;var hardwareReady=false
+            var matchedWritePrefixes:[Int];var requiresRecovery:Bool;var restoreData:[Write]
+        }
+        private func applying(_ write:Write,to snapshot:HardwareSnapshot)->HardwareSnapshot {
+            var result=snapshot;let range=write.offset..<write.offset+write.data.count
+            if write.command==6{result.parameters.replaceSubrange(range,with:write.data)}
+            else{result.colors!.replaceSubrange(range,with:write.data)}
+            return result
+        }
+        private func sameConfiguration(_ first:HardwareSnapshot,_ second:HardwareSnapshot)->Bool {
+            var normalized=first;normalized.createdAt=second.createdAt;return normalized==second
+        }
+        // Current snapshots read only bank zero. Other banks need their own
+        // independently read baseline; never reuse bank-zero data for them.
+        func expectedReadback(from baseline:HardwareSnapshot)throws->HardwareSnapshot {
+            _ = try reports();try baseline.validate()
+            guard bank==0,baseline.parameters[0]==0,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"读回模型仅支持有完整基线的配置 0，不能推断其他配置区。")}
+            return stages.flatMap{$0.writes}.reduce(baseline){applying($1,to:$0)}
+        }
+        // Conservative offline review: recognize whole-data-write prefixes,
+        // not arbitrary byte mixtures. It does not authorize a restore.
+        func recoveryReview(original:HardwareSnapshot,current:HardwareSnapshot)throws->RecoveryReview {
+            _ = try expectedReadback(from:original);try current.validate()
+            let writes=stages.flatMap{$0.writes};var state=original,matched:[Int]=[]
+            if sameConfiguration(current,state){matched.append(0)}
+            for (index,write) in writes.enumerated(){state=applying(write,to:state);if sameConfiguration(current,state){matched.append(index+1)}}
+            guard !matched.isEmpty else{throw HardwareError(message:"当前配置不是本次原表／目标或完整分块前缀，停止自动恢复分析。")}
+            let restore=writes.compactMap{write->Write? in
+                let range=write.offset..<write.offset+write.data.count
+                let old=write.command==6 ? Array(original.parameters[range]):Array(original.colors![range])
+                let now=write.command==6 ? Array(current.parameters[range]):Array(current.colors![range])
+                return old==now ? nil:Write(command:write.command,offset:write.offset,flag:write.flag,data:old)
+            }
+            return .init(matchedWritePrefixes:matched,requiresRecovery:!sameConfiguration(current,original),restoreData:restore)
+        }
         // Offline rendering only. Rebuild the bounded stage graph before
         // accepting a saved/mutable plan; never pass this to a USB sender.
         func reports()throws->[Report]{

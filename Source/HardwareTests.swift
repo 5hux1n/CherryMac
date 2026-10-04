@@ -1363,6 +1363,21 @@ func runLightingDraftExportChecks(){
     precondition(!alternateReports.contains{$0.kind=="begin"})
     let highColor=alternateReports.first{$0.request[3]==139}!
     badReply=highColor.request;badReply[5] ^= 1;rejected{try highColor.validateReply(badReply)}
+    let zeroPlan=try! WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+    let target=try! zeroPlan.expectedReadback(from:snapshot)
+    precondition(target.keymap==snapshot.keymap && target.macroData==snapshot.macroData && target.parameters[9..<21]==snapshot.parameters[9..<21] && target.parameters[24]==1)
+    let review=try! zeroPlan.recoveryReview(original:snapshot,current:target)
+    precondition(!review.hardwareReady && review.requiresRecovery && review.matchedWritePrefixes.contains(10))
+    var restored=target
+    for write in review.restoreData{let range=write.offset..<write.offset+write.data.count;if write.command==6{restored.parameters.replaceSubrange(range,with:write.data)}else{restored.colors!.replaceSubrange(range,with:write.data)}}
+    precondition(restored==snapshot && review.restoreData.first{$0.command==6 && $0.offset==24}!.data==[0])
+    var unchanged=snapshot;unchanged.createdAt=Date(timeInterval:10,since:snapshot.createdAt)
+    precondition(try! zeroPlan.recoveryReview(original:snapshot,current:unchanged).restoreData.isEmpty)
+    var partial=snapshot;partial.parameters.replaceSubrange(0..<9,with:zeroPlan.stages[0].writes[0].data)
+    precondition(try! zeroPlan.recoveryReview(original:snapshot,current:partial).matchedWritePrefixes.contains(1))
+    partial=target;partial.keymap[0] ^= 1;rejected{_ = try zeroPlan.recoveryReview(original:snapshot,current:partial)}
+    partial=target;partial.parameters[30] ^= 1;rejected{_ = try zeroPlan.recoveryReview(original:snapshot,current:partial)}
+    rejected{_ = try alternate.expectedReadback(from:snapshot)}
     rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:nil,bank:3,transportSelector:0,chunkCapacity:56,beginRequired:true)}
     rejected{_ = try WindowsProfile.planOfficialLighting(planData,baseline:snapshot,lightingMapping:mapping,bank:128,transportSelector:0,chunkCapacity:56,beginRequired:true)}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
