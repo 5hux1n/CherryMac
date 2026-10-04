@@ -18,6 +18,14 @@ export function resolveLightingSlots(factoryKeymap,ledIndices){
     return null;
   });
 }
+export function lightingMappingSlots(mapping,snapshot){
+  requireThat(mapping&&typeof mapping==='object'&&!Array.isArray(mapping)&&bytes(mapping.deviceInfo,34)&&equal(mapping.deviceInfo,snapshot.deviceInfo),'灯光映射与当前固件信息不一致，请重新读取。');
+  return resolveLightingSlots(mapping.factoryKeymap,mapping.ledIndices);
+}
+export function lightingColorSlot(profile,keySlot){
+  if(!profile.lightingMapping)return keySlot;
+  const slot=profile.lightingMapping.ledIndices[keySlot];return Number.isInteger(slot)&&slot>=0&&slot<126?slot:null;
+}
 // Host text preparation only; WebHID cannot inject text into other apps.
 export function officialHostTextPlan(action){
   requireThat(winInt(action?.ActionType,'ActionType',0,4)===3&&action.ActionContent&&typeof action.ActionContent.ActionText==='string','Windows 文本动作结构无效。');
@@ -214,7 +222,7 @@ export function fromHardware(snapshot){
   }}return p;
 }
 export function validateProfile(p){
-  requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);
+  requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
   if(p.hostTextJSON!=null){requireThat(typeof p.hostTextJSON==='string','文本配置定义无效。');validateHostTextDefinition(JSON.parse(p.hostTextJSON));}
   p.macros.forEach(m=>officialMacroSource(p,m));
@@ -234,7 +242,7 @@ export function parseProfile(text,baseline,options={}){
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
-  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;return editable;}catch{}}
+  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);return editable;}catch{}}
   if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
@@ -356,22 +364,25 @@ export function exportWindowsKeysMacrosAndText(profile,template,textConfiguratio
   root.ActionInfo=actions;return exportWindowsKeysAndMacros(profile,root,{preservingTextIndices});
 }
 // File-only conversion; unknown light fields and unmapped colors survive.
-export function exportWindowsLightingDraft(snapshot,template){
+export function exportWindowsLightingDraft(snapshot,template,lightingMapping=null){
   validateSnapshot(snapshot,true);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   const light=root.LightInfo,custom=root.CustomLightMode,groups=custom?.LightColorInfo;
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&custom&&typeof custom==='object'&&!Array.isArray(custom)&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126&&Array.isArray(snapshot.colors),'导出灯效需要完整读取配色和带 126 项颜色表的官方模板。');
+  const mapping=lightingMapping==null?null:lightingMappingSlots(lightingMapping,snapshot);
   const p=snapshot.parameters,selected=MODE_CODES.indexOf(p[1]);requireThat(modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数超出本型号已核对范围，不能导出。');
   Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
-  groups[0].forEach((entry,i)=>{requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');for(const name of ['Red','Green','Blue'])winInt(entry[name],name,0,255);if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot!==undefined)['Red','Green','Blue'].forEach((name,offset)=>entry[name]=snapshot.colors[slot*3+offset]);});
+  groups[0].forEach((entry,i)=>{requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');for(const name of ['Red','Green','Blue'])winInt(entry[name],name,0,255);if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);const slot=mapping===null?physicalSlot(WINDOWS_DEFAULTS[i]):mapping[i];if(slot!=null)['Red','Green','Blue'].forEach((name,offset)=>entry[name]=snapshot.colors[slot*3+offset]);});
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的官方配置文件过大。');return root;
 }
-export function importWindows(root,baseline,{deferHostText=false}={}){
+export function importWindows(root,baseline,{deferHostText=false,lightingMapping=null}={}){
   officialSystemStageWords(root);
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
   for(const field of ['LightInfo','CustomLightMode'])requireThat(root[field]==null||(typeof root[field]==='object'&&!Array.isArray(root[field])),'Windows 灯效结构无效。');
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
   const p=fromHardware(baseline),old=clone(p.macroBindings),actions=root.ActionInfo??[],imported=new Map(),physical=new Set(WINDOWS_DEFAULTS.map(physicalSlot));
+  const lightingSlots=lightingMapping==null?null:lightingMappingSlots(lightingMapping,baseline);
+  if(lightingMapping!=null)p.lightingMapping=clone(lightingMapping);
   p.windowsTemplateJSON=JSON.stringify(root);
   const oldModes=clone(p.macroModes??{});
   if(deferHostText&&validateHostTextDefinition(root)>0)p.hostTextJSON=p.windowsTemplateJSON;
@@ -409,13 +420,15 @@ export function importWindows(root,baseline,{deferHostText=false}={}){
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');
     p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winInt(l.MultiColor,'彩虹',0,1),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));}
-  const groups=root.CustomLightMode?.LightColorInfo;if(root.CustomLightMode){requireThat(Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'逐键颜色组不匹配。');groups[0].forEach((c,i)=>{requireThat(c&&typeof c==='object'&&!Array.isArray(c),'逐键颜色记录结构无效。');const rgb=['Red','Green','Blue'].map(k=>winInt(c[k],k,0,255));if(Object.hasOwn(c,'Alpha'))winInt(c.Alpha,'Alpha',0,255);const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot!==undefined)p.snapshot.colors.splice(slot*3,3,...rgb);});}
+  const groups=root.CustomLightMode?.LightColorInfo;if(root.CustomLightMode){requireThat(Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'逐键颜色组不匹配。');groups[0].forEach((c,i)=>{requireThat(c&&typeof c==='object'&&!Array.isArray(c),'逐键颜色记录结构无效。');const rgb=['Red','Green','Blue'].map(k=>winInt(c[k],k,0,255));if(Object.hasOwn(c,'Alpha'))winInt(c.Alpha,'Alpha',0,255);const slot=lightingSlots===null?physicalSlot(WINDOWS_DEFAULTS[i]):lightingSlots[i];if(slot!=null)p.snapshot.colors.splice(slot*3,3,...rgb);});}
   if(!equal(p.macroBindings,old)||imported.size)p.snapshot=resolveMacros(p);validateProfile(p);return p;
 }
 export function rgb(hex){requireThat(/^#[\da-f]{6}$/i.test(hex),'请输入六位 HEX 色号。');return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
 export const hex=b=>'#'+b.map(x=>x.toString(16).padStart(2,'0')).join('');
-export function paint(s,selection,pattern,start,end){
-  const targets=keys.filter(k=>selection.has(k.id));requireThat(targets.length&&targets.length===selection.size,'请选择按键。');
+export function paint(s,selection,pattern,start,end,lightingMapping=null){
+  if(lightingMapping!=null)lightingMappingSlots(lightingMapping,s);
+  const slotFor=key=>lightingColorSlot({lightingMapping},key.slot);
+  const targets=keys.filter(k=>selection.has(k.id));requireThat(targets.length&&targets.length===selection.size,'请选择按键。');requireThat(targets.every(k=>slotFor(k)!=null),'所选按键没有有效 LED 映射。');
   const xs=targets.map(k=>k.x+k.w/2),ys=targets.map(k=>k.y+k.h/2),minX=Math.min(...xs),minY=Math.min(...ys),dx=Math.max(...xs)-minX,dy=Math.max(...ys)-minY;
   const mix=(a,b,t)=>a.map((v,i)=>Math.round(v*(1-t)+b[i]*t));
   for(const k of targets){const x=dx?(k.x+k.w/2-minX)/dx:0,y=dy?(k.y+k.h/2-minY)/dy:0;let color=start;
@@ -423,7 +436,7 @@ export function paint(s,selection,pattern,start,end){
     if(pattern==='rainbow'){const h=x*.83*6,c=1,q=1-Math.abs(h%2-1);color=([[c,q,0],[q,c,0],[0,c,q],[0,q,c],[q,0,c],[c,0,q]][Math.floor(h)]).map(v=>Math.round(v*255));}
     if(pattern==='pikachu')color=['esc','calculator'].includes(k.id)?[255,54,44]:k.id.startsWith('mod')?[78,54,18]:[255,214,0];
     if(pattern==='charizard')color=mix([255,55,0],[255,202,32],1-y);
-    s.colors.splice(k.slot*3,3,...color);
+    s.colors.splice(slotFor(k)*3,3,...color);
   }s.parameters[1]=8;
 }
 

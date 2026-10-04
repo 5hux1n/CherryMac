@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -950,4 +950,27 @@ test('lighting slots use separate LED indices and firmware logical matching',()=
   for(const value of [126,254,-1,256]){const bad=clone(indices);bad[0]=value;assert.throws(()=>resolveLightingSlots(factory,bad));}
   assert.throws(()=>resolveLightingSlots(before.slice(1),indices));assert.throws(()=>resolveLightingSlots(before,indices.slice(1)));
   assert.equal(resolveLightingSlots(before,Array(126).fill(255)).every(x=>x===null),true);
+});
+
+
+test('portable lighting metadata drives mapped official colors and painting',()=>{
+  const snapshot=demoSnapshot(),root=windowsFixture();root.CustomLightMode={LightColorInfo:[WINDOWS_DEFAULTS.map((_,i)=>({Red:i,Green:255-i,Blue:17,Alpha:255}))]};
+  const mapping={deviceInfo:clone(snapshot.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)};
+  const imported=importWindows(root,snapshot,{lightingMapping:mapping});
+  assert.deepEqual(imported.lightingMapping,mapping);
+  const slots=lightingMappingSlots(mapping,snapshot);
+  for(let i=0;i<126;i++)if(slots[i]!=null)assert.deepEqual(imported.snapshot.colors.slice(slots[i]*3,slots[i]*3+3),[i,255-i,17]);
+  const exported=exportWindowsLightingDraft(imported.snapshot,root,mapping);
+  assert.deepEqual(exported.CustomLightMode.LightColorInfo,root.CustomLightMode.LightColorInfo);
+  assert.deepEqual(parseProfile(JSON.stringify(imported)).lightingMapping,mapping);
+  const raw={format:'CherryMacProfile',version:1,snapshot,macros:[],lightingMapping:mapping};assert.deepEqual(parseProfile(JSON.stringify(raw)).lightingMapping,mapping);
+  const key=keys.find(k=>k.id==='calculator'),slot=lightingColorSlot(imported,key.slot),before=clone(imported.snapshot);
+  paint(imported.snapshot,new Set([key.id]),'custom',[1,2,3],[0,0,0],mapping);
+  assert.deepEqual(imported.snapshot.colors.slice(slot*3,slot*3+3),[1,2,3]);
+  for(let i=0;i<126;i++)if(i!==slot)assert.deepEqual(imported.snapshot.colors.slice(i*3,i*3+3),before.colors.slice(i*3,i*3+3));
+  const absent=clone(mapping);absent.ledIndices[key.slot]=255;const unchanged=clone(imported.snapshot);
+  assert.throws(()=>paint(imported.snapshot,new Set([key.id]),'custom',[0,0,0],[0,0,0],absent),/LED/);assert.deepEqual(imported.snapshot,unchanged);
+  const wrong=clone(mapping);wrong.deviceInfo[0]^=1;
+  assert.throws(()=>importWindows(root,snapshot,{lightingMapping:wrong}),/固件/);assert.throws(()=>exportWindowsLightingDraft(snapshot,root,wrong),/固件/);
+  const bad=clone(raw);bad.lightingMapping=wrong;assert.throws(()=>parseProfile(JSON.stringify(bad)),/固件/);
 });

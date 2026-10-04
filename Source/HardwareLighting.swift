@@ -63,7 +63,7 @@ extension HardwareWindowController {
         return rgb(color.color)
     }
     func loadLightColor(){
-        guard let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),let colors=profile?.snapshot.colors else{return}
+        guard let key=keyboardLayout().first(where:{$0.id==selected}),let keySlot=CherryMatrix.slot(key),let p=profile,let slot=p.colorSlot(keySlot),let colors=p.snapshot.colors else{return}
         setLightColor(LightRGB(colors[slot*3],colors[slot*3+1],colors[slot*3+2]))
     }
     func controlTextDidChange(_ notification:Notification){
@@ -86,7 +86,7 @@ extension HardwareWindowController {
         guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
         do{
             let start=try readLightColor()
-            draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:lightPattern.indexOfSelectedItem,start:start,end:rgb(endColor.color))
+            draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:lightPattern.indexOfSelectedItem,start:start,end:rgb(endColor.color),lightingMapping:draft.lightingMapping)
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1)
             message.stringValue="已为 \(lightSelection.count) 键加入配色，并选择自定义模式。编辑仅用于预览，尚未写入键盘。"
             update();loadLightColor()
@@ -94,7 +94,7 @@ extension HardwareWindowController {
     }
     @objc func stageLightOff(){
         guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
-        do{draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0))
+        do{draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0),lightingMapping:draft.lightingMapping)
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1);update();loadLightColor()
             message.stringValue="已将所选 \(lightSelection.count) 键设为熄灭。编辑仅用于预览，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}

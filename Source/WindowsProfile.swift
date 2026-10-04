@@ -428,11 +428,12 @@ enum WindowsProfile {
     }
     // File-only conversion. USB parameters outside 1...8 and unmapped logical
     // colors remain untouched; this does not authorize any lighting write.
-    static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data)throws->Data {
+    static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data,lightingMapping:LightingMappingContext?=nil)throws->Data {
         try snapshot.validate();var root=try templateRoot(template)
         guard var light=root["LightInfo"] as? [String:Any],var custom=root["CustomLightMode"] as? [String:Any],
               var groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,
               let colors=snapshot.colors else{throw HardwareError(message:"导出灯效需要完整读取配色和带 126 项颜色表的官方模板。")}
+        let mapping=try lightingMapping?.slots(for:snapshot)
         let p=snapshot.parameters
         guard CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数超出本型号已核对范围，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
@@ -440,14 +441,14 @@ enum WindowsProfile {
         for i in groups[0].indices {
             for name in ["Red","Green","Blue"]{_ = try integer(groups[0][i][name],name,range:0...255)}
             if let alpha=groups[0][i]["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
-            guard let slot=physicalSlot(defaults[i]) else{continue}
+            guard let slot=(mapping == nil ? physicalSlot(defaults[i]):mapping![i]) else{continue}
             for (offset,name) in ["Red","Green","Blue"].enumerated(){groups[0][i][name]=Int(colors[slot*3+offset])}
         }
         custom["LightColorInfo"]=groups;root["LightInfo"]=light;root["CustomLightMode"]=custom
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
         guard output.count<=1_000_000 else{throw HardwareError(message:"导出的官方配置文件过大。")};return output
     }
-    static func decode(_ data:Data,baseline:HardwareSnapshot,deferHostText:Bool=false)throws->Imported {
+    static func decode(_ data:Data,baseline:HardwareSnapshot,deferHostText:Bool=false,lightingMapping:LightingMappingContext?=nil)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
         try baseline.validate()
         guard let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],root["//"] as? String=="47",
@@ -461,7 +462,9 @@ enum WindowsProfile {
         if let object=root["ActionInfo"],!(object is NSNull),!(object is [[String:Any]]){throw HardwareError(message:"Windows ActionInfo 结构无效。")}
         let actions=root["ActionInfo"] as? [[String:Any]] ?? []
         _ = try systemStageWords(root)
+        let lightingSlots=try lightingMapping?.slots(for:baseline)
         var result=try HardwareProfile.fromHardware(baseline)
+        result.lightingMapping=lightingMapping
         result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
         let oldBindings=result.macroBindings ?? [:],oldModes=result.macroModes ?? [:]
         if deferHostText,try validateHostTextDefinition(data)>0 {result.hostTextJSON=result.windowsTemplateJSON}
@@ -552,7 +555,7 @@ enum WindowsProfile {
             for (index,entry) in groups[0].enumerated(){
                 let bytes=try ["Red","Green","Blue"].map{UInt8(try integer(entry[$0],$0,range:0...255))}
                 if let alpha=entry["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
-                guard let slot=physicalSlot(defaults[index])else{continue}
+                guard let slot=(lightingSlots == nil ? physicalSlot(defaults[index]):lightingSlots![index])else{continue}
                 result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes);colorCount+=1
             }
         }

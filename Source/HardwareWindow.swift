@@ -696,9 +696,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #endif
         for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
             b.lightingColor=nil
-            if lightingTab,let slot=CherryMatrix.slot(b.spec),let colors=profile?.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
+            if lightingTab,let keySlot=CherryMatrix.slot(b.spec),let p=profile,let slot=p.colorSlot(keySlot),let colors=p.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
             if let slot=CherryMatrix.slot(b.spec),let p=profile,let original=baseline{
-                if lightingTab,let colors=p.snapshot.colors,let previous=original.colors{b.mapped=colors[slot*3..<slot*3+3] != previous[slot*3..<slot*3+3]}else{b.mapped=p.snapshot.keymap[slot*3..<slot*3+3] != original.keymap[slot*3..<slot*3+3]}
+                if lightingTab{if let colorSlot=p.colorSlot(slot),let colors=p.snapshot.colors,let previous=original.colors{b.mapped=colors[colorSlot*3..<colorSlot*3+3] != previous[colorSlot*3..<colorSlot*3+3]}else{b.mapped=false}}else{b.mapped=p.snapshot.keymap[slot*3..<slot*3+3] != original.keymap[slot*3..<slot*3+3]}
             }else{b.mapped=false}}
         lightCount.stringValue="已选 \(lightSelection.count) 键"
         guard let key=keyboardLayout().first(where:{$0.id==selected})else{return}
@@ -1084,7 +1084,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             #else
             keyData=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8));includesText=false
             #endif
-            let data=try WindowsProfile.encodeLightingDraft(p.snapshot,template:keyData)
+            let data=try WindowsProfile.encodeLightingDraft(p.snapshot,template:keyData,lightingMapping:p.lightingMapping)
             let panel=NSSavePanel();panel.nameFieldStringValue="CHERRY-配置草稿.json"
             panel.beginSheetModal(for:window!){[weak self] result in
                 guard result == .OK,let url=panel.url else{return}
@@ -1113,9 +1113,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         if WindowsProfile.isOfficial(data){
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
             #if CHERRY_MACRO_PRODUCT
-            let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true)
+            let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true,lightingMapping:profile?.lightingMapping)
             #else
-            let imported=try WindowsProfile.decode(data,baseline:baseline)
+            let imported=try WindowsProfile.decode(data,baseline:baseline,lightingMapping:profile?.lightingMapping)
             #endif
             next=imported.profile;summary=imported.summary
         }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}

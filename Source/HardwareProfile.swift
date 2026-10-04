@@ -42,6 +42,20 @@ struct KeyboardMacro: Codable, Equatable {
     }
 }
 
+// Portable read metadata only; never used as permission to write a device.
+struct LightingMappingContext:Codable,Equatable {
+    var deviceInfo:[UInt8]
+    var factoryKeymap:[UInt8]
+    var ledIndices:[UInt8]
+    func slots(for snapshot:HardwareSnapshot)throws->[Int?]{
+        guard deviceInfo.count==34,deviceInfo==snapshot.deviceInfo else{throw HardwareError(message:"灯光映射与当前固件信息不一致，请重新读取。")}
+        return try WindowsProfile.resolveLightingSlots(factoryKeymap:factoryKeymap,ledIndices:ledIndices)
+    }
+    func colorSlot(_ keySlot:Int)->Int? {
+        guard (0..<126).contains(keySlot),ledIndices.count==126,ledIndices[keySlot]<126 else{return nil}
+        return Int(ledIndices[keySlot])
+    }
+}
 struct HardwareProfile: Codable, Equatable {
     var format = "CherryMacProfile"
     var version = 1
@@ -55,9 +69,11 @@ struct HardwareProfile: Codable, Equatable {
     var windowsTemplateJSON:String? = nil
     // Portable host draft only; importing never installs or enables text input.
     var hostTextJSON:String? = nil
+    var lightingMapping:LightingMappingContext? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
+        if let lightingMapping{_ = try lightingMapping.slots(for:snapshot)}
         if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
         if let hostTextJSON{_ = try WindowsProfile.validateHostTextDefinition(Data(hostTextJSON.utf8))}
         for macro in macros { try macro.validate(); _ = try WindowsProfile.macroSource(self,macro:macro) }
@@ -86,6 +102,10 @@ struct HardwareProfile: Codable, Equatable {
         }
         let profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings,macroModes:modes)
         try profile.validate();return profile
+    }
+    func colorSlot(_ keySlot:Int)->Int? {
+        if let lightingMapping{return lightingMapping.colorSlot(keySlot)}
+        return (0..<126).contains(keySlot) ? keySlot:nil
     }
     func resolvedMacros() throws -> HardwareSnapshot {
         try validate()

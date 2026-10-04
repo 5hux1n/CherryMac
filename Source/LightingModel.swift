@@ -50,10 +50,13 @@ enum CherryLighting {
             }
         };return Set(filtered.map{$0.id})
     }
-    static func paint(_ source:[UInt8],keys:[KeySpec],selected:Set<String>,pattern:Int,start:LightRGB,end:LightRGB)throws->[UInt8]{
+    static func paint(_ source:[UInt8],keys:[KeySpec],selected:Set<String>,pattern:Int,start:LightRGB,end:LightRGB,lightingMapping:LightingMappingContext?=nil)throws->[UInt8]{
         guard source.count==378,(0..<patterns.count).contains(pattern),!selected.isEmpty else{throw HardwareError(message:"请选择按键与配色方式。")}
         let targets=keys.filter{selected.contains($0.id)}
         guard targets.count==selected.count,targets.allSatisfy({CherryMatrix.slot($0) != nil}) else{throw HardwareError(message:"配色选择包含未知按键。")}
+        if let lightingMapping{_ = try WindowsProfile.resolveLightingSlots(factoryKeymap:lightingMapping.factoryKeymap,ledIndices:lightingMapping.ledIndices)}
+        func slotFor(_ key:KeySpec)->Int?{guard let slot=CherryMatrix.slot(key)else{return nil};if let lightingMapping{return lightingMapping.colorSlot(slot)};return slot}
+        guard targets.allSatisfy({slotFor($0) != nil})else{throw HardwareError(message:"所选按键没有有效 LED 映射。")}
         let xs=targets.map{$0.rect.midX},ys=targets.map{$0.rect.midY}
         let minX=xs.min()!,maxX=xs.max()!,minY=ys.min()!,maxY=ys.max()!
         var result=source
@@ -69,7 +72,7 @@ enum CherryLighting {
             case 5:rgb=LightRGB(255,55,0).mix(LightRGB(255,202,32),1-y)
             default:rgb=start
             }
-            let slot=CherryMatrix.slot(key)!;result.replaceSubrange(slot*3..<slot*3+3,with:rgb.bytes)
+            let slot=slotFor(key)!;result.replaceSubrange(slot*3..<slot*3+3,with:rgb.bytes)
         };return result
     }
 }

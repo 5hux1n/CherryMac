@@ -1306,6 +1306,20 @@ func runLightingDraftExportChecks(){
             rejected{_ = try WindowsProfile.decode(data,baseline:.demo())}
         }
     }
+    let mapping=LightingMappingContext(deviceInfo:snapshot.deviceInfo,factoryKeymap:factory,ledIndices:(0..<126).map{UInt8(($0+7)%126)})
+    let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
+    let mappedProfile=try! WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:mapping).profile
+    precondition(try! HardwareProfile.decode(mappedProfile.encoded()).lightingMapping==mapping)
+    let mappedSlots=try! mapping.slots(for:snapshot)
+    for slot in mappedSlots.compactMap({$0}){precondition(mappedProfile.snapshot.colors![slot*3..<slot*3+3]==snapshot.colors![slot*3..<slot*3+3])}
+    let key=keyboardLayout().first{$0.id=="calculator"}!,ledSlot=mapping.colorSlot(CherryMatrix.slot(key)!)!
+    let painted=try! CherryLighting.paint(snapshot.colors!,keys:keyboardLayout(),selected:[key.id],pattern:0,start:LightRGB(1,2,3),end:LightRGB(0,0,0),lightingMapping:mapping)
+    precondition(Array(painted[ledSlot*3..<ledSlot*3+3])==[1,2,3])
+    var missing=mapping;missing.ledIndices[CherryMatrix.slot(key)!]=255
+    rejected{_ = try CherryLighting.paint(snapshot.colors!,keys:keyboardLayout(),selected:[key.id],pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0),lightingMapping:missing)}
+    var wrong=mapping;wrong.deviceInfo[0] ^= 1
+    rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:wrong)}
+    rejected{_ = try WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:wrong)}
     snapshot.parameters[3]=5;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:template)}
     snapshot.parameters[3]=1;root["CustomLightMode"]=nil;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:JSONSerialization.data(withJSONObject:root))}
     print("PASS: lighting draft file export, 12 modes, mapped/hidden colors, metadata and invalid ranges; no HID")
