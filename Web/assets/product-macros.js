@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource} from './model.js?v=0.6.0';
 import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
 
 // Names and recording preferences live locally; firmware stores event bytes.
@@ -37,6 +37,23 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   validateProfile(previous);const result=clone(restored);
   result.snapshot.parameters=clone(previous.snapshot.parameters);result.snapshot.colors=clone(previous.snapshot.colors);
   if(previous.lightingColorEncoding!=null)result.lightingColorEncoding=previous.lightingColorEncoding;else delete result.lightingColorEncoding;
+  for(const field of ['lightingMapping','hostTextJSON']){
+    if(previous[field]!=null)result[field]=clone(previous[field]);else delete result[field];
+  }
+  if(previous.windowsTemplateJSON!=null){
+    const root=JSON.parse(previous.windowsTemplateJSON);
+    requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'当前官方草稿动作列表无效，未合并编辑区。');
+    const actions=clone(root.ActionInfo??[]);
+    result.macros.forEach((macro,index)=>{
+      const source=officialMacroSource(restored,restored.macros[index]);if(!source)return;
+      let destination=actions.findIndex(action=>equal(action,source));
+      if(destination<0){destination=actions.length;actions.push(clone(source));}
+      macro.windowsActionIndex=destination;
+    });
+    if(root.ActionInfo!=null||actions.length)root.ActionInfo=actions;
+    result.windowsTemplateJSON=JSON.stringify(root);
+  }
+
   for(let slot=0;slot<126;slot++){
     const offset=slot*3;
     if(![before,target,previous.snapshot].some(s=>[0x70,0x71].includes(s.keymap[offset])))result.snapshot.keymap.splice(offset,3,...previous.snapshot.keymap.slice(offset,offset+3));

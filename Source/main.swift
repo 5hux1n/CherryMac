@@ -1205,6 +1205,7 @@ if CommandLine.arguments.contains("--host-text-dispatch-self-test"){
 if CommandLine.arguments.contains("--host-text-self-test"){
     runHostTextPlanChecks();exit(0)
 }
+if CommandLine.arguments.contains("--macro-recovery-draft-self-test"){runMacroRecoveryDraftChecks();exit(0)}
 if CommandLine.arguments.contains("--macro-editor-self-test"){
     runMacroEditorChecks();exit(0)
 }

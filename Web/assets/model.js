@@ -302,7 +302,7 @@ function hasOfficialMacroExtras(action){
   const content=action.ActionContent;requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
   return Object.keys(action).some(k=>!['ActionType','ActionName','ActionContent'].includes(k))||Object.keys(content).some(k=>!['ActionMacroType','ActionMacroLoopValue','ActionMacroFixTimeIsSelected','ActionMacroFixTimeValue','ActionMacroEvents'].includes(k))||content.ActionMacroEvents.some(e=>Object.keys(e??{}).some(k=>!['Type','Button','Action','Delay'].includes(k)));
 }
-function officialMacroSource(profile,macro){
+export function officialMacroSource(profile,macro){
   if(macro.windowsActionIndex==null)return null;
   requireThat(typeof profile.windowsTemplateJSON==='string','宏来源缺少官方模板。');
   const root=JSON.parse(profile.windowsTemplateJSON),action=root.ActionInfo?.[macro.windowsActionIndex];

@@ -845,8 +845,14 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     case .success(let snapshot):
                         self.baseline=snapshot;self.baselineWasRead=true
                         let restored=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
-                        self.profile=(try? HardwareProfile.mergeMacroRecovery(restored:restored,previous:previousDraft,before:authorization.before,target:authorization.expected)) ?? restored
-                        self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.message.stringValue="宏原配置已恢复，完整读回一致；普通键与灯效草稿保留。"
+                        do{
+                            self.profile=try HardwareProfile.mergeMacroRecovery(restored:restored,previous:previousDraft,before:authorization.before,target:authorization.expected)
+                            self.message.stringValue="宏原配置已恢复，完整读回一致；其他草稿保留。"
+                        }catch{
+                            self.profile=previousDraft ?? restored
+                            self.message.stringValue="键盘宏已恢复且读回一致，但草稿合并失败：\(error.localizedDescription)。原编辑区保留，尚未写入。"
+                        }
+                        self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();
                     case .failure(let error):self.baseline=nil;self.message.stringValue=error.localizedDescription+" 保存的恢复记录仍保留。"
                     };self.update()
                 }

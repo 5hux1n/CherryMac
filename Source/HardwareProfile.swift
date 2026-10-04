@@ -175,6 +175,25 @@ struct HardwareProfile: Codable, Equatable {
         guard let previous,previous.snapshot.deviceInfo==restored.snapshot.deviceInfo else{return restored}
         try previous.validate();var result=restored
         result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors;result.lightingColorEncoding=previous.lightingColorEncoding
+        result.lightingMapping=previous.lightingMapping;result.hostTextJSON=previous.hostTextJSON
+        if let template=previous.windowsTemplateJSON {
+            var root=try WindowsProfile.templateRoot(Data(template.utf8))
+            guard root["ActionInfo"] == nil || root["ActionInfo"] is NSNull || root["ActionInfo"] is [[String:Any]] else{throw HardwareError(message:"当前官方草稿动作列表无效，未合并编辑区。")}
+            var actions=root["ActionInfo"] as? [[String:Any]] ?? []
+            // Restored macros may refer to an older ActionInfo ordering. Keep
+            // their source extras by reusing/appending the exact old action.
+            for index in result.macros.indices {
+                if let source=try WindowsProfile.macroSource(restored,macro:restored.macros[index]) {
+                    let existing=actions.firstIndex{NSDictionary(dictionary:$0).isEqual(to:source)}
+                    let destination=existing ?? actions.count
+                    if existing==nil{actions.append(source)}
+                    result.macros[index].windowsActionIndex=destination
+                }
+            }
+            if root["ActionInfo"] != nil || !actions.isEmpty{root["ActionInfo"]=actions}
+            result.windowsTemplateJSON=String(data:try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys]),encoding:.utf8)
+        }
+
         for slot in 0..<126 {
             let offset=slot*3
             // Drop unsent macro edits as part of the explicit macro rollback.

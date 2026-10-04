@@ -1454,3 +1454,34 @@ func runLightingDraftExportChecks(){
     snapshot.parameters[3]=1;root["CustomLightMode"]=nil;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:JSONSerialization.data(withJSONObject:root))}
     print("PASS: lighting draft file export, 12 modes, mapped/hidden colors, metadata and invalid ranges; no HID")
 }
+
+
+// Pure profile merge checks; no windows, listeners, permissions or USB.
+func runMacroRecoveryDraftChecks(){
+    var before=HardwareSnapshot.demo();before.keymap=Array(repeating:0,count:378)
+    let macro=KeyboardMacro(name:"A",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:0)],windowsActionIndex:0)
+    var oldAction=try! WindowsProfile.macroAction(macro);oldAction["VendorExtra"]=["keep":17]
+    let base:[String:Any]=["//":"47","KeyList":WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0]},"ActionInfo":[oldAction]]
+    var restored=HardwareProfile(snapshot:before,macros:[macro],macroBindings:[:],windowsTemplateJSON:String(data:try! JSONSerialization.data(withJSONObject:base),encoding:.utf8))
+    restored.snapshot=try! restored.resolvedMacros();before=restored.snapshot
+    var previous=restored;var current=base;current["ActionInfo"]=[]
+    current["VendorDraft"]=["keep":"current"]
+    current["SystemStages"]=["Repeat":0,"RepeatDelay":0,"Key6Flag":0,"ReportSelectItem":3,"RFReportSelectItem":0,"WFlag":0,"WinFlag":0]
+    previous.windowsTemplateJSON=String(data:try! JSONSerialization.data(withJSONObject:current),encoding:.utf8)
+    previous.macros[0].windowsActionIndex=nil
+    previous.hostTextJSON=previous.windowsTemplateJSON
+    previous.lightingMapping = .init(deviceInfo:before.deviceInfo,factoryKeymap:WindowsProfile.firmwareLogicalDefaults.flatMap{[UInt8(($0>>16)&255),UInt8(($0>>8)&255),UInt8($0&255)]},ledIndices:(0..<126).map{UInt8($0)})
+    let merged=try! HardwareProfile.mergeMacroRecovery(restored:restored,previous:previous,before:before,target:before)
+    precondition(merged.hostTextJSON==previous.hostTextJSON && merged.lightingMapping==previous.lightingMapping)
+    let root=try! WindowsProfile.templateRoot(Data(merged.windowsTemplateJSON!.utf8))
+    precondition((root["VendorDraft"] as? [String:String])?["keep"]=="current")
+    precondition(try! WindowsProfile.systemStageWords(root)![3]==3)
+    precondition(NSDictionary(dictionary:try! WindowsProfile.macroSource(merged,macro:merged.macros[0])!).isEqual(to:oldAction))
+    let repeated=try! HardwareProfile.mergeMacroRecovery(restored:restored,previous:merged,before:before,target:before)
+    precondition((try! WindowsProfile.templateRoot(Data(repeated.windowsTemplateJSON!.utf8)))["ActionInfo"] as? [[String:Any]] != nil)
+    precondition(((try! WindowsProfile.templateRoot(Data(repeated.windowsTemplateJSON!.utf8)))["ActionInfo"] as! [[String:Any]]).count==1)
+    var cleared=previous;cleared.lightingMapping=nil;cleared.hostTextJSON=nil
+    let clean=try! HardwareProfile.mergeMacroRecovery(restored:merged,previous:cleared,before:before,target:before)
+    precondition(clean.lightingMapping==nil && clean.hostTextJSON==nil)
+    print("PASS: macro recovery preserves current template, LED mapping and text draft; old source extras remapped, repeated recovery reuses actions; pure memory")
+}

@@ -200,7 +200,7 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
 });};
 $('recover-macro').onclick=e=>{if(busy||!macroProduct)return;try{gate.acknowledge(e);}catch(error){status(error.message,true);return;}void operation(async()=>{
   const previous=clone(profile),saved=await lastMacroTransaction();macroAbort=new AbortController();render();
-  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after)??safeProfile(after);profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
+  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after)??safeProfile(after);try{profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);}catch(error){throw new Error(`键盘宏已恢复且读回一致，但草稿合并失败：${error.message}。原编辑区保留，尚未写入。`);}refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
   catch(error){baseline=null;if(macroAbort.signal.aborted)throw new Error('宏恢复已停止发送。恢复记录仍保留，重连后可再次恢复。');throw error;}
   finally{macroAbort=null;}
 });};
