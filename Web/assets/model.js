@@ -341,6 +341,16 @@ export function exportWindowsKeysMacrosAndText(profile,template,textConfiguratio
   root.KeyList.forEach((k,i)=>{const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot!==undefined&&equal(snapshot.keymap.slice(slot*3,slot*3+3),[0xa1,0,0]))requireThat(preservingTextIndices.has(i),'有已安装文本键缺少当前文本定义或待解除，请先核对文本页再导出。');});
   root.ActionInfo=actions;return exportWindowsKeysAndMacros(profile,root,{preservingTextIndices});
 }
+// File-only conversion; unknown light fields and unmapped colors survive.
+export function exportWindowsLightingDraft(snapshot,template){
+  validateSnapshot(snapshot,true);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
+  const light=root.LightInfo,custom=root.CustomLightMode,groups=custom?.LightColorInfo;
+  requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&custom&&typeof custom==='object'&&!Array.isArray(custom)&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126&&Array.isArray(snapshot.colors),'导出灯效需要完整读取配色和带 126 项颜色表的官方模板。');
+  const p=snapshot.parameters,selected=MODE_CODES.indexOf(p[1]);requireThat(modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数超出本型号已核对范围，不能导出。');
+  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
+  groups[0].forEach((entry,i)=>{requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');for(const name of ['Red','Green','Blue'])winInt(entry[name],name,0,255);const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot!==undefined)['Red','Green','Blue'].forEach((name,offset)=>entry[name]=snapshot.colors[slot*3+offset]);});
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的官方配置文件过大。');return root;
+}
 export function importWindows(root,baseline,{deferHostText=false}={}){
   officialSystemStageWords(root);
   validateSnapshot(baseline,true);requireThat(root['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'仅支持 Pokémon 型号 47 的 Windows 配置。');

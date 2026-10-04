@@ -1271,3 +1271,23 @@ func runMixedOfficialImportChecks(){
     precondition(original.snapshot==baseline)
     print("PASS: mixed macro/text import and export; shared references, metadata, installed marker and conflicting drafts (no HID or permissions)")
 }
+
+func runLightingDraftExportChecks(){
+    func rejected(_ body:()throws->Void){do{try body();preconditionFailure("invalid lighting export must reject")}catch{}}
+    var root:[String:Any]=["//":"47","KeyList":WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0]},"ActionInfo":[],"LightInfo":["opaque":["id":42]],"CustomLightMode":["opaque":"keep","LightColorInfo":[(0..<126).map{["Red":$0,"Green":255-$0,"Blue":17,"Alpha":255,"opaque":$0]}]]]
+    let template=try! JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+    var snapshot=HardwareSnapshot.demo();snapshot.colors=(0..<378).map{UInt8($0%256)}
+    for (_,mode) in CherryLighting.modes {
+        snapshot.parameters.replaceSubrange(1..<9,with:[mode,3,1,1,0,7,123,249])
+        let output=try! WindowsProfile.encodeLightingDraft(snapshot,template:template),decoded=try! WindowsProfile.decode(output,baseline:.demo()).profile
+        precondition(decoded.snapshot.parameters[1..<9]==snapshot.parameters[1..<9])
+        for key in keyboardLayout(){let slot=CherryMatrix.slot(key)!;precondition(decoded.snapshot.colors![slot*3..<slot*3+3]==snapshot.colors![slot*3..<slot*3+3])}
+        let exported=try! WindowsProfile.templateRoot(output),light=exported["LightInfo"] as! [String:Any],custom=exported["CustomLightMode"] as! [String:Any],colors=custom["LightColorInfo"] as! [[[String:Any]]]
+        precondition((light["opaque"] as! [String:Int])["id"]==42 && custom["opaque"] as! String=="keep")
+        precondition(colors[0][79]["Red"] as! Int==79 && colors[0][17]["Red"] as! Int==Int(snapshot.colors![306]) && colors[0][17]["Alpha"] as! Int==255)
+        precondition(try! WindowsProfile.encodeLightingDraft(snapshot,template:output)==output)
+    }
+    snapshot.parameters[3]=5;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:template)}
+    snapshot.parameters[3]=1;root["CustomLightMode"]=nil;rejected{_ = try WindowsProfile.encodeLightingDraft(snapshot,template:JSONSerialization.data(withJSONObject:root))}
+    print("PASS: lighting draft file export, 12 modes, mapped/hidden colors, metadata and invalid ranges; no HID")
+}

@@ -411,6 +411,26 @@ enum WindowsProfile {
         root["KeyList"]=keys;root["ActionInfo"]=actions
         return try encodeKeysAndMacros(profile,template:JSONSerialization.data(withJSONObject:root,options:.sortedKeys),preservingTextIndices:textIndices)
     }
+    // File-only conversion. USB parameters outside 1...8 and unmapped logical
+    // colors remain untouched; this does not authorize any lighting write.
+    static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data)throws->Data {
+        try snapshot.validate();var root=try templateRoot(template)
+        guard var light=root["LightInfo"] as? [String:Any],var custom=root["CustomLightMode"] as? [String:Any],
+              var groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,
+              let colors=snapshot.colors else{throw HardwareError(message:"导出灯效需要完整读取配色和带 126 项颜色表的官方模板。")}
+        let p=snapshot.parameters
+        guard CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数超出本型号已核对范围，不能导出。")}
+        light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
+        for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(p[6+offset])}
+        for i in groups[0].indices {
+            for name in ["Red","Green","Blue"]{_ = try integer(groups[0][i][name],name,range:0...255)}
+            guard let slot=physicalSlot(defaults[i]) else{continue}
+            for (offset,name) in ["Red","Green","Blue"].enumerated(){groups[0][i][name]=Int(colors[slot*3+offset])}
+        }
+        custom["LightColorInfo"]=groups;root["LightInfo"]=light;root["CustomLightMode"]=custom
+        let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
+        guard output.count<=1_000_000 else{throw HardwareError(message:"导出的官方配置文件过大。")};return output
+    }
     static func decode(_ data:Data,baseline:HardwareSnapshot,deferHostText:Bool=false)throws->Imported {
         guard data.count<=1_000_000 else{throw HardwareError(message:"配置文件过大。")}
         try baseline.validate()

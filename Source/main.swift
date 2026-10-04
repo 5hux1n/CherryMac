@@ -1217,6 +1217,16 @@ if let index=CommandLine.arguments.firstIndex(of:"--portable-profile-roundtrip")
         print("PASS: portable profile decode/encode only; no HID, permissions or services");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-draft") {
+    do{
+        guard CommandLine.arguments.count==index+4 else{throw HardwareError(message:"需要配置、官方模板和输出路径。")}
+        let profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+1])))
+        let template=try Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+2]))
+        try WindowsProfile.encodeLightingDraft(profile.snapshot,template:template).write(to:URL(fileURLWithPath:CommandLine.arguments[index+3]),options:.atomic)
+        print("PASS: lighting draft file conversion only; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
+if CommandLine.arguments.contains("--lighting-draft-self-test"){runLightingDraftExportChecks();exit(0)}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {

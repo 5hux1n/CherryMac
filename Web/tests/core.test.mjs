@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -904,4 +904,21 @@ test('portable profiles retain host text drafts offline and reject invalid refer
   const bad=clone(p),broken=clone(root);broken.KeyList[17].ActionLinkIndex=999;bad.hostTextJSON=JSON.stringify(broken);
   assert.throws(()=>parseProfile(JSON.stringify(bad)),/ActionLinkIndex|引用/);assert.equal(JSON.parse(p.hostTextJSON).KeyList[17].ActionLinkIndex,'0');
   bad.hostTextJSON=17;assert.throws(()=>parseProfile(JSON.stringify(bad)),/文本/);
+});
+
+test('lighting draft export roundtrips all model modes and preserves hidden colors and metadata',()=>{
+  const root=windowsFixture();root.LightInfo.opaque={id:42};root.CustomLightMode={CustomLightModeGroupIndex:null,opaque:'keep',LightColorInfo:[WINDOWS_DEFAULTS.map((_,i)=>({Red:i,Green:255-i,Blue:17,Alpha:255,opaque:i}))]};
+  const before=clone(root),snapshot=demoSnapshot();snapshot.colors=Array.from({length:378},(_,i)=>i%256);
+  for(const mode of [8,0,1,2,10,12,15,18,19,21,3,23]){
+    snapshot.parameters.splice(1,8,mode,3,1,1,0,7,123,249);const output=exportWindowsLightingDraft(snapshot,root),decoded=importWindows(output,demoSnapshot());
+    assert.deepEqual(decoded.snapshot.parameters.slice(1,9),snapshot.parameters.slice(1,9));
+    for(const key of keys)assert.deepEqual(decoded.snapshot.colors.slice(key.slot*3,key.slot*3+3),snapshot.colors.slice(key.slot*3,key.slot*3+3));
+    assert.deepEqual(output.LightInfo.opaque,root.LightInfo.opaque);assert.equal(output.CustomLightMode.opaque,'keep');
+    assert.deepEqual(output.CustomLightMode.LightColorInfo[0][79],root.CustomLightMode.LightColorInfo[0][79]);
+    assert.deepEqual(output.CustomLightMode.LightColorInfo[0][17],{...root.CustomLightMode.LightColorInfo[0][17],Red:snapshot.colors[306],Green:snapshot.colors[307],Blue:snapshot.colors[308]});
+    assert.deepEqual(exportWindowsLightingDraft(snapshot,output),output);assert.deepEqual(root,before);
+  }
+  const bad=clone(snapshot);bad.parameters[3]=5;assert.throws(()=>exportWindowsLightingDraft(bad,root),/参数/);
+  assert.throws(()=>exportWindowsLightingDraft(snapshot,windowsFixture()),/颜色表/);
+  const malformed=clone(root);malformed.CustomLightMode.LightColorInfo[0][79].Red=999;assert.throws(()=>exportWindowsLightingDraft(snapshot,malformed));assert.deepEqual(root,before);
 });
