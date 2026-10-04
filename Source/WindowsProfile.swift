@@ -132,6 +132,7 @@ enum WindowsProfile {
     // changes or reconnect; a saved JSON file alone is insufficient.
     struct HostTextBindings {
         private let bindings:[Int:HostTextBinding]
+        var count:Int{bindings.count}
         init(officialJSON:Data,factoryKeymap:[UInt8],currentKeymap:[UInt8])throws {
             guard factoryKeymap.count==378,currentKeymap.count==378 else{throw HardwareError(message:"文本路由需要完整的默认和当前键位表。")}
             let root=try WindowsProfile.templateRoot(officialJSON)
@@ -380,7 +381,7 @@ enum WindowsProfile {
                     bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!,playback:playback)
                 case 3:
                     _=try HostTextPlan(action:actions[actionIndex])
-                    throw HardwareError(message:"此配置含文本绑定，需要主机执行服务；实体触发格式仍待确认，尚不能导入写入。原编辑区保留。")
+                    throw HardwareError(message:"此配置含文本绑定，需要主机执行服务；普通配置导入尚不处理，请使用专用文本配置流程。原编辑区保留。")
                 case 4:
                     let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
                     let media=mediaCodes[index];bytes=[0x30,UInt8(media&255),UInt8(media>>8)]

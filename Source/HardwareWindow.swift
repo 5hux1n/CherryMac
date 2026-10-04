@@ -147,6 +147,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var macroCancellationButton:NSButton?
     #if CHERRY_MACRO_PRODUCT
     var hostTextJSON:Data?
+    let hostTextStore=HostTextConfigurationStore()
     let hostTextFile=NSTextField(wrappingLabelWithString:"尚未选择文本配置")
     let hostTextState=NSTextField(wrappingLabelWithString:"文本服务未开启")
     lazy var hostTextService=HostTextService(onState:{[weak self] state in self?.hostTextState.stringValue=state})
@@ -192,7 +193,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("读取键盘",#selector(readKeyboard)),997,30,126,32)
         connection.textColor = .secondaryLabelColor;place(connection,192,106,920,23)
         #if CHERRY_MACRO_PRODUCT
-        place(label("宏预览：可独立写入按键或宏；灯效写入暂缓，完整成品验收尚未完成。",12),192,140,925,24)
+        place(label("开发预览：按键、宏与文本绑定分别写入；灯效写入暂缓，完整成品验收尚未完成。",12),192,140,925,24)
         #else
         place(label("按键可独立写入；灯效和宏可编辑、保存，实体写入暂缓。",12),192,140,925,24)
         #endif
@@ -281,12 +282,16 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("文本快捷输入",20,.semibold),8,12,850,30,in:text)
         place(label("选择 Windows 官方导出的文本配置，启用后在目标应用按对应键输入文本。此功能需要 CherryMac 持续运行及辅助功能权限。",13),8,59,850,60,in:text)
         place(button("选择官方文本配置…",#selector(chooseHostTextProfile)),8,137,230,32,in:text)
+        place(button("载入已保存配置",#selector(loadSavedHostText)),258,137,180,32,in:text)
+        place(button("导出文本配置…",#selector(exportHostText)),458,137,180,32,in:text)
         place(hostTextFile,8,187,850,48,in:text)
         place(button("启用文本服务",#selector(startHostTextService)),8,257,180,32,in:text)
         place(button("停止",#selector(stopHostTextService)),208,257,100,32,in:text)
         place(button("查看最近日志",#selector(openHostTextLog)),328,257,180,32,in:text)
         place(hostTextState,8,312,850,64,in:text)
-        place(label("开发预览：目前只读取已由官方软件配置的文本绑定，不安装或写入文本键。实际文本触发尚待统一真机验证。读取、写入、恢复配置或开始宏录制时会停止服务，重连后需重新启用。",12),8,407,850,80,in:text)
+        place(button("安装文本绑定…",#selector(installHostText)),8,393,210,32,in:text)
+        place(button("恢复最近文本安装…",#selector(restoreHostText)),238,393,240,32,in:text)
+        place(label("开发预览，尚待统一真机验收。安装会显示改动并保存完整备份；只修改文本绑定键。恢复后服务保持关闭。读取、写入或重连后需重新启用服务。文本内容保存在 Mac 配置中。",12),8,454,850,80,in:text)
         #endif
         place(message,192,787,925,58)
         for (index,title,selector) in [(0,"写入键位",#selector(writeKeys)),(1,"写入灯效",#selector(writeLighting)),(2,"写入宏与绑定键",#selector(writeMacros))]{
@@ -332,6 +337,118 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{hostTextState.stringValue="请先完成当前操作。";return}
         guard let data=hostTextJSON else{hostTextState.stringValue="请先选择官方文本配置。";return}
         do{try hostTextService.start(officialJSON:data)}catch{hostTextState.stringValue=error.localizedDescription}
+    }
+    @objc func loadSavedHostText(){
+        guard !busy,macroRecordingSheet==nil else{return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        let store=hostTextStore
+        queue.async{[weak self] in
+            let result=Result<Data?,Error>{try store.activeConfiguration()}
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                do{if let data=try result.get(){try self.loadHostTextProfile(data,name:"已保存文本配置")}else{self.hostTextState.stringValue="没有已安装并保存的文本配置。"}}catch{self.hostTextState.stringValue=error.localizedDescription}
+            }
+        }
+    }
+    @objc func exportHostText(){
+        guard !busy,let data=hostTextJSON,let window else{hostTextState.stringValue="请先选择文本配置。";return}
+        let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-文本配置.json"
+        panel.beginSheetModal(for:window){[weak self] response in
+            guard response == .OK,let url=panel.url else{return}
+            do{try data.write(to:url,options:.atomic);self?.hostTextState.stringValue="文本配置已导出。"}catch{self?.hostTextState.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func installHostText(){
+        guard !busy,macroRecordingSheet==nil,let data=hostTextJSON,let baseline,let window else{hostTextState.stringValue="请先读取键盘并选择文本配置。";return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};hostTextState.stringValue="正在读取默认表并核对文本安装计划…"
+        queue.async{[weak self] in
+            let result=Result<WindowsProfile.HostTextInstallation,Error>{
+                let usb=try CherryUSB(),log=try HardwareOperationLog(kind:"text-install-preparation");usb.trace=log.trace
+                do{let plan=try usb.readHostTextInstallation(officialJSON:data,baseline:baseline);log.record("phase","complete");return plan}
+                catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
+            }
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                switch result{
+                case .failure(let error):self.hostTextState.stringValue=error.localizedDescription
+                case .success(let plan):
+                    let labels=Dictionary(uniqueKeysWithValues:keyboardLayout().compactMap{key in CherryMatrix.slot(key).map{($0,key.label.replacingOccurrences(of:"\n",with:" / "))}})
+                    let review=plan.bindings.map{binding in "\(labels[binding.physicalSlot] ?? "按键 \(binding.physicalSlot)") → 文本（\(binding.plan.originalText.count) 字符）"}.joined(separator:"\n")
+                    let alert=NSAlert();alert.messageText="安装 \(plan.bindings.count) 个文本绑定？"
+                    alert.informativeText=review+"\n\n其中 \(plan.changedSlots.count) 个键位需要写入。请松开全部按键，保持 USB 有线连接。文本输入需要 CherryMac 持续运行，灯效与宏区保留。"
+                    alert.addButton(withTitle:"安装并保存");alert.addButton(withTitle:"取消")
+                    alert.beginSheetModal(for:window){[weak self] response in
+                        guard let self,response == .alertFirstButtonReturn,!self.busy,self.hostTextJSON==data else{return}
+                        self.performHostTextInstallation(plan)
+                    }
+                }
+            }
+        }
+    }
+    func performHostTextInstallation(_ plan:WindowsProfile.HostTextInstallation){
+        guard !busy else{return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        let previousDraft=profile,store=hostTextStore
+        hostTextState.stringValue="正在备份并安装文本绑定，请勿按键或拔线…"
+        queue.async{[weak self] in
+            let result=Result<HardwareSnapshot,Error>{
+                let log=try HardwareOperationLog(kind:"product-text-install"),usb=try CherryUSB();var staged:HostTextInstallationRecord?
+                do{
+                    let after=try usb.applyHostTextInstallation(plan,log:log,saveHostConfiguration:{data in
+                        guard data==plan.officialJSON else{throw HardwareError(message:"文本配置在安装时发生变化。")}
+                        staged=try store.prepare(plan);log.record("textRecordID",staged!.id);try log.requireHealthy()
+                    })
+                    guard let staged else{throw HardwareError(message:"文本安装没有保存主机定义。")}
+                    do{try store.commit(staged)}catch{throw HardwareError(message:"键盘读回已通过，但主机文本配置提交失败。请保留安装记录并恢复：\(error.localizedDescription)")}
+                    log.record("phase","complete");return after
+                }catch{if let staged{do{try store.failed(staged)}catch{log.record("textRecordFailure",error.localizedDescription)}};log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
+            }
+            DispatchQueue.main.async{self?.finishHostTextOperation(result,plan:plan,previousDraft:previousDraft,recovery:false)}
+        }
+    }
+    @objc func restoreHostText(){
+        guard !busy,macroRecordingSheet==nil,let window else{return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        let store=hostTextStore
+        queue.async{[weak self] in
+            let result=Result<HostTextInstallationRecord,Error>{guard let record=try store.latest(),record.phase != .restored else{throw HardwareError(message:"没有需要恢复的文本安装记录。")};return record}
+            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+                do{let record=try result.get(),plan=try record.installation()
+                    let alert=NSAlert();alert.messageText="恢复最近文本安装？";alert.informativeText="恢复安装前的键位与主机文本定义。程序会核对保存记录和完整配置；有其他配置变化时停止覆盖。请松开全部按键，保持 USB 有线连接。"
+                    alert.addButton(withTitle:"恢复");alert.addButton(withTitle:"取消")
+                    alert.beginSheetModal(for:window){[weak self] response in
+                        guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
+                        self.suspendHostTextForConfiguration();self.busy=true;self.controls.forEach{$0.isEnabled=false}
+                        let previousDraft=self.profile
+                        self.hostTextState.stringValue="正在核对并恢复文本安装…"
+                        self.queue.async{[weak self] in
+                            let result=Result<HardwareSnapshot,Error>{
+                                let log=try HardwareOperationLog(kind:"product-text-recovery")
+                                do{try store.validateRestoration(record)
+                                    let snapshot=try CherryUSB().recoverHostTextInstallation(plan,log:log)
+                                    do{try store.restored(record)}catch{throw HardwareError(message:"键位已恢复，但主机文本定义恢复失败：\(error.localizedDescription)")}
+                                    log.record("phase","complete");return snapshot
+                                }catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
+                            }
+                            DispatchQueue.main.async{guard let self else{return};self.finishHostTextOperation(result,plan:plan,previousDraft:previousDraft,recovery:true)
+                                if case .success = result{self.hostTextJSON=record.previousConfiguration;self.hostTextFile.stringValue=record.previousConfiguration==nil ? "已恢复：没有先前文本配置":"已恢复先前文本配置"}
+                            }
+                        }
+                    }
+                }catch{self.hostTextState.stringValue=error.localizedDescription}
+            }
+        }
+    }
+    func finishHostTextOperation(_ result:Result<HardwareSnapshot,Error>,plan:WindowsProfile.HostTextInstallation,previousDraft:HardwareProfile?,recovery:Bool){
+        busy=false;controls.forEach{$0.isEnabled=true}
+        switch result{
+        case .success(let snapshot):
+            baseline=snapshot;baselineWasRead=true
+            var remaining=previousDraft ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+            for binding in plan.bindings{let slot=binding.physicalSlot;remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3]);remaining.macroBindings?.removeValue(forKey:slot);remaining.macroModes?.removeValue(forKey:slot)}
+            profile=remaining;loadLighting();refreshMacroPicker();loadSelectedAssignment()
+            hostTextState.stringValue=recovery ? "键位与先前文本定义已恢复，服务保持关闭。":"文本绑定已安装并完整读回，配置已保存。切换到目标应用前请启用文本服务。"
+            message.stringValue=hostTextState.stringValue
+        case .failure(let error):baseline=nil;hostTextState.stringValue=error.localizedDescription;message.stringValue="文本操作未完成。请重新读取后核对或恢复，已有记录保留。"
+        };update()
     }
     @objc func stopHostTextService(){suspendHostTextForConfiguration()}
     @objc func openHostTextLog(){

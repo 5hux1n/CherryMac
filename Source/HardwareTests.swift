@@ -646,6 +646,26 @@ func runHostTextPlanChecks(){
     do{try journal.phase("late-ready");preconditionFailure("finished log must reject stale callbacks")}catch{}
     journal.trace("late callback");journal.finish(reason:"late-stop")
     precondition((try! Data(contentsOf:journal.url))==savedLog)
+    let textStore=HostTextConfigurationStore(directory:logDirectory.appendingPathComponent("text-store"))
+    precondition(try! textStore.activeConfiguration()==nil && textStore.latest()==nil)
+    let staged=try! textStore.prepare(installation)
+    precondition(try! textStore.activeConfiguration()==nil && textStore.latest()==staged)
+    try! textStore.failed(staged)
+    precondition(try! textStore.activeConfiguration()==nil && textStore.latest()?.phase == .failed)
+    do{try textStore.commit(staged);preconditionFailure("failed text stage must not commit")}catch{}
+    let first=try! textStore.prepare(installation);try! textStore.commit(first)
+    precondition(try! textStore.activeConfiguration()==installationData && textStore.latest()?.phase == .installed)
+    var replacementRoot=try! WindowsProfile.templateRoot(installationData)
+    var replacementActions=replacementRoot["ActionInfo"] as! [[String:Any]]
+    replacementActions[0]["ActionContent"]=["ActionText":"替换文本"]
+    replacementRoot["ActionInfo"]=replacementActions
+    let replacement=try! WindowsProfile.HostTextInstallation(officialJSON:JSONSerialization.data(withJSONObject:replacementRoot),factoryKeymap:factory,baseline:snapshot)
+    let second=try! textStore.prepare(replacement)
+    precondition(second.previousConfiguration==installationData && (try! textStore.activeConfiguration())==installationData)
+    try! textStore.commit(second);precondition((try! textStore.activeConfiguration())==replacement.officialJSON)
+    do{try textStore.validateRestoration(first);preconditionFailure("restoring an older record must reject a newer host definition")}catch{}
+    try! textStore.restored(second);precondition((try! textStore.activeConfiguration())==installationData)
+    try! textStore.restored(first);precondition((try! textStore.activeConfiguration())==nil)
     current.replaceSubrange(306..<309,with:[0x30,0x92,1])
     let inactive=try! WindowsProfile.HostTextBindings(officialJSON:JSONSerialization.data(withJSONObject:root),factoryKeymap:factory,currentKeymap:current)
     precondition(inactive.binding(eventValue:0x766)==nil && routing.binding(eventValue:0x766)?.plan.originalText=="中😀")
@@ -777,7 +797,16 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(editor.hostTextJSON==textData && editor.profile==draftBeforeText && editor.hostTextFile.stringValue.contains("1 个文本动作"))
     do{try editor.loadHostTextProfile(Data("{}".utf8),name:"bad.json");preconditionFailure("invalid text template accepted")}catch{}
     precondition(editor.hostTextJSON==textData && editor.profile==draftBeforeText)
-    editor.hostTextJSON=nil
+    editor.installHostText()
+    precondition(editor.hostTextState.stringValue=="请先读取键盘并选择文本配置。")
+    var textBaseline=fixture;textBaseline.deviceInfo[6]=24;textBaseline.colors=Array(repeating:0,count:378);textBaseline.macroData=Array(repeating:0,count:3071);textBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    var textFactory=Array(repeating:UInt8(0),count:378);textFactory.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    var boundRoot=textRoot;var boundKeys=textKeys;boundKeys[17]["ActionLink"]=1;boundKeys[17]["ActionLinkIndex"]=0;boundRoot["KeyList"]=boundKeys
+    let textPlan=try! WindowsProfile.HostTextInstallation(officialJSON:JSONSerialization.data(withJSONObject:boundRoot),factoryKeymap:textFactory,baseline:textBaseline)
+    var pending=HardwareProfile(snapshot:textBaseline);pending.snapshot.colors![0]=42;pending.snapshot.keymap.replaceSubrange(27..<30,with:[32,0,5])
+    editor.finishHostTextOperation(.success(textPlan.expected),plan:textPlan,previousDraft:pending,recovery:false)
+    precondition(editor.profile?.snapshot.colors?[0]==42 && editor.profile?.snapshot.keymap[27..<30]==[32,0,5] && editor.profile?.snapshot.keymap[306..<309]==[161,0,0])
+    editor.hostTextJSON=nil;editor.profile=draftBeforeText;editor.baseline=nil
     #else
     precondition(editor.tabButtons.count==5 && editor.lightTabButtons.count==2)
     #endif

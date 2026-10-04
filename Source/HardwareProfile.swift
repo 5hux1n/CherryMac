@@ -216,6 +216,7 @@ enum CherryMatrix {
     }
     static func describe(_ bytes: [UInt8]) -> String {
         guard bytes.count == 3 else { return "无记录" }
+        if bytes == [0xA1,0,0]{return "文本 · 需要 CherryMac 运行"}
         if bytes[0] == 0x20 {
             var mods = ""
             if bytes[1] & 0x11 != 0 { mods += "⌃" }

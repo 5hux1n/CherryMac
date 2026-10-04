@@ -242,3 +242,94 @@ struct MacroWriteAuthorization {
         for offset in stride(from:0,to:378,by:54){try validate(CherryPacket.chunk(9,offset:offset,length:54,data:Array(current.keymap[offset..<offset+54])))}
     }
 }
+
+
+// Versioned host definitions are separate from diagnostic logs. Preparing a
+// record never replaces the active definition; commit follows USB readback.
+struct HostTextInstallationRecord:Codable,Equatable {
+    enum Phase:String,Codable {case prepared,installed,failed,restored}
+    var format="CherryMacHostTextInstallation"
+    var version=1
+    let id:String
+    let createdAt:Date
+    let officialJSON:Data
+    let factoryKeymap:[UInt8]
+    let before:HardwareSnapshot
+    let previousConfiguration:Data?
+    var phase:Phase
+    func installation()throws->WindowsProfile.HostTextInstallation {
+        guard format=="CherryMacHostTextInstallation",version==1,UUID(uuidString:id) != nil else{throw HardwareError(message:"文本安装记录格式无效。")}
+        if let previousConfiguration{_ = try WindowsProfile.templateRoot(previousConfiguration)}
+        return try WindowsProfile.HostTextInstallation(officialJSON:officialJSON,factoryKeymap:factoryKeymap,baseline:before)
+    }
+}
+final class HostTextConfigurationStore {
+    private struct Active:Codable {var format="CherryMacHostTextConfiguration";var version=1;let officialJSON:Data}
+    let directory:URL
+    init(directory:URL?=nil){self.directory=directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HostText")}
+    private var activeURL:URL{directory.appendingPathComponent("active.json")}
+    private var latestURL:URL{directory.appendingPathComponent("latest.json")}
+    private func recordURL(_ id:String)throws->URL {
+        guard UUID(uuidString:id) != nil else{throw HardwareError(message:"文本安装记录编号无效。")}
+        return directory.appendingPathComponent("\(id).json")
+    }
+    private func persist<T:Encodable>(_ value:T,to url:URL)throws {
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let data=try JSONEncoder().encode(value)
+        try data.write(to:url,options:.atomic)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
+        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"文本配置保存校验失败。")}
+    }
+    private func read<T:Decodable>(_ type:T.Type,from url:URL)throws->T {
+        let data=try Data(contentsOf:url)
+        guard data.count<=4_000_000 else{throw HardwareError(message:"文本配置记录过大。")}
+        do{return try JSONDecoder().decode(type,from:data)}catch{throw HardwareError(message:"文本配置记录无法解析。")}
+    }
+    func activeConfiguration()throws->Data? {
+        guard FileManager.default.fileExists(atPath:activeURL.path) else{return nil}
+        let active=try read(Active.self,from:activeURL)
+        guard active.format=="CherryMacHostTextConfiguration",active.version==1 else{throw HardwareError(message:"已保存文本配置格式无效。")}
+        _ = try WindowsProfile.templateRoot(active.officialJSON)
+        return active.officialJSON
+    }
+    func prepare(_ installation:WindowsProfile.HostTextInstallation)throws->HostTextInstallationRecord {
+        let record=HostTextInstallationRecord(id:UUID().uuidString,createdAt:Date(),officialJSON:installation.officialJSON,factoryKeymap:installation.factoryKeymap,before:installation.before,previousConfiguration:try activeConfiguration(),phase:.prepared)
+        _ = try record.installation()
+        try persist(record,to:recordURL(record.id));try persist(record.id,to:latestURL)
+        return record
+    }
+    func latest()throws->HostTextInstallationRecord? {
+        guard FileManager.default.fileExists(atPath:latestURL.path) else{return nil}
+        let id=try read(String.self,from:latestURL),record=try read(HostTextInstallationRecord.self,from:recordURL(id))
+        guard record.id==id else{throw HardwareError(message:"文本安装记录编号不一致。")}
+        _ = try record.installation();return record
+    }
+    private func checked(_ record:HostTextInstallationRecord)throws->HostTextInstallationRecord {
+        let saved=try read(HostTextInstallationRecord.self,from:recordURL(record.id))
+        guard saved.id==record.id,saved.officialJSON==record.officialJSON,saved.factoryKeymap==record.factoryKeymap,saved.before==record.before,saved.previousConfiguration==record.previousConfiguration else{throw HardwareError(message:"文本安装记录已变化，未覆盖。")}
+        _ = try saved.installation();return saved
+    }
+    func commit(_ record:HostTextInstallationRecord)throws {
+        var saved=try checked(record)
+        guard saved.phase == .prepared else{throw HardwareError(message:"文本安装记录当前不能提交。")}
+        guard try activeConfiguration()==record.previousConfiguration else{throw HardwareError(message:"主机文本配置已变化，未替换。")}
+        saved.phase = .installed;try persist(saved,to:recordURL(saved.id))
+        try persist(Active(officialJSON:saved.officialJSON),to:activeURL)
+    }
+    func failed(_ record:HostTextInstallationRecord)throws {
+        var saved=try checked(record)
+        guard saved.phase != .restored else{return}
+        saved.phase = .failed;try persist(saved,to:recordURL(saved.id))
+    }
+    func validateRestoration(_ record:HostTextInstallationRecord)throws {
+        let saved=try checked(record),current=try activeConfiguration()
+        guard current==saved.officialJSON || current==saved.previousConfiguration else{throw HardwareError(message:"主机文本配置已变化，未恢复安装。")}
+    }
+    func restored(_ record:HostTextInstallationRecord)throws {
+        try validateRestoration(record)
+        var saved=try checked(record)
+        if let previous=saved.previousConfiguration{try persist(Active(officialJSON:previous),to:activeURL)}
+        else if FileManager.default.fileExists(atPath:activeURL.path){try FileManager.default.removeItem(at:activeURL)}
+        saved.phase = .restored;try persist(saved,to:recordURL(saved.id))
+    }
+}

@@ -291,6 +291,7 @@ final class CherryUSB: CherryHardwareAccess {
         guard !transportDead,device != nil else{throw HardwareError(message:"USB 会话已失效，请重新连接。")}
         let generation=hostTextGeneration
         let routing=try readHostTextBindings(officialJSON:officialJSON)
+        guard routing.count>0 else{throw HardwareError(message:"未找到与所选配置匹配的已安装文本键，请先安装文本绑定。")}
         guard !transportDead,hostTextGeneration==generation else{throw HardwareError(message:"准备文本监听期间配置或 USB 会话发生变化，请重新读取。")}
         hostTextRouting=routing;hostTextSink=onBinding;hostTextObservationToken=generation;hostTextTicket=WindowsProfile.HostTextTicket(id:generation)
     }

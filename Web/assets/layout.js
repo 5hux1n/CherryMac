@@ -31,6 +31,7 @@ export const modes=[[8,'自定义逐键颜色'],[0,'波纹'],[1,'光谱'],[2,'�
 export const usageNames=Object.fromEntries(keys.filter(k=>k.page===7&&k.usage).map(k=>[k.usage,k.label]));
 Object.assign(usageNames,{224:'左 Ctrl',225:'左 Shift',226:'左 Option',227:'左 Command',228:'右 Ctrl',229:'右 Shift',230:'右 Option',231:'右 Command'});
 export function describe(b){
+  if(b[0]===161&&b[1]===0&&b[2]===0)return '文本 · 需要 CherryMac 运行';
   if(b[0]===0x20)return ['⌃','⇧','⌥','⌘'].filter((_,i)=>b[1]&[0x11,0x22,0x44,0x88][i]).join('')+(b[2]?(usageNames[b[2]]??`HID ${b[2]}`):b[1]?'':'禁用');
   if(b[0]===0x30)return ({402:'计算器',182:'上一曲',205:'播放 / 暂停',181:'下一曲',233:'音量增加',234:'音量降低',226:'静音'})[b[1]+(b[2]<<8)]??'媒体功能';
   if(b[0]===0x70)return `硬件宏 ${b[1]+1}`;
