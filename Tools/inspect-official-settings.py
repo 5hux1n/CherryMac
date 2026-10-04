@@ -194,24 +194,45 @@ PROFILE_SETTINGS_RELOAD_CHECKS = {
     0x4FA31F: "ff15ccb06e00",
     0x50DCD9: "81c2c83f0000",
     0x50DCE6: "e84511f7ff",
+    0x53FA2B: "c7801421000001000000",  # initial UI selection
+    0x54078C: "8b4d08",
+    0x54078F: "898814210000",
+    0x5407A1: "68f8647700",          # device_function_switch
+    0x5407DC: "6828657700",          # device_key_function_switch
+    0x540868: "83e901",
+    0x54087B: "ff2495380c5400",      # UI switch dispatch
+    0x540C6A: "8b8014210000",        # UI selection getter, not an ACK
+    0x501DAB: "8b4508",
+    0x501DAE: "50",
+    0x501DB5: "e8c6e90300",          # target override calls UI setter
 }
 
 
 def inspect_profile_settings_reload(pe):
-    for offset, target in {0x28C: 0x4FAA50, 0x2CC: 0x4FA240}.items():
+    for offset, target in {0x28C: 0x4FAA50, 0x2CC: 0x4FA240,
+                           0x2E8: 0x501D70, 0x2EC: 0x540C60}.items():
         if pe.pointer(0x77F604 + offset) != target:
             raise ValueError("Unexpected profile settings reload virtual target")
     for address, encoded in PROFILE_SETTINGS_RELOAD_CHECKS.items():
         expected = bytes.fromhex(encoded)
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected profile settings reload instruction")
+    control_names = {0x7764F8: "device_function_switch", 0x776528: "device_key_function_switch"}
+    for address, name in control_names.items():
+        encoded = (name + "\0").encode("utf-16-le")
+        if pe.at(address, len(encoded)) != encoded:
+            raise ValueError("Unexpected profile settings refresh control name")
     return {"instructionChecks": len(PROFILE_SETTINGS_RELOAD_CHECKS),
             "profileReloadMethods": ["0x4f9320", "0x4f9440"],
             "settingsSource": "JSON getter 0x483100 to device +0x3fe0",
             "followingVirtualOffsets": ["0x300", "0x28c"],
             "selectedRefreshMethod": "0x4faa50",
             "refreshInitialCalls": {"virtual0x2cc": "0x4fa240", "direct": "0x50dc80"},
-            "targetSpecificRefreshBranch": "01CE calls virtual +0x2ec and compares result with 1",
+            "targetSpecificRefreshBranch": "01CE compares UI selection getter +0x2ec with 1; not a hardware reply",
+            "uiSelection": {"deviceOffset": "0x2114", "initialValue": 1,
+                            "setter": "0x540780", "getter": "0x540c60",
+                            "targetSetterOverride": "0x501d70",
+                            "controlNames": list(control_names.values())},
             "limits": "Named copy and refresh call sites only. These calls do not identify a settings USB report. Nested paths and runtime behavior remain unverified; no inference that all settings are unsupported or host-only."}
 
 
@@ -471,7 +492,7 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 6,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 7,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

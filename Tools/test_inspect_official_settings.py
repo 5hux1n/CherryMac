@@ -32,7 +32,10 @@ class AuditTests(unittest.TestCase):
         class MemoryPE:
             def __init__(self):
                 self.code = {a: bytes.fromhex(v) for a, v in audit.PROFILE_SETTINGS_RELOAD_CHECKS.items()}
-                self.targets = {0x77F604 + 0x28C: 0x4FAA50, 0x77F604 + 0x2CC: 0x4FA240}
+                self.targets = {0x77F604 + 0x28C: 0x4FAA50, 0x77F604 + 0x2CC: 0x4FA240,
+                                0x77F604 + 0x2E8: 0x501D70, 0x77F604 + 0x2EC: 0x540C60}
+                self.code.update({0x7764F8: ('device_function_switch\0').encode('utf-16-le'),
+                                  0x776528: ('device_key_function_switch\0').encode('utf-16-le')})
             def at(self, address, size):
                 return self.code[address][:size]
             def pointer(self, address):
@@ -40,6 +43,7 @@ class AuditTests(unittest.TestCase):
         pe = MemoryPE()
         result = audit.inspect_profile_settings_reload(pe)
         self.assertEqual(result['followingVirtualOffsets'], ['0x300', '0x28c'])
+        self.assertEqual(result['uiSelection']['deviceOffset'], '0x2114')
         pe.code[0x4F93E9] = bytes.fromhex('e800000000')
         with self.assertRaisesRegex(ValueError, 'reload instruction'):
             audit.inspect_profile_settings_reload(pe)

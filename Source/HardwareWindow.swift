@@ -330,7 +330,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("恢复最近宏写入",#selector(restoreLastMacros)),678,205,195,32,in:files)
         #endif
         #if CHERRY_MACRO_PRODUCT
-        place(label("Windows 导出需要已导入的官方模板，合并键位、宏和文本页选中的定义。同一个键若有键位修改与文本绑定，请先解除冲突。导出包含当前灯效草稿，需模板带有 126 项逐键颜色表。设备设置沿用模板；导入和导出不修改键盘。",12),8,261,850,62,in:files)
+        place(label("Windows 导出需要已导入的官方模板，合并键位、宏和文本页选中的定义。同一个键若有键位修改与文本绑定，请先解除冲突。导出包含灯效草稿；自定义配色需官方原始颜色表，内置模式可使用没有逐键表的模板。设备设置沿用模板；导入和导出不修改键盘。",12),8,261,850,62,in:files)
         #else
         place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导出先导入官方模板，包含键位、宏与当前灯效草稿；设备设置沿用模板。导入和撤销不修改键盘。",12),8,261,850,62,in:files)
         #endif
