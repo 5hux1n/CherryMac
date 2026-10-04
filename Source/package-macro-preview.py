@@ -27,17 +27,20 @@ if any(path.exists() for path in [output, checksum_file, manifest_file]):
 subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
 subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', 'Source'], cwd=root.parent, check=True)
 commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+if info.get('CherryMacSourceCommit') != commit:
+    raise SystemExit('App source commit differs; rebuild with the preview build script')
 architectures = subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True).split()
 files = {path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
          for path in sorted(app.rglob('*')) if path.is_file()}
 manifest = {'format': 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
-            'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'), 'files': files}
+            'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'lightingWrite': False}, 'files': files}
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
-readme = '''# CherryMac 宏预览
+readme = '''# CherryMac 宏与文本预览
 
-适用于 Apple Silicon Mac，macOS 13 或更新版本。此包用于宏模块统一验收，尚未通过完整成品验收，也尚未经过 Apple 公证。
+适用于 Apple Silicon Mac，macOS 13 或更新版本。此包用于宏与文本模块统一验收，尚未通过完整成品验收，也尚未经过 Apple 公证。
 
 解压后将 CherryMacMacroPreview.app 放入应用程序，退出其他 CherryMac 再打开。本次打包不会打开 App、申请权限或连接键盘；请等统一验收安排后再进行写入。
 
@@ -46,6 +49,10 @@ readme = '''# CherryMac 宏预览
 宏页显示存储占用及设定等待总量。保存宏保留原按键各自的执行方式；“分配到所选键”才应用当前方式。解除绑定把所选键设为禁用，宏库保留。这些操作只改编辑区，点击写入后才改变键盘。
 
 宏写入只更新宏库与宏绑定，普通键和灯效草稿保留。写入前自动保存完整备份和操作记录，写后完整读回。持续执行的宏需按提示先停止；所需输入监控权限按界面处理。取消发送不会停止键盘内部正在执行的宏。遇到错误可使用“配置与备份”中的宏恢复入口，断线后需重新连接。
+
+“文本”页面可以选择本型号官方 JSON，编辑文字、分配到按键、安装和解除绑定。文本内容保存在 Mac，键盘保存触发键；输入需要 CherryMac 持续运行及辅助功能权限。选择或编辑不会写入，安装前显示变更，写后完整读回。已保存配置和恢复记录可导出；恢复记录可在新版 Mac／网页两端导入，已有不同记录不会被覆盖。
+
+网页联动默认关闭。在文本页点击“网页联动”，开启并复制临时联动码，粘贴到网页文本页并连接。网页启用服务会把已安装定义交给 Mac，无需手动搬文件；配置操作和宏录制前等待服务释放 USB。关闭客户端配置窗口或关闭联动会停用文本服务。联动码仅本次运行有效。文本实体触发、实际输入及两端新流程仍待统一验收。
 
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
 '''.encode()

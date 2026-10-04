@@ -8,6 +8,8 @@ if [[ $# -ne 1 ]]; then
     exit 2
 fi
 TASK_SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+git -C "$TASK_SOURCE_DIR" diff --quiet HEAD -- .
+TASK_PREVIEW_COMMIT="$(git -C "$TASK_SOURCE_DIR" rev-parse HEAD)"
 TASK_PREVIEW_DIR="$1"
 mkdir -p "$TASK_PREVIEW_DIR"
 TASK_PREVIEW_DIR="$(cd "$TASK_PREVIEW_DIR" && pwd)"
@@ -32,9 +34,10 @@ cp "$TASK_SOURCE_DIR/Info.plist" "$TASK_PREVIEW_STAGE/CherryMacMacroPreview.app/
 TASK_PREVIEW_PLIST="$TASK_PREVIEW_STAGE/CherryMacMacroPreview.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier local.cherrymac.macro-product-preview' "$TASK_PREVIEW_PLIST"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleName CherryMac Macro Preview' "$TASK_PREVIEW_PLIST"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName CherryMac Macro Preview' "$TASK_PREVIEW_PLIST"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.15.0' "$TASK_PREVIEW_PLIST"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 17' "$TASK_PREVIEW_PLIST"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName CherryMac Macro & Text Preview' "$TASK_PREVIEW_PLIST"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.16.0' "$TASK_PREVIEW_PLIST"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 18' "$TASK_PREVIEW_PLIST"
+/usr/libexec/PlistBuddy -c "Add :CherryMacSourceCommit string $TASK_PREVIEW_COMMIT" "$TASK_PREVIEW_PLIST"
 plutil -lint "$TASK_PREVIEW_PLIST"
 codesign --force --sign - "$TASK_PREVIEW_STAGE/CherryMacMacroPreview.app"
 codesign --verify --deep --strict "$TASK_PREVIEW_STAGE/CherryMacMacroPreview.app"
