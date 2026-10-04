@@ -122,6 +122,12 @@ def audit_device_identity(pe):
 
 
 TRANSPORT_CHECKS = {
+    0x4F6F10: '68b0d87600', 0x4F6F25: 'ff15a4b36e00',
+    0x4F6F31: '8982c01e0000', 0x433AB9: 'c780240b000000000000',
+    0x434637: '8b4d08', 0x43463A: '8988240b0000',
+    0x5007FD: '8a4508', 0x500800: '8885f0feffff',
+    0x5008A4: '8a954dffffff', 0x5008B7: 'b904000000',
+    0x5008BC: '2bc8',
     0x41213A: '33d2', 0x41213C: '668915e4b18300',
     0x4121D3: '33d2', 0x4121D5: '66891584b28300',
     0x41226C: '33d2', 0x41226E: '66891524b38300',
@@ -145,6 +151,9 @@ def audit_transport_and_bank(pe):
         value = bytes.fromhex(encoded)
         if pe.at(address, len(value)) != value:
             raise ValueError(f'Unexpected transport/bank instruction at {address:#x}')
+    name = 'DeviceProfileItem'
+    if pe.at(0x76D8B0, (len(name)+1)*2) != (name+'\0').encode('utf-16le'):
+        raise ValueError('Unexpected bank control name')
     return {
         'instructionChecks': len(TRANSPORT_CHECKS),
         'registryTrailingWord': {'rowOffset': 156, 'targetRegisteredRows': ['0x83b148', '0x83b1e8', '0x83b288'], 'initialValue': 0},
@@ -154,6 +163,8 @@ def audit_transport_and_bank(pe):
         'oneSelectorReports': {'parameterCommand': 6, 'parameterFlag': 0, 'colorCommand': 139, 'finishCommand': 130},
         'bankCaller': '0x4b1930 passes return of 0x42b4b0 on object+0x1ec0 into both parameter and custom-color virtual calls',
         'bankGetter': '0x42b4b0 returns the control field +0xb24; this call site does not hardcode bank zero',
+        'bankControl': 'DeviceProfileItem resolved at 0x4f6f10..0x4f6f31; initializer sets +0xb24=0 at 0x433ab9, setter 0x434600 copies its first argument there',
+        'parameterHead': '0x5007fd/0x500800 copies caller bank byte into head[0]; head[1..8] contains mode, brightness, 4-speed, direction, multicolor, RGB',
         'limits': 'Registered trailing words initialize to zero and the copied-word route is traced, but enumeration list population and all later changes of that word remain unproven. Selected-control value/range and actual active bank are not established. No HID or packet generation.',
     }
 

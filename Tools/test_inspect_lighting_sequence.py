@@ -29,6 +29,7 @@ class MemoryPE:
             self.put(address, bytes.fromhex(encoded))
         for address, encoded in audit.TRANSPORT_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
+        self.put(0x76D8B0, 'DeviceProfileItem\0'.encode('utf-16le'))
         self.put(0x745750, b'LightOpenFlag\0')
         self.put(0x77F604 + 0x2BC, struct.pack('<I', 0x500790))
         for address, encoded in audit.CHECKS.items():
@@ -72,7 +73,7 @@ class LightingAuditTests(unittest.TestCase):
         self.assertEqual(result['zeroSelectorReports']['parameterFlag'], 85)
         self.assertEqual(result['zeroSelectorReports']['finishCommand'], 2)
         self.assertEqual(result['oneSelectorReports']['colorCommand'], 139)
-        for address in (0x41213C, 0x49832F, 0x4DE67A, 0x4B197F, 0x42B4BA):
+        for address in (0x41213C, 0x49832F, 0x4DE67A, 0x4B197F, 0x42B4BA, 0x500800, 0x433AB9):
             pe = MemoryPE()
             pe.put(address, b'\x90')
             with self.assertRaisesRegex(ValueError, 'transport/bank instruction'):

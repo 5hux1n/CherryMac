@@ -426,6 +426,18 @@ enum WindowsProfile {
         root["KeyList"]=keys;root["ActionInfo"]=actions
         return try encodeKeysAndMacros(profile,template:JSONSerialization.data(withJSONObject:root,options:.sortedKeys),preservingTextIndices:textIndices)
     }
+    // File-only head/tail preparation for 500790's traced 01CE branch.
+    // Bank is an explicit caller input, not an inference from a read-back bank.
+    static func prepareOfficialLightingParameters(_ data:Data,bank:Int)throws->(head:[UInt8],lightOpenFlag:UInt8){
+        let root=try templateRoot(data)
+        guard (0...255).contains(bank),let light=root["LightInfo"] as? [String:Any]else{throw HardwareError(message:"需要完整官方灯效参数和可表示为单字节的配置编号。")}
+        let selected=try integer(light["SelectItem"],"SelectItem",range:0...24)
+        let brightness=try integer(light["Light"],"Light",range:0...4),speed=try integer(light["Speed"],"Speed",range:0...4)
+        let direction=try integer(light["Fx"],"Fx",range:0...1),multi=try integer(light["MultiColor"],"MultiColor",range:0...1)
+        let colors=try ["Red","Green","Blue"].map{UInt8(try integer(light[$0],$0,range:0...255))}
+        let flag=UInt8(try integer(light["LightOpenFlag"],"LightOpenFlag",range:0...255))
+        return ([UInt8(bank),modeCodes[selected],UInt8(brightness),UInt8(4-speed),UInt8(direction),UInt8(multi)]+colors,flag)
+    }
     // Offline preparation for the specifically traced custom-color load path.
     // Existing read-back colors are never globally rescaled. The traced official
     // method starts with a zeroed buffer, including unmapped LED positions.

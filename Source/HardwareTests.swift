@@ -1285,6 +1285,13 @@ func runLightingDraftExportChecks(){
     indices[0]=126;rejected{_ = try WindowsProfile.resolveLightingSlots(factoryKeymap:factory,ledIndices:indices)}
     rejected{_ = try WindowsProfile.resolveLightingSlots(factoryKeymap:Array(factory.dropFirst()),ledIndices:indices)}
     let template=try! JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+    var parameterRoot=root
+    parameterRoot["LightInfo"]=["SelectItem":21,"Light":2,"Speed":1,"Fx":1,"MultiColor":0,"Red":7,"Green":123,"Blue":249,"LightOpenFlag":1]
+    let parameterData=try! JSONSerialization.data(withJSONObject:parameterRoot)
+    let parameters=try! WindowsProfile.prepareOfficialLightingParameters(parameterData,bank:3)
+    precondition(parameters.head==[3,8,2,3,1,0,7,123,249] && parameters.lightOpenFlag==1)
+    rejected{_ = try WindowsProfile.prepareOfficialLightingParameters(parameterData,bank:256)}
+    rejected{_ = try WindowsProfile.prepareOfficialLightingParameters(template,bank:0)}
     var snapshot=HardwareSnapshot.demo();snapshot.colors=(0..<378).map{UInt8($0%256)}
     for (_,mode) in CherryLighting.modes {
         snapshot.parameters.replaceSubrange(1..<9,with:[mode,3,1,1,0,7,123,249])

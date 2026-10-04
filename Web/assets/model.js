@@ -438,6 +438,14 @@ export function officialCustomColors(raw,brightness){
   requireThat(bytes(raw,378)&&Number.isInteger(brightness)&&brightness>=0&&brightness<=4,'官方亮度转换需要完整 RGB 表和 0～4 档亮度。');
   const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];return raw.map(value=>(value*coefficient)>>8);
 }
+// Pure file conversion; caller bank is not inferred from read-back parameters.
+export function prepareOfficialLightingParameters(template,bank){
+  validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
+  requireThat(Number.isInteger(bank)&&bank>=0&&bank<=255&&template.LightInfo,'需要完整官方灯效参数和可表示为单字节的配置编号。');
+  const light=template.LightInfo,selected=winInt(light.SelectItem,'SelectItem',0,24);
+  const head=[bank,MODE_CODES[selected],winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winInt(light.MultiColor,'MultiColor',0,1),...['Red','Green','Blue'].map(name=>winInt(light[name],name,0,255))];
+  return {head,lightOpenFlag:winInt(light.LightOpenFlag,'LightOpenFlag',0,255)};
+}
 export function prepareOfficialCustomColors(template,baseline,lightingMapping){
   validateSnapshot(baseline,true);validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   const light=template.LightInfo,groups=template.CustomLightMode?.LightColorInfo;

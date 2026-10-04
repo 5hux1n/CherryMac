@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {prepareOfficialCustomColors,officialCustomColors,officialRawChannelRange,captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {prepareOfficialLightingParameters,prepareOfficialCustomColors,officialCustomColors,officialRawChannelRange,captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -1031,4 +1031,13 @@ test('official custom color preparation zeroes unmapped LEDs and preserves its i
   for(let slot=0;slot<126;slot++)assert.deepEqual(result.slice(slot*3,slot*3+3),mapped.has(slot)?[134,67,0]:[0,0,0]);
   assert.deepEqual(snapshot,before);assert.deepEqual(root,original);
   root.LightInfo.SelectItem=8;assert.throws(()=>prepareOfficialCustomColors(root,snapshot,mapping),/自定义/);
+});
+
+
+test('official lighting parameters put explicit bank in head and validate the tail flag',()=>{
+  const root=windowsFixture();root.LightInfo={SelectItem:21,Light:2,Speed:1,Fx:1,MultiColor:0,Red:7,Green:123,Blue:249,LightOpenFlag:1};const before=clone(root);
+  assert.deepEqual(prepareOfficialLightingParameters(root,3),{head:[3,8,2,3,1,0,7,123,249],lightOpenFlag:1});
+  assert.deepEqual(root,before);
+  for(const bank of [-1,256,NaN,true])assert.throws(()=>prepareOfficialLightingParameters(root,bank));
+  for(const [field,value] of [['Speed',5],['Light',-1],['LightOpenFlag',256],['LightOpenFlag',undefined]]){const invalid=clone(root);invalid.LightInfo[field]=value;assert.throws(()=>prepareOfficialLightingParameters(invalid,0));}
 });
