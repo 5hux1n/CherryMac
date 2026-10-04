@@ -26,6 +26,11 @@ class MemoryPE:
         for address, encoded in audit.CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
 
+        for address, load, compare, jump in audit.PREDICATES:
+            self.put(address - 7, bytes.fromhex(load))
+            self.put(address, bytes.fromhex(compare))
+            self.put(address + len(bytes.fromhex(compare)), bytes.fromhex(jump))
+
     def put(self, address, data):
         for i, byte in enumerate(data):
             self.memory[address + i] = byte
@@ -50,6 +55,26 @@ class LightingAuditTests(unittest.TestCase):
         self.assertEqual(result['finish']['delayImport'], 'KERNEL32.dll!Sleep')
         self.assertEqual(result['tailField']['jsonKey'], 'LightOpenFlag')
         self.assertEqual(result['tailField']['getterStructByte'], 11)
+
+    def test_selector_groups_and_distinct_ce_values(self):
+        pe = MemoryPE()
+        expected = {0x1CE: '0x5010d8', 0xCE: '0x500bb0', 0xB4: '0x500bef',
+                    0x1B2: '0x500d16', 0x1D7: '0x500daf',
+                    0x1DE: '0x500f2a', 0x1FB: '0x50101f'}
+        for selector, branch in expected.items():
+            with self.subTest(selector=selector):
+                self.assertEqual(audit.audit_selector(pe, selector)['selectedBranch'], branch)
+        self.assertEqual(audit.audit_selector(pe)['predicateCount'], 38)
+        for selector in (-1, 65536, True):
+            with self.assertRaisesRegex(ValueError, 'unsigned word'):
+                audit.audit_selector(pe, selector)
+
+    def test_changed_selector_load_and_jump_rejected(self):
+        for address in (0x500ADE, 0x501019):
+            pe = MemoryPE()
+            pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'selector instruction'):
+                audit.audit_sequence(pe)
 
     def test_changed_instruction_rejected(self):
         pe = MemoryPE()

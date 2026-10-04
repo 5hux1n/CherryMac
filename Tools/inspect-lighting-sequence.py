@@ -28,6 +28,85 @@ CHECKS = {
 }
 
 
+# Exact word-load, compare and conditional-jump bytes; no general x86 emulator.
+PREDICATES = [
+    (0x500AE5, "0fb7881a1e0000", "83f977", "0f84c2000000"),
+    (0x500AFB, "0fb7821a1e0000", "3dc3000000", "0f84aa000000"),
+    (0x500B13, "0fb7911a1e0000", "81facd000000", "0f8491000000"),
+    (0x500B2C, "0fb7881a1e0000", "81f9cb000000", "747c"),
+    (0x500B41, "0fb7821a1e0000", "3dd2000000", "7468"),
+    (0x500B55, "0fb7911a1e0000", "81face000000", "7453"),
+    (0x500B6A, "0fb7881a1e0000", "81f9ab010000", "743e"),
+    (0x500B7F, "0fb7821a1e0000", "3daf010000", "742a"),
+    (0x500B93, "0fb7911a1e0000", "81fabb010000", "7415"),
+    (0x500BA8, "0fb7881a1e0000", "81f9cec00000", "750a"),
+    (0x500BE7, "0fb7881a1e0000", "81f9b4000000", "752c"),
+    (0x500C28, "0fb7881a1e0000", "81f9b2010000", "0f84e2000000"),
+    (0x500C41, "0fb7821a1e0000", "3db7010000", "0f84ca000000"),
+    (0x500C59, "0fb7911a1e0000", "81fab1010000", "0f84b1000000"),
+    (0x500C72, "0fb7881a1e0000", "81f9b4010000", "0f8498000000"),
+    (0x500C8B, "0fb7821a1e0000", "3de5000000", "0f8480000000"),
+    (0x500CA3, "0fb7911a1e0000", "81faec000000", "746b"),
+    (0x500CB8, "0fb7881a1e0000", "81f9c2010000", "7456"),
+    (0x500CCD, "0fb7821a1e0000", "3dc3010000", "7442"),
+    (0x500CE1, "0fb7911a1e0000", "81fae3000000", "742d"),
+    (0x500CF6, "0fb7881a1e0000", "81f9ea000000", "7418"),
+    (0x500D0B, "0fb7821a1e0000", "3df3010000", "0f8580000000"),
+    (0x500DA3, "0fb7911a1e0000", "81fad7010000", "0f8580000000"),
+    (0x500E3C, "0fb7881a1e0000", "81f9de010000", "0f84e2000000"),
+    (0x500E55, "0fb7821a1e0000", "3de2010000", "0f84ca000000"),
+    (0x500E6D, "0fb7911a1e0000", "81fae4010000", "0f84b1000000"),
+    (0x500E86, "0fb7881a1e0000", "81f9da010000", "0f8498000000"),
+    (0x500E9F, "0fb7821a1e0000", "3ddb010000", "0f8480000000"),
+    (0x500EB7, "0fb7911a1e0000", "81fae6010000", "746b"),
+    (0x500ECC, "0fb7881a1e0000", "81f9e8010000", "7456"),
+    (0x500EE1, "0fb7821a1e0000", "3df7010000", "7442"),
+    (0x500EF5, "0fb7911a1e0000", "81faf9010000", "742d"),
+    (0x500F0A, "0fb7881a1e0000", "81f9ef010000", "7418"),
+    (0x500F1F, "0fb7821a1e0000", "3df1010000", "0f859e000000"),
+    (0x500FD5, "0fb7911a1e0000", "81fafb010000", "7442"),
+    (0x500FEA, "0fb7881a1e0000", "81f942010000", "742d"),
+    (0x500FFF, "0fb7821a1e0000", "3d4c010000", "7419"),
+    (0x501013, "0fb7911a1e0000", "81fa4e010000", "0f85b9000000"),
+]
+BRANCH_GROUPS = [(0, 10, 0x500BB0), (10, 11, 0x500BEF),
+                 (11, 22, 0x500D16), (22, 23, 0x500DAF),
+                 (23, 34, 0x500F2A), (34, 38, 0x50101F)]
+
+
+def audit_selector(pe, selector=0x1CE):
+    if type(selector) is not int or not 0 <= selector <= 0xFFFF:
+        raise ValueError('Selector must be an unsigned word')
+    decoded = []
+    for address, load_hex, compare_hex, jump_hex in PREDICATES:
+        load, compare, jump = map(bytes.fromhex, (load_hex, compare_hex, jump_hex))
+        for start, value in ((address - 7, load), (address, compare), (address + len(compare), jump)):
+            if pe.at(start, len(value)) != value:
+                raise ValueError(f'Unexpected selector instruction at {start:#x}')
+        # CMP r32, imm8 uses sign extension; the other encodings use imm32.
+        value = struct.unpack('<b', compare[-1:])[0] if compare[0] == 0x83 else struct.unpack('<I', compare[-4:])[0]
+        near = jump[0] == 0x0F
+        opcode = jump[1] if near else jump[0]
+        equal_jump = opcode in (0x74, 0x84)
+        displacement = struct.unpack('<i' if near else '<b', jump[2:] if near else jump[1:])[0]
+        fallthrough = address + len(compare) + len(jump)
+        decoded.append((value, equal_jump, fallthrough + displacement, fallthrough))
+    groups = []
+    selected = 0x5010D8
+    for first, end, destination in BRANCH_GROUPS:
+        entries = decoded[first:end]
+        for value, equal_jump, target, fallthrough in entries:
+            if (target if equal_jump else fallthrough) != destination:
+                raise ValueError('Selector equality destination differs')
+        values = [entry[0] for entry in entries]
+        groups.append({'values': [f'0x{x:04x}' for x in values], 'equalBranch': hex(destination)})
+        if selector in values:
+            selected = destination
+    return {'objectField': 'word at object+0x1e1a', 'assumedValue': f'0x{selector:04x}',
+            'predicateCount': len(decoded), 'groups': groups, 'selectedBranch': hex(selected),
+            'limits': 'Conditional decision-table audit only. The source of the live object field and its equivalence to USB PID remain unproven; this is not a trace of device execution.'}
+
+
 def cstring(pe, address):
     result = bytearray()
     for offset in range(256):
@@ -80,6 +159,7 @@ def audit_sequence(pe):
     return {
         'format': 'CherryMacStaticLightingSequence', 'version': 1,
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
+        'selectorAudit': audit_selector(pe),
         'bankBase': 'caller argument << 6',
         'tailField': {'jsonKey': 'LightOpenFlag', 'getter': '0x47ade0', 'getterStructByte': 11, 'parameterByte': 21, 'limits': 'Field origin only; physical on/off semantics and accepted values are not proven'},
         'optionalBegin': {'guard': 'object+0xa84 != 0', 'helper': '0x4d9eb0'},
