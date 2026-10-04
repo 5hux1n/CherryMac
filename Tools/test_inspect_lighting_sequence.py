@@ -16,11 +16,17 @@ class MemoryPE:
         self.memory = {}
         self.put(0x3C, struct.pack('<I', 0x80))
         self.put(0x94, struct.pack('<H', 112))
-        self.put(0x100, struct.pack('<II', 0x1000, 40))
+        self.put(0x100, struct.pack('<II', 0x1000, 60))
         self.put(0x401000, struct.pack('<5I', 0x1200, 0, 0, 0x1300, 0x2EBCF4))
         self.put(0x401200, struct.pack('<II', 0x1320, 0))
         self.put(0x401300, b'KERNEL32.dll\0')
         self.put(0x401320, b'\0\0Sleep\0')
+        self.put(0x401014, struct.pack('<5I', 0x1400, 0, 0, 0x1500, 0x2EBA68))
+        self.put(0x401400, struct.pack('<II', 0x1520, 0))
+        self.put(0x401500, b'HID.DLL\0')
+        self.put(0x401520, b'\0\0HidD_GetAttributes\0')
+        for address, encoded in audit.IDENTITY_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
         self.put(0x745750, b'LightOpenFlag\0')
         self.put(0x77F604 + 0x2BC, struct.pack('<I', 0x500790))
         for address, encoded in audit.CHECKS.items():
@@ -57,6 +63,21 @@ class MemoryPE:
 
 
 class LightingAuditTests(unittest.TestCase):
+    def test_product_id_structure_copy_and_branch(self):
+        result = audit.audit_device_identity(MemoryPE())
+        self.assertEqual(result['attributeImport'], 'HID.DLL!HidD_GetAttributes')
+        self.assertEqual(result['targetProductID'], 462)
+        self.assertEqual(result['targetParameterBranch'], '0x5010d8')
+        for address in (0x496C6D, 0x49828D, 0x5435D4, 0x42911D):
+            pe = MemoryPE()
+            pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'device identity instruction'):
+                audit.audit_device_identity(pe)
+        pe = MemoryPE()
+        pe.put(0x401522, b'WrongAttributeName\0')
+        with self.assertRaisesRegex(ValueError, 'HidD_GetAttributes'):
+            audit.audit_device_identity(pe)
+
     def test_fallback_sequence_and_delay_import(self):
         result = audit.audit_sequence(MemoryPE())
         self.assertEqual([r['relativeOffset'] for r in result['parameterWrites']], [0, 21, 24])

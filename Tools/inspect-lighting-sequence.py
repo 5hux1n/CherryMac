@@ -73,6 +73,53 @@ BRANCH_GROUPS = [(0, 10, 0x500BB0), (10, 11, 0x500BEF),
                  (11, 22, 0x500D16), (22, 23, 0x500DAF),
                  (23, 34, 0x500F2A), (34, 38, 0x50101F)]
 
+# Follow the device record, rather than looking only for a direct +1e1a store.
+IDENTITY_CHECKS = {
+    0x5447D4: '8d876c020000',  # HIDD_ATTRIBUTES at connection object +26c
+    0x5447DE: 'ff1568ba6e00',  # HidD_GetAttributes
+    0x496C47: 'b9b0338400',    # that connection object's global address
+    0x496C4C: 'e87fe60a00',    # successful open before attributes are copied
+    0x496C59: '668b1520368400', 0x496C60: '66899544ffffff',
+    0x496C67: '66a122368400', 0x496C6D: '66898546ffffff',
+    0x496CAE: '8d9544ffffff', 0x496CBB: 'e8200b0000',
+    0x49782E: '0fb74802', 0x497839: '0fb7828a628300',
+    0x497840: '3bc8', 0x497842: '0f8594000000',
+    0x497940: '0fb77102', 0x497956: '0fb74002',
+    0x49795A: '3bf0', 0x49795C: '0f851f010000',
+    0x4BAF9F: '694d08a0000000',  # device-list row stride
+    0x498B52: '8b8d0cfeffff', 0x498B58: '81c1d0120000',
+    0x498B5E: 'e82d240200', 0x498B63: '81eca0000000',
+    0x498B72: 'e8f9f6ffff', 0x498B7D: '8b8d08feffff',
+    0x498B83: 'e818aa0a00',
+    0x498289: '668b5102', 0x49828D: '66895002',  # copy constructor
+    0x5435CD: '8d4508', 0x5435D4: '81c1181e0000',
+    0x5435DA: 'e8215beeff',
+    0x429119: '668b5102', 0x42911D: '66895002',  # assignment operator
+}
+
+
+def audit_device_identity(pe):
+    for address, encoded in IDENTITY_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected device identity instruction at {address:#x}')
+    dll, function = import_at(pe, 0x6EBA68)
+    if dll.lower() != 'hid.dll' or function != 'HidD_GetAttributes':
+        raise ValueError('Attribute slot does not import HID HidD_GetAttributes')
+    return {
+        'instructionChecks': len(IDENTITY_CHECKS),
+        'attributeImport': f'{dll}!{function}',
+        'attributeStructure': 'HIDD_ATTRIBUTES at connection object+0x26c; ProductID is its word at +6',
+        'attributeStructureReference': 'https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/hidsdi/ns-hidsdi-_hidd_attributes',
+        'enumeration': 'connection 0x8433b0 attributes ProductID 0x843622 -> local record+2 at 0x496c67/0x496c6d',
+        'matching': '0x4977e0 compares record+2 with registry+2 and then device-list+2; matching rows retain the same ProductID',
+        'objectAssignment': '0x498b52..0x498b83 obtains a 0xa0-byte device-list record, copies it with 0x498270 and passes it to 0x5435a0; 0x429100 copies record+2 into object+0x1e18+2',
+        'selectorField': 'word at object+0x1e1a is the copied ProductID on this device-opening path',
+        'targetProductID': 0x1CE,
+        'targetParameterBranch': audit_selector(pe, 0x1CE)['selectedBranch'],
+        'limits': 'Static identity/matching/opening path, not an observed runtime session or proof that all alternate setters preserve identity. Does not establish bank, transport selector, timing, or incident cause. No device accessed.',
+    }
+
 
 def audit_selector(pe, selector=0x1CE):
     if type(selector) is not int or not 0 <= selector <= 0xFFFF:
@@ -192,7 +239,7 @@ def audit_colors(pe):
         'scope': 'Main RGB-table path requires object+0x2240 != 0. Alternate path and live field initialization remain unverified.',
         'buffer': {'mappingLookup': 'object+0x2138; lookup helper 0x4bb8f0',
                    'rgb': 'buffer[mappedIndex*3+channel] = (component*fourthColorByte) >> 8',
-                   'limits': 'Fourth in-memory color byte; JSON Alpha linkage not yet established. Do not use this as a profile conversion rule.'},
+                   'limits': 'Fourth in-memory color byte. See brightnessAudit for traced JSON loading and global-brightness override paths; other paths remain unverified.'},
         'conditionalBank': {'objectField': 'word at object+0x1e1a',
                             'specialValues': ['0x01da', '0x01e6', '0x01ef', '0x014c'],
                             'otherBankBase': 'caller argument << 9',
@@ -391,6 +438,7 @@ def audit_sequence(pe):
         'format': 'CherryMacStaticLightingSequence', 'version': 1,
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
         'selectorAudit': audit_selector(pe),
+        'deviceIdentityAudit': audit_device_identity(pe),
         'colorAudit': audit_colors(pe),
         'brightnessAudit': audit_brightness(pe),
         'mappingAudit': audit_mapping(pe),
@@ -406,7 +454,7 @@ def audit_sequence(pe):
         'finish': {'helper': '0x4da0e0', 'command': '0x82 for selector 1; 0x02 otherwise',
                    'delayBeforeExchangeMilliseconds': 10, 'delayImport': f'{dll}!{function}'},
         'failureObservation': '4dd640 checks exchange result and reply statuses FF/FE; the high-level fallback caller does not branch on each returned result',
-        'limits': 'Only the fixed executable fallback branch. Does not establish the live object selector, caller bank argument, actual USB packets/timing, all UI write ordering, firmware semantics or incident cause. No packets generated or sent.',
+        'limits': 'Fixed executable fallback branch and statically traced ProductID assignment. Does not establish live object state, caller bank argument, actual USB packets/timing, all UI write ordering, firmware semantics or incident cause. No packets generated or sent.',
     }
 
 
