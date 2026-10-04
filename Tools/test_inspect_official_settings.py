@@ -28,6 +28,32 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_macro_resource_selection_and_unexpected_event_menu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            device = root / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+            control = root / "XML/CustomControlXML/MacroControl.xml"
+            menu = root / "XML/Menus/macro_action_menu.xml"
+            for path in [device, control, menu]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            device.write_text('<Window><EevisionKeyboardDevice><MacroSetControlUI/></EevisionKeyboardDevice></Window>')
+            control.write_text('<Window><MacroControl style="a" style="b">' + ''.join(
+                '<Edit name="' + name + '"/>' for name in
+                ['macro_action_list', 'macro_fixed_time_edit', 'macro_check_mouse', 'action_text_richedit']) + '</MacroControl></Window>')
+            body = ''.join('<MenuElement text="mouse_key_' + name + '">' + ''.join(
+                '<MenuElement name="' + name + suffix + '"/>' for suffix in ['_down', '_up', '_click']) + '</MenuElement>'
+                for name in ['left', 'middle', 'right', 'forward', 'back'])
+            menu.write_text('<Window><MenuElement text="macro_btn_shubiao">' + body + '</MenuElement></Window>')
+            result = audit.inspect_macro_resources(root)
+            self.assertEqual(result['manualMouseButtons'], ['left', 'middle', 'right', 'forward', 'back'])
+            self.assertEqual(len(result['resourceSHA256']), 3)
+            menu.write_text(menu.read_text().replace('mouse_key_back', 'mouse_wheel'))
+            with self.assertRaisesRegex(ValueError, 'mouse macro menu'):
+                audit.inspect_macro_resources(root)
+            device.write_text('<Window><EevisionKeyboardDevice/></Window>')
+            with self.assertRaisesRegex(ValueError, 'MacroSetControlUI'):
+                audit.inspect_macro_resources(root)
+
     def test_rtti_and_virtual_pointer(self):
         pe = audit.PE32(fixture())
         self.assertEqual(pe.class_name(0x401024), ".?AVSynthetic@@")

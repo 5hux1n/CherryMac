@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -115,7 +116,77 @@ def initialized_words(pe, start, end, destination):
     return [words[offset] for offset in range(0, 22, 2)]
 
 
-def inspect(path, skin=None):
+def inspect_macro_resources(skin):
+    root = Path(skin)
+    device_path = root / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+    control_path = root / "XML/CustomControlXML/MacroControl.xml"
+    menu_path = root / "XML/Menus/macro_action_menu.xml"
+    device_data, control_data, menu_data = (path.read_bytes() for path in [device_path, control_path, menu_path])
+    if any(len(data) > 500_000 for data in [device_data, control_data, menu_data]):
+        raise ValueError("Macro resource exceeds audit bounds")
+    device = ET.fromstring(device_data.lstrip())
+    if len(list(device.iter("MacroSetControlUI"))) != 1:
+        raise ValueError("Target model must select one MacroSetControlUI")
+    # DuiLib's resource has duplicate style attributes; it is not strict XML.
+    # Scan only opening tags/control names, after removing comments. No eval,
+    # external resources, entity expansion, or interpretation of style values.
+    text = re.sub(r"<!--.*?-->", "", control_data.decode("utf-8"), flags=re.S)
+    tags = list(re.finditer(r"<([A-Za-z_][A-Za-z_0-9:]*)\b([^<>]*)>", text))
+    if not any(tag[1] == "MacroControl" for tag in tags):
+        raise ValueError("Macro resource does not select MacroControl")
+    names = [match[1] for tag in tags for match in re.finditer(r'\bname="([^"]+)"', tag[2])]
+    required = ["macro_action_list", "macro_fixed_time_edit", "macro_check_mouse", "action_text_richedit"]
+    if any(names.count(name) != 1 for name in required):
+        raise ValueError("Macro controls are missing or ambiguous")
+    menu = ET.fromstring(menu_data.lstrip())
+    mouse = [element for element in menu.iter("MenuElement") if element.get("text") == "macro_btn_shubiao"]
+    expected = ["left", "middle", "right", "forward", "back"]
+    if len(mouse) != 1 or [element.get("text") for element in mouse[0]] != ["mouse_key_" + name for name in expected]:
+        raise ValueError("Unexpected manual mouse macro menu")
+    for element, name in zip(mouse[0], expected):
+        if [child.get("name") for child in element] != [name + suffix for suffix in ["_down", "_up", "_click"]]:
+            raise ValueError("Unexpected mouse macro operations")
+    return {"modelMacroControl": "MacroSetControlUI", "factoryResource": "MacroControl.xml",
+            "manualMouseButtons": expected, "manualOperations": ["down", "up", "click"],
+            "requiredControls": required,
+            "resourceSHA256": {path.name: hashlib.sha256(data).hexdigest()
+                               for path, data in zip([device_path, control_path, menu_path], [device_data, control_data, menu_data])}}
+
+
+def inspect_macro_ui(pe, skin):
+    checks = {
+        0x4893BF: "6814a57500",  # MacroSetControlUI class comparison
+        0x4893D0: "7513",        # skip when class does not match
+        0x4893D2: "68b0a67500",  # MacroControl.xml path
+        0x4893DD: "ff15f8b06e00",
+        0x4921EF: "6810c67500",  # macro_action_menu.xml path
+        0x45BF86: "83bd9cf9ffff06",  # search first six mouse rows
+        0x45C0A2: "83bd9cf9ffff06",
+        0x45C0AF: "817d080b020000",  # X button down
+        0x45C0B8: "817d080c020000",  # X button up
+        0x45C0BF: "0f8589020000",    # other messages -> cleanup 0x45c34e
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected macro UI/recording instruction")
+    for address, value in [(0x75A514, "MacroSetControlUI"),
+                           (0x75A6B0, r"XML\CustomControlXML\MacroControl.xml"),
+                           (0x75C610, r"XML\Menus\macro_action_menu.xml")]:
+        expected = (value + "\0").encode("utf-16le")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected macro class/resource string")
+    table = pe.at(0x7BDF30, 15 * 6)
+    rows = [list(struct.unpack("<HBBBB", table[index:index + 6])) for index in range(0, len(table), 6)]
+    if [row[0] for row in rows[:10]] != [0x201, 0x202, 0x204, 0x205, 0x207, 0x208, 0x20B, 0x20C, 0x20B, 0x20C] or rows[14] != [0x20A, 0x12, 0, 0, 0]:
+        raise ValueError("Unexpected common mouse action table")
+    resources = inspect_macro_resources(skin)
+    return {**resources, "factoryBranch": "0x4893bf", "menuResourceUse": "0x4921ef",
+            "recorderEntry": "0x45bc40", "instructionChecks": len(checks),
+            "commonTableRows": rows, "wheelAcceptedByTrackedRecorder": False,
+            "limits": "Static selected resource and one recorder branch; not proof against all indirect/hidden paths or firmware wheel capability"}
+
+
+def inspect(path, skin=None, macro_ui=False):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != EXPECTED_SHA256:
@@ -256,6 +327,10 @@ def inspect(path, skin=None):
     }
     if skin is not None:
         result["modelResource"] = inspect_model_resources(skin)
+    if macro_ui:
+        if skin is None:
+            raise ValueError("Macro UI audit requires --skin")
+        result["macroUI"] = inspect_macro_ui(pe, skin)
     return result
 
 
@@ -264,9 +339,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", help="Local CHERRY-Utility-Software.exe; it will only be read")
     parser.add_argument("--skin", help="Optional extracted Skin directory; verifies target model resource without copying it")
+    parser.add_argument("--macro-ui", action="store_true", help="Also audit the target macro resource, menu and recorder branch; requires --skin")
     args = parser.parse_args()
     try:
-        print(json.dumps(inspect(args.executable, args.skin), ensure_ascii=False, indent=2))
+        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui), ensure_ascii=False, indent=2))
     except (OSError, ValueError, struct.error, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
 

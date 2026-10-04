@@ -347,7 +347,7 @@ export function importWindows(root,baseline){
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
-      }else if(type===3){officialHostTextPlan(a);throw new Error('此配置含文本绑定，需要主机执行服务；实体触发格式仍待确认，尚不能导入写入。原编辑区保留。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
+      }else if(type===3){officialHostTextPlan(a);throw new Error('此配置含文本绑定，请使用带“文本”页的预览，在该页单独选择和安装。普通配置导入保留原编辑区。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');
