@@ -172,6 +172,49 @@ SYSTEM_DEVICE_CHECKS = {
 }
 
 
+PROFILE_SETTINGS_RELOAD_CHECKS = {
+    0x4F93E3: "81c100400000",
+    0x4F93E9: "e8129df8ff",
+    0x4F93F1: "81c2e03f0000",
+    0x4F940B: "6689420c",
+    0x4F9417: "8b8200030000",
+    0x4F9427: "8b828c020000",
+    0x4F94D4: "81c100400000",
+    0x4F94DA: "e8219cf8ff",
+    0x4F94E2: "81c1e03f0000",
+    0x4F94FC: "6689410c",
+    0x4F954D: "8b8200030000",
+    0x4F955D: "8b828c020000",
+    0x4FAA63: "8b82cc020000",
+    0x4FAA6E: "e80d320100",
+    0x4FB008: "81f9ce010000",
+    0x4FB018: "8b90ec020000",
+    0x4FB023: "0f84a6010000",
+    0x4FA30D: "68f8dc7600",
+    0x4FA31F: "ff15ccb06e00",
+    0x50DCD9: "81c2c83f0000",
+    0x50DCE6: "e84511f7ff",
+}
+
+
+def inspect_profile_settings_reload(pe):
+    for offset, target in {0x28C: 0x4FAA50, 0x2CC: 0x4FA240}.items():
+        if pe.pointer(0x77F604 + offset) != target:
+            raise ValueError("Unexpected profile settings reload virtual target")
+    for address, encoded in PROFILE_SETTINGS_RELOAD_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected profile settings reload instruction")
+    return {"instructionChecks": len(PROFILE_SETTINGS_RELOAD_CHECKS),
+            "profileReloadMethods": ["0x4f9320", "0x4f9440"],
+            "settingsSource": "JSON getter 0x483100 to device +0x3fe0",
+            "followingVirtualOffsets": ["0x300", "0x28c"],
+            "selectedRefreshMethod": "0x4faa50",
+            "refreshInitialCalls": {"virtual0x2cc": "0x4fa240", "direct": "0x50dc80"},
+            "targetSpecificRefreshBranch": "01CE calls virtual +0x2ec and compares result with 1",
+            "limits": "Named copy and refresh call sites only. These calls do not identify a settings USB report. Nested paths and runtime behavior remain unverified; no inference that all settings are unsupported or host-only."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -428,12 +471,13 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 5,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 6,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "systemDevicePaths": inspect_system_device_paths(pe),
+        "profileSettingsReload": inspect_profile_settings_reload(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
         "systemWordOrder": ["Repeat", "RepeatDelay", "Key6Flag", "ReportSelectItem", "RFReportSelectItem", "WFlag", "WinFlag"],
         "textDispatch": {"eventRange": [0x700, 0x800], "upperBoundExclusive": True, "indexSubtract": 0x700, "deviceVirtualOffset": "0x32c", "target": "0x512de0", "instructionChecks": len(text_checks), "nonemptyKeyRecord": [161, 0, 0], "exportedActionTextFlag": 1},

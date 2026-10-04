@@ -28,6 +28,25 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_profile_reload_rejects_changed_call_and_virtual_target(self):
+        class MemoryPE:
+            def __init__(self):
+                self.code = {a: bytes.fromhex(v) for a, v in audit.PROFILE_SETTINGS_RELOAD_CHECKS.items()}
+                self.targets = {0x77F604 + 0x28C: 0x4FAA50, 0x77F604 + 0x2CC: 0x4FA240}
+            def at(self, address, size):
+                return self.code[address][:size]
+            def pointer(self, address):
+                return self.targets[address]
+        pe = MemoryPE()
+        result = audit.inspect_profile_settings_reload(pe)
+        self.assertEqual(result['followingVirtualOffsets'], ['0x300', '0x28c'])
+        pe.code[0x4F93E9] = bytes.fromhex('e800000000')
+        with self.assertRaisesRegex(ValueError, 'reload instruction'):
+            audit.inspect_profile_settings_reload(pe)
+        pe = MemoryPE();pe.targets[0x77F604 + 0x28C] = 0x500790
+        with self.assertRaisesRegex(ValueError, 'reload virtual target'):
+            audit.inspect_profile_settings_reload(pe)
+
     def test_selected_dialog_polling_order_and_legacy_controls(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'KbBasicSetWnd.xml'
