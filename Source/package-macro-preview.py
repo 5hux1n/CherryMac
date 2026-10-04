@@ -36,7 +36,7 @@ manifest = {'format': 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'lightingWrite': False}, 'files': files}
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'lightingWrite': False}, 'files': files}
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
 
@@ -53,6 +53,10 @@ readme = '''# CherryMac 宏与文本预览
 “文本”页面可以选择本型号官方 JSON，编辑文字、分配到按键、安装和解除绑定。文本内容保存在 Mac，键盘保存触发键；输入需要 CherryMac 持续运行及辅助功能权限。选择或编辑不会写入，安装前显示变更，写后完整读回。已保存配置和恢复记录可导出；恢复记录可在新版 Mac／网页两端导入，已有不同记录不会被覆盖。
 
 网页联动默认关闭。在文本页点击“网页联动”，开启并复制临时联动码，粘贴到网页文本页并连接。网页启用服务会把已安装定义交给 Mac，无需手动搬文件；配置操作和宏录制前等待服务释放 USB。关闭客户端配置窗口或关闭联动会停用文本服务。联动码仅本次运行有效。文本实体触发、实际输入及两端新流程仍待统一验收。
+
+“配置与备份”可导入同时包含键位、宏和文本的 Windows 官方 JSON：键位和宏进入编辑区，文本定义进入文本页；文本键保留当前键盘功能，需要单独安装。“导出 Windows 键位、宏与文本”会合并宏编辑和文本页当前定义，保留共享引用与附加字段。同一键若同时有普通键位修改和文本绑定，会提示先解除冲突；导入、导出都不会自动写入。
+
+灯效和设备设置在 Windows 导出中沿用最初导入模板。普通 CherryMac 配置导出不包含完整主机文本状态；请同时保存文本定义与恢复记录，或使用上述 Windows 合并导出保存编辑结果。
 
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
 '''.encode()
