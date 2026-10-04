@@ -14,7 +14,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--ligh
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.3' if lighting_acceptance else '0.20.0'
+version = '0.1.4' if lighting_acceptance else '0.21.0'
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
@@ -63,7 +63,7 @@ contents['README.md'] = '''# CherryMac 网页宏与文本预览
 
 Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度、方向、全局颜色和逐键配色；需先导入官方模板；自定义配色需要完整原始颜色表，内置模式允许没有逐键表。隐藏颜色和未核对字段保留原值，设备设置继续沿用模板。导出文件不会向键盘写入。点击读取时会另外核对默认键位和 LED 索引；取得的映射随普通配置和读取备份保存，用于预览与配色。映射读取失败时保留按键、宏读取结果并显示原因。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
 
-宏名称和录制偏好保存在当前浏览器的本地数据库；读取时只沿用与实际宏库和绑定相符的资料。建议导出配置、下载备份。清理网站数据或更换浏览器／网址会失去本地资料。“设备与诊断”可导出日志，文件不会上传。
+宏名称和录制偏好保存在当前浏览器的本地数据库；读取时只沿用与实际宏库和绑定相符的资料。建议导出配置、下载备份。清理网站数据或更换浏览器／网址会失去本地资料。“设备与诊断”可导出日志，文件不会上传。切换 USB 会话或启动 Mac 文本服务前，网页会等待浏览器真正关闭设备；关闭失败时停止交接，需要关闭旧页并重新连接。
 
 本包不含研究测试页面，也没有启动真机测试。请等统一验收安排后再进行写入测试。
 
@@ -89,13 +89,15 @@ if lighting_acceptance:
 
 最后点击恢复原始数据并核对键盘功能。恢复会重新读取完整配置、拒绝范围外变化，原始颜色不重复缩放，不自动重试。超时或断开后用新会话载入独立恢复记录再核对。备份和记录存于当前网址的浏览器本地数据库，文件不上传；清理数据前分别下载本轮资料与独立恢复记录。日志保存失败时仍能下载现有资料，导出会标注日志缺失。
 
+进入验收页前会等待原 USB 接口关闭，不能只凭旧会话失效就交接；关闭失败记录原因并停止，需关闭旧页重新连接。
+
 本轮资料的 operations 包含每次操作开始、结束、完成／取消／失败及错误，首包前失败也能追踪。操作记录无法保存时，不开始下一项配置操作；已有资料仍可下载。
 
 此包与旧灯效版本不同，名字和端口独立，不替换旧包。它包含实际发送入口，请按统一验收安排使用；打包过程没有运行网页服务、申请权限或访问键盘。
 '''.encode()
 manifest = {'format': 'CherryMacWebLightingAcceptance' if lighting_acceptance else 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True},
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True, 'awaitedUSBClose': True},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 if lighting_acceptance:

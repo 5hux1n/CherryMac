@@ -22,6 +22,7 @@ export function supportsDevice(device){
     descendants(c).some(d=>(d[kind]??[]).some(r=>r.reportId===4&&(r.items??[]).reduce((n,i)=>n+i.reportSize*i.reportCount,0)===504))));
 }
 export class CherryHID{
+  #openTask=null;#closeTask=null;#closeError=null;
   #keyAuthorization=null;#macroAuthorization=null;#lightingAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
   #configurationGeneration=0;
   #hostTextObservation=null;#hostTextObservationGeneration=0;
@@ -59,11 +60,30 @@ export class CherryHID{
     };
     this.disconnected=e=>{if(e.device===device)this.poison(new Error('键盘已经断开。重新连接后请先读取配置。'));};
   }
-  async open(){await this.device.open();this.device.addEventListener('inputreport',this.input);globalThis.navigator?.hid?.addEventListener('disconnect',this.disconnected);}
+  async open(){
+    requireThat(!this.dead&&!this.#openTask,'此 USB 会话已打开或失效，请重新建立连接。');
+    this.#openTask=Promise.resolve().then(()=>this.device.open());
+    try{await this.#openTask;requireThat(!this.dead,'打开期间 USB 会话已停止。');this.device.addEventListener('inputreport',this.input);globalThis.navigator?.hid?.addEventListener('disconnect',this.disconnected);}
+    catch(error){this.poison(error);throw error;}
+  }
   record(entry){const copy=structuredClone(entry);this.logTasks=this.logTasks.then(()=>this.log(copy)).catch(error=>{this.loggingError=error.message;});}
   finish(error,result){const p=this.pending;if(!p)return;this.pending=null;clearTimeout(p.timer);p.entry.durationMs=performance.now()-p.start;p.entry.status=error?'error':'ok';p.entry.error=error?.message??null;this.record(p.entry);if(error)p.reject(error);else p.resolve(result);}
-  poison(error){if(this.dead)return;this.#lightingAuthorization?.invalidate();this.stopHostTextObservation();this.dead=true;this.finish(error);this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);void this.device.close().catch(()=>{});this.onDisconnect(error);}
-  async close(){this.poison(new Error('USB 会话已关闭。'));await this.tail.catch(()=>{});}
+  poison(error){
+    if(this.dead)return;this.#lightingAuthorization?.invalidate();this.stopHostTextObservation();this.dead=true;this.finish(error);
+    this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);
+    // Stop report delivery immediately, then wait for any pending open before
+    // closing. A handoff must await actual close, including after poisoning.
+    this.#closeTask=(async()=>{
+      if(this.#openTask)await this.#openTask.catch(()=>{});
+      try{await this.device.close();}
+      catch(failure){this.#closeError=String(failure?.message??failure??'浏览器未提供原因')||'浏览器未提供原因';this.record({id:crypto.randomUUID(),at:new Date().toISOString(),kind:'phase',phase:'usb-close-failed',error:this.#closeError});}
+    })();
+    this.onDisconnect(error);
+  }
+  async close(){
+    this.poison(new Error('USB 会话已关闭。'));await this.tail.catch(()=>{});await this.#closeTask;
+    requireThat(!this.#closeError&&!this.device.opened,`USB 接口尚未确认关闭，未交接：${this.#closeError??'设备仍处于打开状态'}`);
+  }
   async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
   async withKeymapAuthorization(authorization,gate,body){
     requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');

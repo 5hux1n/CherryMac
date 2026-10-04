@@ -239,7 +239,7 @@ if(textProduct){
   $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
   $('text-bridge-start').onclick=()=>operation(async()=>{
     requireThat(textRoot&&equal(textRoot,await textStore.active()),'请先安装此文本配置，或载入已保存配置；未写入的编辑不能启用。');
-    if(hid&&!hid.dead)await hid.close();hid=null;
+    if(hid)await hid.close();hid=null;
     await textBridge.activate(clone(textRoot));status('已交给 Mac 准备文本服务。切换目标应用后使用；服务状态会自动更新。');
   });
   $('text-bridge-stop').onclick=()=>operation(async()=>status('Mac 文本服务已停止，配置接口已释放。'));
