@@ -1276,6 +1276,13 @@ func runLightingExecutionChecks(){
     typealias Plan=WindowsProfile.OfficialLightingPlan
     let baseline=HardwareSnapshot.demo(),writes=[Plan.Write(command:6,offset:0,flag:85,data:[0,1,2,3,1,0,7,123,249]),Plan.Write(command:6,offset:21,flag:85,data:[1]),Plan.Write(command:6,offset:24,flag:85,data:[1])]
     let plan=Plan(bank:0,transportSelector:0,chunkCapacity:56,stages:[.init(name:"parameters",beginRequired:true,beginCommand:1,writes:writes,finishCommand:2,finishDelayMilliseconds:10)])
+    func mustReject(_ body:()throws->Void){do{try body();preconditionFailure("scope must reject")}catch{}}
+    let packets=try! plan.reports(),scope=try! Plan.CandidateAuthorization(plan:plan,baseline:baseline)
+    mustReject{try scope.validate(packets[1].request)}
+    for packet in packets{try! scope.validate(packet.request);try! scope.accept(packet.request,request:packet.request);mustReject{try scope.validate(packet.request)}}
+    precondition(scope.complete)
+    let poisoned=try! Plan.CandidateAuthorization(plan:plan,baseline:baseline)
+    var bad=packets[0].request;bad[7]=255;mustReject{try poisoned.accept(bad,request:packets[0].request)};mustReject{try poisoned.validate(packets[0].request)}
     for mode in ["success","backupFailure","pendingLogFailure","lostReply","badReply","cancel","stale","unrelatedChange"]{
         var state=baseline,now=0,sends=0,reads=0,backedUp=false,records:[Plan.RecoveryRecord]=[]
         do{

@@ -1,10 +1,29 @@
-import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements,prepareHostTextInstallation} from './model.js?v=0.6.0';
+import {officialLightingReports,officialLightingReadbackTarget,clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements,prepareHostTextInstallation} from './model.js?v=0.6.0';
 import {keys} from './layout.js?v=0.6.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
 // Key writes need an immutable authorization for this exact baseline/target.
 export const WRITE_BLOCK_REASON='此功能写入暂缓：灯效、宏和其他设备设置没有开放，仅允许独立键位写入。';
 export function assertHardwareWriteAllowed(){throw new Error(WRITE_BLOCK_REASON);}
+// Research-only installation by CherryHID. Each accepted reply consumes exactly
+// one immutable report; this object does not authorize ordinary product writes.
+export class LightingCandidateAuthorization{
+  #reports;#index=0;#invalidated=false;
+  constructor(plan,baseline){
+    officialLightingReadbackTarget(plan,baseline);
+    requireThat(baseline.deviceInfo[6]===24&&plan.bank===0&&plan.transportSelector===0&&plan.chunkCapacity===56,'灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。');
+    this.#reports=officialLightingReports(plan);
+  }
+  validate(request){requireThat(!this.#invalidated&&this.#index<this.#reports.length&&equal(Array.from(request),this.#reports[this.#index].request),'灯效报告偏离本次计划顺序或会话已失效，停止发送。');}
+  accept(reply,request){
+    try{
+    this.validate(request);reply=Array.from(reply);const sum=request.slice(3).reduce((n,v)=>n+v,0);
+    requireThat(bytes(reply,64)&&reply[0]===4&&reply[3]===request[3]&&equal(reply.slice(4,8),request.slice(4,8))&&reply[7]!==255&&reply[7]!==254&&reply[1]===(sum&255)&&reply[2]===(sum>>8),'灯效候选回复无效。');this.#index++;
+    }catch(error){this.#invalidated=true;throw error;}
+  }
+  invalidate(){this.#invalidated=true;}
+  get complete(){return !this.#invalidated&&this.#index===this.#reports.length;}
+}
 const READ_LIMITS=new Map([[3,34],[5,56],[7,378],[8,378],[0x0a,378],[0x14,3071],[0x1b,126]]);
 export function assertReadOnlyRequest(request){
   const limit=READ_LIMITS.get(request?.[3]);

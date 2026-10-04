@@ -456,6 +456,24 @@ enum WindowsProfile {
         struct ExecutionResult {
             var trace:Trace;var current:HardwareSnapshot?;var readbackMatches:Bool;var failure:String;var record:RecoveryRecord
         }
+        final class CandidateAuthorization {
+            private let packets:[Report]
+            private var index=0
+            private var invalidated=false
+            init(plan:OfficialLightingPlan,baseline:HardwareSnapshot)throws{
+                _ = try plan.expectedReadback(from:baseline)
+                guard baseline.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56 else{throw HardwareError(message:"灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。")}
+                packets=try plan.reports()
+            }
+            func validate(_ request:[UInt8])throws{
+                guard !invalidated,index<packets.count,request==packets[index].request else{throw HardwareError(message:"灯效报告偏离本次计划顺序或会话已失效，停止发送。")}
+            }
+            func accept(_ reply:[UInt8],request:[UInt8])throws{
+                do{try validate(request);try packets[index].validateReply(reply);index+=1}catch{invalidated=true;throw error}
+            }
+            func invalidate(){invalidated=true}
+            var complete:Bool{!invalidated && index==packets.count}
+        }
         struct RecoveryRecord:Codable {
             var format="CherryMacLightingRecoveryRecord";var version=1;var hardwareReady=false
             var operationID:String;var plan:OfficialLightingPlan;var original:HardwareSnapshot
