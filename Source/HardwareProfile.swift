@@ -79,6 +79,8 @@ struct HardwareProfile: Codable, Equatable {
     // Portable host draft only; importing never installs or enables text input.
     var hostTextJSON:String? = nil
     var lightingMapping:LightingMappingContext? = nil
+    enum LightingColorEncoding:String,Codable {case hardwareRGB,officialRGB}
+    var lightingColorEncoding:LightingColorEncoding? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
@@ -100,7 +102,7 @@ struct HardwareProfile: Codable, Equatable {
     }
     static func fromHardware(_ snapshot:HardwareSnapshot) throws -> HardwareProfile {
         try snapshot.validate()
-        guard let bank=snapshot.macroData else{return HardwareProfile(snapshot:snapshot)}
+        guard let bank=snapshot.macroData else{return HardwareProfile(snapshot:snapshot,lightingColorEncoding:.hardwareRGB)}
         let macros=try CherryMacroCodec.decode(bank)
         var bindings:[Int:String]=[:];var modes:[Int:MacroPlayback]=[:]
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(snapshot.keymap[slot*3]) {
@@ -109,7 +111,7 @@ struct HardwareProfile: Codable, Equatable {
             modes[slot]=try CherryMacroCodec.playback(record,macroCount:macros.count)
             bindings[slot]=macros[Int(record[1])].name
         }
-        let profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings,macroModes:modes)
+        let profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings,macroModes:modes,lightingColorEncoding:.hardwareRGB)
         try profile.validate();return profile
     }
     func colorSlot(_ keySlot:Int)->Int? {
@@ -172,7 +174,7 @@ struct HardwareProfile: Codable, Equatable {
         guard restored.snapshot.deviceInfo==before.deviceInfo,restored.snapshot.keymap==before.keymap,restored.snapshot.parameters==before.parameters,restored.snapshot.colors==before.colors,restored.snapshot.macroData==before.macroData else{throw HardwareError(message:"宏恢复读回与原配置不一致，未合并编辑区。")}
         guard let previous,previous.snapshot.deviceInfo==restored.snapshot.deviceInfo else{return restored}
         try previous.validate();var result=restored
-        result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors
+        result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors;result.lightingColorEncoding=previous.lightingColorEncoding
         for slot in 0..<126 {
             let offset=slot*3
             // Drop unsent macro edits as part of the explicit macro rollback.

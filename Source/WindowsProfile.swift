@@ -710,6 +710,30 @@ enum WindowsProfile {
             };return result
         }
     }
+    struct LightingDraftReview:Codable {
+        var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
+        var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot
+        var changedParameterOffsets:[Int];var changedColorSlots:[Int]
+    }
+    static func reviewLightingDraft(_ profile:HardwareProfile,baseline:HardwareSnapshot)throws->LightingDraftReview {
+        try profile.validate();try baseline.validate();try profile.snapshot.validate()
+        guard profile.snapshot.deviceInfo==baseline.deviceInfo,let template=profile.windowsTemplateJSON else{throw HardwareError(message:"请先读取键盘并导入本型号的 Windows 官方 JSON。")}
+        let parameters=profile.snapshot.parameters;let data:Data
+        if parameters[1]==8 {
+            guard profile.lightingColorEncoding == .officialRGB else{throw HardwareError(message:"逐键写入核对需要先导入 Windows 官方配色，避免把读回颜色重复降低亮度。")}
+            guard profile.lightingMapping != nil else{throw HardwareError(message:"逐键写入核对需要读取灯光映射。")}
+            data=try encodeLightingDraft(profile.snapshot,template:Data(template.utf8),lightingMapping:profile.lightingMapping)
+        } else {
+            var root=try templateRoot(Data(template.utf8))
+            guard var light=root["LightInfo"] as? [String:Any],let selected=modeCodes.firstIndex(of:parameters[1]) else{throw HardwareError(message:"灯效模板或模式无效。")}
+            light["SelectItem"]=selected;light["Light"]=Int(parameters[2]);light["Speed"]=4-Int(parameters[3]);light["Fx"]=Int(parameters[4]);light["MultiColor"]=Int(parameters[5])
+            for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(parameters[6+offset])}
+            root["LightInfo"]=light;data=try JSONSerialization.data(withJSONObject:root)
+        }
+        let plan=try planOfficialLighting(data,baseline:baseline,lightingMapping:profile.lightingMapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        let target=try plan.expectedReadback(from:baseline)
+        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]})
+    }
     // A candidate sequence for the traced parameter/custom-load methods only.
     // This is not HardwareWritePlan and cannot authorize any USB operation.
     static func planOfficialLighting(_ data:Data,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext?,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
@@ -895,6 +919,7 @@ enum WindowsProfile {
                 guard let slot=(lightingSlots == nil ? physicalSlot(defaults[index]):lightingSlots![index])else{continue}
                 result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes);colorCount+=1
             }
+            result.lightingColorEncoding = .officialRGB
         }
         // Rebuild only when bindings changed; an import without macros must
         // preserve the original bank and its reserved bytes byte-for-byte.

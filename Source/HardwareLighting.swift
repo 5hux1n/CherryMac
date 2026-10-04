@@ -27,10 +27,28 @@ extension HardwareWindowController {
             }
         }catch{message.stringValue=error.localizedDescription}
     }
+    @objc func reviewLightingDraft(){
+        guard !busy else{return}
+        do{
+            guard baselineWasRead,let baseline,let profile else{throw HardwareError(message:"请先读取键盘，保存灯效到编辑区后再核对。")}
+            let review=try WindowsProfile.reviewLightingDraft(profile,baseline:baseline)
+            let alert=NSAlert();alert.messageText="核对灯效写入"
+            let mode=modes.first(where:{$0.1==review.target.parameters[1]})?.0 ?? "未知模式"
+            alert.informativeText="模式：\(mode)；亮度：\(review.target.parameters[2])/4。\n逐键颜色将改变 \(review.changedColorSlots.count) 个位置；灯效参数\(review.changedParameterOffsets.isEmpty ? "保持不变":"将更新")。\n此核对仅生成计划，尚未写入键盘。按键与宏保持读回配置。"
+            alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回编辑")
+            guard alert.runModal()==NSApplication.ModalResponse.alertFirstButtonReturn else{return}
+            let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-灯效写入核对.json"
+            guard panel.runModal() == .OK,let output=panel.url else{return}
+            let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+            try encoder.encode(review).write(to:output,options:.atomic)
+            message.stringValue="已导出灯效写入核对计划，尚未写入键盘。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
     func buildLighting(_ pane:NSView){
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;lightTabView=tabs;place(tabs,0,44,930,246,in:pane)
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
+        let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="先保存到编辑区再核对；仅导出计划。";place(review,690,4,210,30,in:pane)
         let builtins=tabs.tabViewItems[0].view!
         place(label("模式"),8,12,72,24,in:builtins)
         modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,92,8,277,28,in:builtins)

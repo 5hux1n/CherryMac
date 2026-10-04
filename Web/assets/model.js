@@ -221,7 +221,7 @@ export function decodeMacroBinding(b,count){
   throw new Error('未知宏执行方式，原始数据保留。');
 }
 export function fromHardware(snapshot){
-  validateSnapshot(snapshot);const p={format:'CherryMacProfile',version:1,snapshot:clone(snapshot),macros:[]};
+  validateSnapshot(snapshot);const p={format:'CherryMacProfile',version:1,snapshot:clone(snapshot),macros:[],lightingColorEncoding:'hardwareRGB'};
   if(!snapshot.macroData)return p;
   p.macros=decodeBank(snapshot.macroData);p.macroBindings={};p.macroModes={};
   for(let slot=0;slot<126;slot++){const b=snapshot.keymap.slice(slot*3,slot*3+3);if([0x70,0x71].includes(b[0])){
@@ -230,6 +230,7 @@ export function fromHardware(snapshot){
 }
 export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
+  if(p.lightingColorEncoding!=null)requireThat(['hardwareRGB','officialRGB'].includes(p.lightingColorEncoding),'灯效颜色来源无效。');
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
   if(p.hostTextJSON!=null){requireThat(typeof p.hostTextJSON==='string','文本配置定义无效。');validateHostTextDefinition(JSON.parse(p.hostTextJSON));}
   p.macros.forEach(m=>officialMacroSource(p,m));
@@ -249,7 +250,7 @@ export function parseProfile(text,baseline,options={}){
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
-  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);return editable;}catch{}}
+  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);if(p.lightingColorEncoding!=null)editable.lightingColorEncoding=p.lightingColorEncoding;else delete editable.lightingColorEncoding;return editable;}catch{}}
   if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
@@ -428,6 +429,7 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');
     p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winInt(l.MultiColor,'彩虹',0,1),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));}
   const groups=root.CustomLightMode?.LightColorInfo;if(root.CustomLightMode){requireThat(Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'逐键颜色组不匹配。');groups[0].forEach((c,i)=>{requireThat(c&&typeof c==='object'&&!Array.isArray(c),'逐键颜色记录结构无效。');const rgb=['Red','Green','Blue'].map(k=>winInt(c[k],k,0,255));if(Object.hasOwn(c,'Alpha'))winInt(c.Alpha,'Alpha',0,255);const slot=lightingSlots===null?physicalSlot(WINDOWS_DEFAULTS[i]):lightingSlots[i];if(slot!=null)p.snapshot.colors.splice(slot*3,3,...rgb);});}
+  if(root.CustomLightMode)p.lightingColorEncoding='officialRGB';
   if(!equal(p.macroBindings,old)||imported.size)p.snapshot=resolveMacros(p);validateProfile(p);return p;
 }
 export function rgb(hex){requireThat(/^#[\da-f]{6}$/i.test(hex),'请输入六位 HEX 色号。');return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
@@ -439,6 +441,20 @@ export function officialCustomColors(raw,brightness){
   const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];return raw.map(value=>(value*coefficient)>>8);
 }
 // Pure file conversion; caller bank is not inferred from read-back parameters.
+export function reviewLightingDraft(profile,baseline){
+  validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
+  requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');
+  let template=JSON.parse(profile.windowsTemplateJSON);const p=profile.snapshot.parameters;
+  if(p[1]===8){
+    requireThat(profile.lightingColorEncoding==='officialRGB','逐键写入核对需要先导入 Windows 官方配色，避免把读回颜色重复降低亮度。');requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
+    template=exportWindowsLightingDraft(profile.snapshot,template,profile.lightingMapping);
+  }else{
+    requireThat(template.LightInfo&&MODE_CODES.includes(p[1]),'灯效模板或模式无效。');
+    Object.assign(template.LightInfo,{SelectItem:MODE_CODES.indexOf(p[1]),Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
+  }
+  const plan=planOfficialLighting(template,baseline,profile.lightingMapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true}),target=officialLightingReadbackTarget(plan,baseline);
+  return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3)))};
+}
 export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(baseline,true);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=127&&[0,1].includes(transportSelector)&&Number.isInteger(chunkCapacity)&&chunkCapacity>=1&&chunkCapacity<=56&&typeof beginRequired==='boolean','配置地址、传输分支或报告容量超出离线计划范围。');

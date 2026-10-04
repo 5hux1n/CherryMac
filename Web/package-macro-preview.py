@@ -13,7 +13,7 @@ root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) != 2:
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.16.0'
+version = '0.17.0'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')

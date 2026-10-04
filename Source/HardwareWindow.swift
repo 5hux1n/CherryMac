@@ -721,13 +721,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let candidates=files.filter{$0.lastPathComponent.hasPrefix("MacroMetadata-") && $0.pathExtension=="json"}.sorted{((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)}
         for url in candidates.prefix(128){
             guard let data=try? Data(contentsOf:url),var saved=try? HardwareProfile.decode(data),saved.snapshot.deviceInfo==snapshot.deviceInfo else{continue}
-            saved.snapshot=snapshot
+            saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB
             guard let resolved=try? saved.resolvedMacros(),resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{continue}
             return saved
         };return nil
     }
     func rememberMacroProfile(_ draft:HardwareProfile,snapshot:HardwareSnapshot)throws{
-        var saved=draft;saved.snapshot=snapshot;let resolved=try saved.resolvedMacros()
+        var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;let resolved=try saved.resolvedMacros()
         guard resolved.deviceInfo==snapshot.deviceInfo,resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称与设备数据不一致，未保存名称。")}
         try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true)
         let url=backupDirectory.appendingPathComponent("MacroMetadata-\(UUID().uuidString).json"),data=try saved.encoded()
@@ -915,7 +915,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{
                 case .success(let snapshot):
-                    self.baseline=snapshot;var remaining=draft;remaining.snapshot.parameters=snapshot.parameters;remaining.snapshot.colors=snapshot.colors;self.profile=remaining
+                    self.baseline=snapshot;var remaining=draft;remaining.snapshot.parameters=snapshot.parameters;remaining.snapshot.colors=snapshot.colors;remaining.lightingColorEncoding = .hardwareRGB;self.profile=remaining
                     self.message.stringValue="灯效已写入，读回校验通过。断电保存仍待验证。";self.update()
                 case .failure(let error):self.message.stringValue=error.localizedDescription
                 }

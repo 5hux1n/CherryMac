@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -41,6 +41,7 @@ function render(){
   let keyPlan=null,keyError=null;if(baseline)try{keyPlan=tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(s,baseline);}catch(error){keyError=error.message;}
   $('draft-note').textContent=tab==='macros'&&macroProduct?(keyError??'只更新宏库与宏绑定键；灯效和设备参数保留。普通键草稿保留，可在按键页面另行写入。'):tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
+  $('review-lighting').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
@@ -116,6 +117,12 @@ $('strength').oninput=()=>{const b=rgb($('color').value),peak=Math.max(...b),sca
 $('paint').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,$('pattern').value,rgb($('hex').value),rgb($('end-color').value),profile.lightingMapping);syncLights();status(`已为 ${selection.size} 键加入配色，尚未写入。`);});
 $('off').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,'solid',[0,0,0],[0,0,0],profile.lightingMapping);syncLights();status('所选键已设为熄灭，尚未写入。');});
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;
+$('review-lighting').onclick=()=>act(()=>{
+  $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
+  const review=reviewLightingDraft(profile,baseline),mode=modes.find(([code])=>code===review.target.parameters[1])?.[1]??'未知模式';
+  const summary=`模式：${mode}；亮度：${review.target.parameters[2]}/4；逐键颜色将改变 ${review.changedColorSlots.length} 个位置；灯效参数${review.changedParameterOffsets.length?'将更新':'保持不变'}。尚未写入键盘，按键与宏保持读回配置。`;
+  $('lighting-review-summary').textContent=summary;download(review,'CherryMac-灯效写入核对.json');status(summary);
+});
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
 $('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已设置内置灯效单色，尚未写入。');});
 $('macro-name').oninput=renderMacroSummary;$('macro-repeat').oninput=renderMacroSummary;$('macro-playback').onchange=()=>{$('macro-repeat').disabled=$('macro-playback').value!=='count';renderMacroSummary();};$('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>act(()=>{requireThat(steps.length<=254,'最多 256 个事件，请先删除部分步骤。');const event={};setMacroUsage(event,$('macro-key').value);const [where,raw]=$('macro-insert').value.split(':');let index=steps.length;if(where){index=Number(raw);requireThat(Number.isInteger(index)&&index>=0&&index<steps.length,'请选择有效插入位置。');if(where==='after')index++;}steps.splice(index,0,{...event,pressed:true,delayMilliseconds:30},{...event,pressed:false,delayMilliseconds:0});$('macro-insert').value='';renderSteps();});

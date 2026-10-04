@@ -36,6 +36,7 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   if(!previous||!equal(previous.snapshot.deviceInfo,restored.snapshot.deviceInfo))return clone(restored);
   validateProfile(previous);const result=clone(restored);
   result.snapshot.parameters=clone(previous.snapshot.parameters);result.snapshot.colors=clone(previous.snapshot.colors);
+  if(previous.lightingColorEncoding!=null)result.lightingColorEncoding=previous.lightingColorEncoding;else delete result.lightingColorEncoding;
   for(let slot=0;slot<126;slot++){
     const offset=slot*3;
     if(![before,target,previous.snapshot].some(s=>[0x70,0x71].includes(s.keymap[offset])))result.snapshot.keymap.splice(offset,3,...previous.snapshot.keymap.slice(offset,offset+3));
@@ -43,14 +44,14 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   validateProfile(result);return result;
 }
 export async function rememberMacroProfile(profile,snapshot){
-  const saved=clone(profile);saved.snapshot=clone(snapshot);validateProfile(saved);
+  const saved=clone(profile);saved.snapshot=clone(snapshot);saved.lightingColorEncoding='hardwareRGB';validateProfile(saved);
   const resolved=resolveMacros(saved);
   requireThat(['deviceInfo','keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称与设备数据不一致，未保存名称。');
   await save({id:'metadata-'+crypto.randomUUID(),kind:'metadata',date:new Date().toISOString(),profile:saved});
 }
 export async function rememberMacroProfileIfMatching(profile,snapshot){
   if(!snapshot||!equal(profile.snapshot.deviceInfo,snapshot.deviceInfo))return false;
-  const candidate=clone(profile);candidate.snapshot=clone(snapshot);let resolved;
+  const candidate=clone(profile);candidate.snapshot=clone(snapshot);candidate.lightingColorEncoding='hardwareRGB';let resolved;
   try{resolved=resolveMacros(candidate);}catch{return false;}
   if(!['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])))return false;
   await rememberMacroProfile(candidate,snapshot);return true;
@@ -61,7 +62,7 @@ export async function recalledMacroProfile(snapshot){
     try{
       validateProfile(saved.profile);
       if(!equal(saved.profile.snapshot.deviceInfo,snapshot.deviceInfo))continue;
-      const profile=clone(saved.profile);profile.snapshot=clone(snapshot);
+      const profile=clone(saved.profile);profile.snapshot=clone(snapshot);profile.lightingColorEncoding='hardwareRGB';
       const resolved=resolveMacros(profile);
       if(['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])))return profile;
     }catch{/* Incompatible metadata cannot overwrite the hardware read. */}

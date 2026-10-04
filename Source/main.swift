@@ -1217,6 +1217,19 @@ if let index=CommandLine.arguments.firstIndex(of:"--portable-profile-roundtrip")
         print("PASS: portable profile decode/encode only; no HID, permissions or services");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-draft") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+4 else{throw HardwareError(message:"需要草稿、基线配置和输出路径。")}
+        let inputs=[args[index+1],args[index+2]].map{URL(fileURLWithPath:$0)},output=URL(fileURLWithPath:args[index+3])
+        guard !inputs.contains(where:{$0.standardizedFileURL.resolvingSymlinksInPath()==output.standardizedFileURL.resolvingSymlinksInPath()})else{throw HardwareError(message:"不能覆盖输入配置。")}
+        let files=try inputs.map{url->Data in let data=try Data(contentsOf:url);guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")};return data}
+        let draft=try HardwareProfile.decode(files[0]),baseline=try HardwareProfile.decode(files[1])
+        let review=try WindowsProfile.reviewLightingDraft(draft,baseline:baseline.snapshot),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(review).write(to:output,options:.atomic)
+        print("PASS: lighting draft reviewed offline; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-draft") {
     do{
         guard CommandLine.arguments.count==index+4 else{throw HardwareError(message:"需要配置、官方模板和输出路径。")}
