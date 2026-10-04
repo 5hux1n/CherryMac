@@ -88,6 +88,45 @@ enum WindowsProfile {
         let actionIndex:Int
         let plan:HostTextPlan
     }
+    // Installation data only. This does not authorize an A1 write, install a
+    // listener, or store the text in firmware. The JSON remains on the host.
+    struct HostTextInstallation {
+        let before:HardwareSnapshot
+        let expected:HardwareSnapshot
+        let factoryKeymap:[UInt8]
+        let officialJSON:Data
+        let bindings:[HostTextBinding]
+        let changedSlots:[Int]
+        init(officialJSON:Data,factoryKeymap:[UInt8],baseline:HardwareSnapshot)throws {
+            try baseline.validate()
+            guard baseline.deviceInfo[6]==24,baseline.colors != nil,baseline.macroData != nil,factoryKeymap.count==378 else{throw HardwareError(message:"准备文本安装需要本型号完整配置和默认键位表。")}
+            let root=try WindowsProfile.templateRoot(officialJSON)
+            guard let keys=root["KeyList"] as? [[String:Any]],let actions=root["ActionInfo"] as? [[String:Any]] else{throw HardwareError(message:"Windows 动作列表结构无效。")}
+            var slots:[Int:Int]=[:]
+            for slot in 0..<126 {
+                if let trigger=try WindowsProfile.resolveHostTextTrigger(eventValue:0x700+slot,factoryKeymap:factoryKeymap){slots[trigger.logicalIndex]=slot}
+            }
+            var selected:[HostTextBinding]=[],target=baseline
+            for (logical,key) in keys.enumerated() {
+                guard try WindowsProfile.integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 else{continue}
+                let index=try WindowsProfile.integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+                guard actions.indices.contains(index) else{throw HardwareError(message:"文本安装配置的动作引用无效。")}
+                guard try WindowsProfile.integer(actions[index]["ActionType"],"ActionType",range:0...4)==3 else{continue}
+                let plan=try HostTextPlan(action:actions[index])
+                guard let marker=plan.marker else{continue}
+                guard plan.windowsFlag==nil || plan.windowsFlag==1 else{throw HardwareError(message:"文本动作标志尚未支持，未准备安装。")}
+                guard let slot=slots[logical] else{throw HardwareError(message:"文本键在固件默认表中没有对应位置。")}
+                guard KeymapWriteAuthorization.editableSlots.contains(slot) else{throw HardwareError(message:"内部功能键与隐藏位置不能安装文本绑定。")}
+                guard ![UInt8(0x70),0x71].contains(baseline.keymap[slot*3]) else{throw HardwareError(message:"文本键当前绑定宏，请先解除宏绑定。")}
+                target.keymap.replaceSubrange(slot*3..<slot*3+3,with:marker)
+                selected.append(HostTextBinding(logicalIndex:logical,physicalSlot:slot,actionIndex:index,plan:plan))
+            }
+            guard !selected.isEmpty else{throw HardwareError(message:"配置没有可安装的非空文本绑定。")}
+            before=baseline;expected=target;self.factoryKeymap=factoryKeymap;self.officialJSON=officialJSON
+            bindings=selected.sorted{$0.physicalSlot<$1.physicalSlot}
+            changedSlots=bindings.filter{binding in let range=binding.physicalSlot*3..<binding.physicalSlot*3+3;return baseline.keymap[range] != target.keymap[range]}.map{$0.physicalSlot}
+        }
+    }
     // Prepared data only, not a device/report authorization. The eventual
     // listener must verify report provenance and rebuild after configuration
     // changes or reconnect; a saved JSON file alone is insufficient.

@@ -597,6 +597,24 @@ func runHostTextPlanChecks(){
     precondition(transport.readCommands==[8,7,8] && transport.packets.isEmpty && prepared.binding(eventValue:0x766)?.plan.originalText=="中😀")
     precondition(routing.binding(eventValue:0x766)?.plan.originalText=="中😀" && routing.binding(eventValue:0x766)?.actionIndex==0)
     precondition(routing.binding(eventValue:0x711)==nil && routing.binding(eventValue:0x767)==nil)
+    var installBaseline=snapshot;installBaseline.keymap.replaceSubrange(306..<309,with:[0x30,0x92,1])
+    let installationData=try! JSONSerialization.data(withJSONObject:root)
+    let installation=try! WindowsProfile.HostTextInstallation(officialJSON:installationData,factoryKeymap:factory,baseline:installBaseline)
+    precondition(installation.changedSlots==[102] && installation.bindings.map{$0.logicalIndex}==[17])
+    precondition(installation.expected==snapshot && installation.before==installBaseline)
+    let installReader=SimulatedCherry(installBaseline);installReader.factoryKeymap=factory
+    let readInstallation=try! installReader.readHostTextInstallation(officialJSON:installationData,baseline:installBaseline)
+    precondition(readInstallation.expected==snapshot && installReader.readCommands==[8,7,8] && installReader.packets.isEmpty)
+    let installed=try! WindowsProfile.HostTextInstallation(officialJSON:installationData,factoryKeymap:factory,baseline:snapshot)
+    precondition(installed.changedSlots.isEmpty && installed.bindings.count==1)
+    func rejectsInstallation(_ document:[String:Any],_ baseline:HardwareSnapshot,_ factory:[UInt8]){
+        do{_ = try WindowsProfile.HostTextInstallation(officialJSON:JSONSerialization.data(withJSONObject:document),factoryKeymap:factory,baseline:baseline);preconditionFailure("unsafe text installation accepted")}catch{}
+    }
+    var macroBaseline=installBaseline;macroBaseline.keymap.replaceSubrange(306..<309,with:[0x70,0,0]);rejectsInstallation(root,macroBaseline,factory)
+    rejectsInstallation(root,installBaseline,Array(repeating:0,count:378))
+    var flagged=root;var flaggedActions=root["ActionInfo"] as! [[String:Any]];flaggedActions[0]["ActionTextFlag"]=2;flagged["ActionInfo"]=flaggedActions;rejectsInstallation(flagged,installBaseline,factory)
+    var hiddenFactory=factory;hiddenFactory.replaceSubrange(18..<21,with:[0x30,0x92,1]);rejectsInstallation(root,installBaseline,hiddenFactory)
+    do{_ = try KeymapWriteAuthorization(baseline:installBaseline,keymap:installation.expected.keymap);preconditionFailure("ordinary key writes must not authorize text markers")}catch{}
     let logDirectory=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacHostTextLog-\(UUID().uuidString)")
     defer{try? FileManager.default.removeItem(at:logDirectory)}
     let journal=try! HostTextDiagnostics(directory:logDirectory)

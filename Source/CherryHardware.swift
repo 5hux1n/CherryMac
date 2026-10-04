@@ -112,6 +112,14 @@ extension CherryHardwareAccess {
         guard before==after else{throw HardwareError(message:"准备文本监听期间键位发生变化，请重新读取。")}
         return try WindowsProfile.HostTextBindings(officialJSON:officialJSON,factoryKeymap:factory,currentKeymap:after)
     }
+    func readHostTextInstallation(officialJSON:Data,baseline:HardwareSnapshot)throws->WindowsProfile.HostTextInstallation {
+        // Reject an invalid document before any transport request.
+        _=try WindowsProfile.templateRoot(officialJSON)
+        try baseline.validate()
+        let before=try read(8,count:378),factory=try read(7,count:378),after=try read(8,count:378)
+        guard before==baseline.keymap,after==before else{throw HardwareError(message:"准备文本安装期间键位或读取基线发生变化，请重新读取。")}
+        return try WindowsProfile.HostTextInstallation(officialJSON:officialJSON,factoryKeymap:factory,baseline:baseline)
+    }
     func completeSnapshot() throws -> HardwareSnapshot {
         var snapshot=try snapshot(includeColors:true)
         guard snapshot.deviceInfo[6]==24 else {throw HardwareError(message:"宏容量与已验证固件不同，停止读取。")}

@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -779,4 +779,30 @@ test('host text observation checks source and cancels queued preparation and con
   await assert.rejects(hid.exchange(packet(9,0,1,[0])));assert.equal(isCurrent(),false);emit();assert.equal(outputs.length,2);
   await hid.startHostTextObservation(root,handlers);emit();await hid.close();assert.equal(isCurrent(),false);emit();assert.equal(outputs.length,3);
   assert.equal(device.writeCount,0);
+});
+
+
+test('host text installation changes only bound keys and rejects unsafe targets without write permission',async()=>{
+  const root=windowsFixture(),baseline=demoSnapshot(),factory=Array(378).fill(0);
+  factory.splice(306,3,48,146,1);factory.splice(309,3,48,146,1);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  root.ActionInfo=[{ActionType:3,ActionName:'计算器文本',ActionTextFlag:1,ActionContent:{ActionText:'中😀'}}];
+  const original=clone(baseline),document=clone(root),installation=prepareHostTextInstallation(root,factory,baseline);
+  assert.deepEqual(installation.changedSlots,[102]);assert.equal(installation.bindings[0].logicalIndex,17);
+  assert.deepEqual(installation.expected.keymap.slice(306,309),[161,0,0]);
+  const restored=clone(installation.expected);restored.keymap.splice(306,3,...original.keymap.slice(306,309));assert.deepEqual(restored,original);
+  assert.deepEqual(baseline,original);assert.deepEqual(root,document);
+  assert.deepEqual(prepareHostTextInstallation(root,factory,installation.expected).changedSlots,[]);
+  const macro=clone(baseline);macro.keymap.splice(306,3,112,0,0);assert.throws(()=>prepareHostTextInstallation(root,factory,macro),/解除宏/);
+  assert.throws(()=>prepareHostTextInstallation(root,Array(378).fill(0),baseline),/没有对应位置/);
+  const hidden=clone(factory);hidden.splice(18,3,48,146,1);assert.throws(()=>prepareHostTextInstallation(root,hidden,baseline),/隐藏位置/);
+  const flagged=clone(root);flagged.ActionInfo[0].ActionTextFlag=2;assert.throws(()=>prepareHostTextInstallation(flagged,factory,baseline),/标志/);
+  const empty=clone(root);empty.ActionInfo[0].ActionContent.ActionText='';assert.throws(()=>prepareHostTextInstallation(empty,factory,baseline),/非空文本绑定/);
+  assert.throws(()=>makeKeymapPlan(installation.expected,baseline),/只支持|普通键/);
+  baseline.factoryKeymap=factory;const device=new FakeDevice(baseline),hid=new CherryHID(device,()=>{});await hid.open();
+  const read=await hid.readHostTextInstallation(root,baseline);assert.deepEqual(read.changedSlots,[102]);
+  assert.equal(hid.keyWritesSent,0);assert.deepEqual([...new Set(device.requests.map(r=>r[3]))],[8,7]);
+  const stale=clone(baseline);stale.keymap[306]=32;await assert.rejects(hid.readHostTextInstallation(root,stale),/基线/);
+  await hid.close();root.ActionInfo[0].ActionContent.ActionText='改动';baseline.keymap[306]=0;
+  assert.equal(installation.bindings[0].plan.originalText,'中😀');assert.equal(installation.before.keymap[306],48);
 });

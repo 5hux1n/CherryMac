@@ -1,5 +1,5 @@
 import {requireThat,validateSnapshot} from './model.js?v=0.6.0';
-import {prepareHostTextBindings,officialHostTextEvent} from './model.js?v=0.6.0';
+import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
@@ -127,6 +127,15 @@ export class CherryHID{
     const resolve=await this.readHostTextBindings(root);
     requireThat(!this.dead&&this.device.opened&&generation===this.#hostTextObservationGeneration,'文本监听准备已取消，请重新读取。');
     this.#hostTextObservation={resolve,onBinding,onError};
+  }
+  async readHostTextInstallation(root,baseline){
+    requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
+    root=structuredClone(root);baseline=structuredClone(baseline);
+    validateSnapshot(baseline,true);
+    const generation=this.#configurationGeneration;
+    const before=await this.read(8,378),factory=await this.read(7,378),after=await this.read(8,378);
+    requireThat(!this.dead&&this.device.opened&&generation===this.#configurationGeneration&&before.every((v,i)=>v===after[i]&&v===baseline.keymap[i]),'准备文本安装期间键位或读取基线发生变化，请重新读取。');
+    return prepareHostTextInstallation(root,factory,baseline);
   }
   async snapshot(){
     this.progress('读取设备信息');const deviceInfo=await this.read(3,34);

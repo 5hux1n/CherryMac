@@ -1,5 +1,5 @@
 import {SLOTS,WINDOWS_DEFAULTS,FIRMWARE_LOGICAL_DEFAULTS,MEDIA_CODES,MODE_CODES} from './tables.js?v=0.6.0';
-import {keys,modes} from './layout.js?v=0.6.0';
+import {keys,modes,editableSlots} from './layout.js?v=0.6.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
@@ -51,6 +51,38 @@ export function prepareHostTextBindings(root,factoryKeymap,currentKeymap){
   }
   // Freeze the prepared routing context; later draft edits cannot alter it.
   return eventValue=>{const slot=officialTextTriggerIndex(eventValue);return bindings.has(slot)?clone(bindings.get(slot)):null;};
+}
+
+// Pure installation plan, never a WebHID write authorization. Text is kept
+// in officialJSON on the host; only the trigger marker belongs to firmware.
+export function prepareHostTextInstallation(root,factoryKeymap,baseline){
+  root=clone(root);baseline=clone(baseline);factoryKeymap=clone(factoryKeymap);
+  validateSnapshot(baseline,true);
+  requireThat(baseline.deviceInfo[6]===24&&bytes(factoryKeymap,378),'准备文本安装需要本型号完整配置和默认键位表。');
+  requireThat(root?.['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126&&Array.isArray(root.ActionInfo),'Windows 文本配置结构无效。');
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'Windows 文本配置过大。');
+  root.KeyList.forEach((key,i)=>requireThat(winInt(key?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
+  officialSystemStageWords(root);
+  const slots=new Map(),expected=clone(baseline),bindings=[];
+  for(let slot=0;slot<126;slot++){const trigger=resolveHostTextTrigger(0x700+slot,factoryKeymap);if(trigger)slots.set(trigger.logicalIndex,slot);}
+  root.KeyList.forEach((key,logicalIndex)=>{
+    if(winInt(key.ActionLink??0,'ActionLink',0,1)!==1)return;
+    const actionIndex=winInt(key.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,root.ActionInfo.length-1)),action=root.ActionInfo[actionIndex];
+    requireThat(action,'文本安装配置的动作引用无效。');
+    if(winInt(action.ActionType,'ActionType',0,4)!==3)return;
+    const plan=officialHostTextPlan(action);if(plan.marker===null)return;
+    requireThat(plan.windowsFlag===null||plan.windowsFlag===1,'文本动作标志尚未支持，未准备安装。');
+    const physicalSlot=slots.get(logicalIndex);
+    requireThat(physicalSlot!==undefined,'文本键在固件默认表中没有对应位置。');
+    requireThat(editableSlots.has(physicalSlot),'内部功能键与隐藏位置不能安装文本绑定。');
+    requireThat(![112,113].includes(baseline.keymap[physicalSlot*3]),'文本键当前绑定宏，请先解除宏绑定。');
+    expected.keymap.splice(physicalSlot*3,3,...plan.marker);
+    bindings.push({logicalIndex,physicalSlot,actionIndex,plan});
+  });
+  requireThat(bindings.length>0,'配置没有可安装的非空文本绑定。');
+  bindings.sort((a,b)=>a.physicalSlot-b.physicalSlot);
+  const changedSlots=bindings.filter(b=>[0,1,2].some(i=>baseline.keymap[b.physicalSlot*3+i]!==expected.keymap[b.physicalSlot*3+i])).map(b=>b.physicalSlot);
+  return {before:baseline,expected,factoryKeymap,officialJSON:root,bindings,changedSlots};
 }
 
 export function validateSnapshot(s,complete=false){
