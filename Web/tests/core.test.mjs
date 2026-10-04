@@ -833,7 +833,7 @@ test('host text writer gates transport, persists host configuration and restores
   await assert.rejects(applyHostTextInstallation(hid,root,before,{gate,backup:async()=>{},saveTextConfiguration:async()=>{throw new Error('host save failed');}}),/host save failed/);
   assert.equal(device.writeCount,0);
   device.wrongReadback=true;
-  await assert.rejects(applyHostTextInstallation(hid,root,before,{gate,backup:async snapshot=>{backups++;assert.ok(sameSnapshot(snapshot,before));},saveTextConfiguration:async config=>{saves++;assert.deepEqual(config,root);assert.equal(device.writeCount,0);}}),/已恢复写入前/);
+  await assert.rejects(applyHostTextInstallation(hid,root,before,{gate,backup:async snapshot=>{backups++;assert.ok(sameSnapshot(snapshot,before));},saveTextConfiguration:async (config,prepared)=>{saves++;assert.deepEqual(config,root);assert.deepEqual(prepared.factoryKeymap,before.factoryKeymap);assert.deepEqual(prepared.changedSlots,[102]);assert.equal(device.writeCount,0);}}),/已恢复写入前/);
   assert.equal(backups,1);assert.equal(saves,1);assert.equal(device.writeCount,14);assert.ok(sameSnapshot(device.s,before));
   assert.ok(device.requests.filter(r=>r[3]===9).every(r=>r[4]===54));
   await assert.rejects(hid.exchange(permission.packet(permission.expected.keymap,0)),/写入暂缓/);await hid.close();

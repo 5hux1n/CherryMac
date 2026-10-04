@@ -42,8 +42,8 @@ export async function applyHostTextInstallation(hid,root,before,{gate,backup,sav
   const plan=await hid.readHostTextInstallation(root,before);
   const authorization=new HostTextWriteAuthorization(plan.officialJSON,plan.factoryKeymap,plan.before);
   // Even an already installed marker needs a persistent host text definition.
-  if(!authorization.changedSlots.length){await saveTextConfiguration(clone(plan.officialJSON));return clone(plan.before);}
-  return applyAuthorizedKeymap(hid,authorization,{gate,progress,backup:async current=>{await backup(current);await saveTextConfiguration(clone(plan.officialJSON));}},'withHostTextAuthorization');
+  if(!authorization.changedSlots.length){await saveTextConfiguration(clone(plan.officialJSON),clone(plan));return clone(plan.before);}
+  return applyAuthorizedKeymap(hid,authorization,{gate,progress,backup:async current=>{await backup(current);await saveTextConfiguration(clone(plan.officialJSON),clone(plan));}},'withHostTextAuthorization');
 }
 export async function restoreHostTextInstallation(hid,root,factoryKeymap,before,{gate,backup,progress=()=>{}}={}){
   requireThat(typeof hid?.withHostTextAuthorization==='function','文本恢复尚未开放，未读取或写入键盘。');

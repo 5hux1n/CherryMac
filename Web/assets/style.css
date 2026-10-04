@@ -16,3 +16,5 @@
 .macro-stop-accept:disabled{pointer-events:none}
 
 #confirm{max-height:85vh;overflow:auto}#confirm-summary{white-space:pre-line;overflow-wrap:anywhere}
+
+#confirm-text{max-height:85vh;overflow:auto}#text-confirm-summary{white-space:pre-line;overflow-wrap:anywhere}
