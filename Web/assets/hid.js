@@ -2,6 +2,19 @@ import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingM
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,LightingCandidateAuthorization,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Start the picker in the original click task, before awaited host-service
+// shutdown. Consume its result only after the configuration operation gates
+// succeed. Captured failures remain handled if a preceding gate fails.
+export function requestHIDSelection(requestDevice){
+  let result;
+  try{result=Promise.resolve(requestDevice()).then(devices=>({ok:true,devices}),error=>({ok:false,error}));}
+  catch(error){result=Promise.resolve({ok:false,error});}
+  return async()=>{
+    const selected=await result;if(!selected.ok)throw selected.error;
+    requireThat(Array.isArray(selected.devices)&&selected.devices.length===1,'未选择键盘，配置没有变化。');
+    return selected.devices[0];
+  };
+}
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
 export function packet(command,offset,length,data=[],flag=0){
   requireThat(Number.isInteger(offset)&&offset>=0&&offset<=65535&&Number.isInteger(length)&&length>0&&length<=56&&(data.length===0||data.length===length),'USB 分块参数无效。');

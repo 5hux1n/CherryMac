@@ -14,7 +14,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--ligh
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.7' if lighting_acceptance else '0.23.0'
+version = '0.1.8' if lighting_acceptance else '0.24.0'
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:

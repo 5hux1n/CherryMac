@@ -1,6 +1,6 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
 import {lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
-import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
+import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
@@ -157,7 +157,15 @@ $('copy-macro').onclick=()=>act(()=>{const copy=duplicateMacro(profile,$('macro-
 $('clear-macros').onclick=()=>act(()=>{profile=clearMacros(profile);refreshMacros();loadMacro();loadPlayback();status('宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。');});
 $('delete-macro').onclick=()=>act(()=>{profile=removeMacro(profile,$('macro-list').value);refreshMacros();loadMacro();status('已删除宏，原绑定键设为禁用，尚未写入。');});
 $('unassign-macro').onclick=()=>act(()=>{const key=keys.find(k=>k.id===selected);profile=unassignMacro(profile,key.slot);loadPlayback();status(`已解除 ${key.label} 的宏绑定并设为禁用；宏库保留，尚未写入。`);});
-$('connect').onclick=()=>operation(async()=>{status('请在浏览器弹窗中选择 CHERRY USB 键盘。');const devices=await navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]});requireThat(devices.length===1,'未选择键盘，配置没有变化。');if(hid)await hid.close();baseline=null;baselineLightingMapping=null;hid=new CherryHID(devices[0],{macroProduct,textProduct,log:saveLog,progress:message=>status(message+'…'),onDisconnect:error=>{status(error.message,true);render();}});await hid.open();await read();});
+$('connect').onclick=()=>{
+  if(busy)return;status('请在浏览器弹窗中选择 CHERRY USB 键盘。');
+  const selection=requestHIDSelection(()=>navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]}));
+  return operation(async()=>{
+    const device=await selection();if(hid)await hid.close();baseline=null;baselineLightingMapping=null;
+    hid=new CherryHID(device,{macroProduct,textProduct,log:saveLog,progress:message=>status(message+'…'),onDisconnect:error=>{status(error.message,true);render();}});
+    await hid.open();await read();
+  });
+};
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
 $('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping)profile.lightingMapping=clone(baselineLightingMapping);else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
 $('import').onclick=()=>$('file').click();
