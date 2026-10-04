@@ -177,6 +177,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let lightRainbow = NSPopUpButton()
     var lightSelection:Set<String> = ["calculator"]
     var colorEditSource=0
+    #if CHERRY_LIGHTING_TEST
+    var lightingAcceptance:LightingAcceptanceWindow?
+    #endif
     let modifiers = [NSButton(checkboxWithTitle:"⌘ Command",target:nil,action:nil),NSButton(checkboxWithTitle:"⌃ Control",target:nil,action:nil),NSButton(checkboxWithTitle:"⌥ Option",target:nil,action:nil),NSButton(checkboxWithTitle:"⇧ Shift",target:nil,action:nil)]
     let macroName = NSTextField(string:"新宏")
     let macroText = NSTextView()

@@ -20,3 +20,22 @@ assert.deepEqual(lightingRestoreReports(lightingRecoveryForFreshRead(record,orig
 const unknown=clone(target);unknown.keymap[0]^=1;assert.throws(()=>lightingRecoveryForFreshRead(record,unknown));
 assert.throws(()=>lightingRecoveryForFreshRead(attempt,unknown));
 console.log('PASS: research input target verification, reconnect recovery without historical readback, raw/interrupted plan preservation, unknown scope rejection; memory only');
+// Optional native file command parity. Never enters AppKit or opens a device.
+if(process.argv[2]){
+  const {mkdtemp,writeFile,readFile,rm}=await import('node:fs/promises');
+  const {join}=await import('node:path'),{tmpdir}=await import('node:os'),{execFileSync}=await import('node:child_process');
+  const dir=await mkdtemp(join(tmpdir(),'cherry-fresh-lighting-')),recordPath=join(dir,'record.json'),currentPath=join(dir,'current.json'),out=join(dir,'plan.json');
+  try{
+    for(const [source,current] of [[record,target],[record,original],[attempt,partial]]){
+      await writeFile(recordPath,JSON.stringify(source));await writeFile(currentPath,JSON.stringify(current));
+      execFileSync(process.argv[2],['--prepare-lighting-recovery',recordPath,currentPath,out],{stdio:'pipe'});
+      assert.deepEqual(JSON.parse(await readFile(out,'utf8')),lightingRecoveryForFreshRead(source,current));
+    }
+    await writeFile(currentPath,JSON.stringify(unknown));
+    assert.throws(()=>execFileSync(process.argv[2],['--prepare-lighting-recovery',recordPath,currentPath,out],{stdio:'pipe'}));
+    for(const path of [recordPath,currentPath]){
+      const before=await readFile(path);assert.throws(()=>execFileSync(process.argv[2],['--prepare-lighting-recovery',recordPath,currentPath,path],{stdio:'pipe'}));assert.deepEqual(await readFile(path),before);
+    }
+    console.log('PASS: native/Web fresh recovery plan parity, interrupted prefix and input overwrite rejection; files only');
+  }finally{await rm(dir,{recursive:true,force:true});}
+}

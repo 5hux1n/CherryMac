@@ -58,6 +58,9 @@ extension HardwareWindowController {
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
         let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="先保存到编辑区再核对；仅导出计划。";place(review,690,4,210,30,in:pane)
+        #if CHERRY_LIGHTING_TEST
+        place(button("独立灯效验收…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
+        #endif
         let builtins=tabs.tabViewItems[0].view!
         place(label("模式"),8,12,72,24,in:builtins)
         modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,92,8,277,28,in:builtins)
@@ -167,3 +170,170 @@ extension HardwareWindowController {
         profile=draft;lightRainbow.selectItem(at:1);message.stringValue="已把内置灯效颜色保存到编辑区，尚未写入。"
     }
 }
+
+#if CHERRY_LIGHTING_TEST
+import IOKit.hid
+
+extension HardwareWindowController {
+    @objc func openLightingAcceptance(){
+        guard !busy,macroRecordingSheet==nil,let owner=window else{return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        let acceptance=LightingAcceptanceWindow(queue:queue);lightingAcceptance=acceptance
+        owner.beginSheet(acceptance.window!){[weak self] _ in
+            guard let self else{return};self.lightingAcceptance=nil;self.busy=false
+            self.controls.forEach{$0.isEnabled=true};self.baseline=nil;self.baselineWasRead=false
+            self.message.stringValue="灯效验收窗口已关闭；请重新读取键盘后继续编辑。";self.update()
+        }
+    }
+}
+
+// Compiled only into explicit research builds. Opening the sheet performs no
+// device or permission access; the user must click the read button first.
+final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
+    let queue:DispatchQueue
+    let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/LightingAcceptance/\(UUID().uuidString)")
+    let state=NSTextField(wrappingLabelWithString:"尚未选择文件。不会自动连接或写入。")
+    let summary=NSTextField(wrappingLabelWithString:"载入灯效写入核对文件，或之前保存的写入／恢复记录。")
+    var buttons:[NSButton]=[];var running=false;var log:HardwareOperationLog?
+    var review:WindowsProfile.LightingDraftReview?;var recoveryData:Data?
+    var readback:HardwareSnapshot?;var writtenTarget:HardwareSnapshot?;var attempted=false
+    var manager:IOHIDManager?;var registryID:UInt64?;var cycle:CalculatorPowerCycleEvidence?
+    var refresh:Timer?;var focusObserver:NSObjectProtocol?
+    var powerEvents:[[String:Any]]=[];var monitorFailure:String?
+    init(queue:DispatchQueue){
+        self.queue=queue
+        let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:810,height:550),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        panel.title="CherryMac · 灯效独立验收";super.init(window:panel);panel.delegate=self
+        let root=FlippedView(frame:NSRect(x:0,y:0,width:810,height:550));panel.contentView=root
+        func text(_ value:String,_ y:CGFloat,_ h:CGFloat){let field=NSTextField(wrappingLabelWithString:value);field.frame=NSRect(x:22,y:y,width:766,height:h);root.addSubview(field)}
+        text("研究入口 · 尚未完成真机验收。普通预览版仍不开放灯效写入。",18,35)
+        text("1. 载入核对计划或恢复记录",58,25)
+        summary.frame=NSRect(x:22,y:92,width:766,height:48);root.addSubview(summary)
+        text("2. USB 读取与写入：关闭其他配置程序，切换有线模式。松开全部按键，写入期间保持此窗口前台。",154,45)
+        text("3. 断电：成功写入后拔 USB、关键盘电源并确认；至少等待 15 秒后开电、接 USB，重新读取再核对。软件记录关电确认，不能证明电池已断电；灯光外观需要观察。",267,62)
+        text("4. 每次操作自动保存备份与恢复记录。恢复重新读取并检查范围，不自动重试。",387,42)
+        let titles=["载入文件…","读取 USB 配置","备份并写入","恢复原始数据","停止后续发送","已关电，开始计时","核对断电重连读回","打开本轮资料","关闭"]
+        let actions:[Selector]=[#selector(load),#selector(read),#selector(write),#selector(restore),#selector(stop),#selector(powerOff),#selector(retention),#selector(showFiles),#selector(finish)]
+        let frames=[NSRect(x:610,y:58,width:178,height:30),NSRect(x:22,y:210,width:165,height:32),NSRect(x:202,y:210,width:165,height:32),NSRect(x:382,y:210,width:165,height:32),NSRect(x:562,y:210,width:226,height:32),NSRect(x:22,y:338,width:232,height:32),NSRect(x:272,y:338,width:254,height:32),NSRect(x:22,y:438,width:190,height:32),NSRect(x:668,y:438,width:120,height:32)]
+        for i in titles.indices{let b=NSButton(title:titles[i],target:self,action:actions[i]);b.bezelStyle = .rounded;b.frame=frames[i];root.addSubview(b);buttons.append(b)}
+        state.frame=NSRect(x:22,y:488,width:766,height:48);root.addSubview(state)
+        focusObserver=NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:panel,queue:.main){[weak self] _ in if self?.running==true{self?.log?.requestCancellation()}}
+        refresh=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true){[weak self] _ in self?.render()};render()
+    }
+    required init?(coder:NSCoder){fatalError()}
+    func render(){
+        buttons.forEach{$0.isEnabled = !running};buttons[4].isEnabled=running
+        buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
+        buttons[3].isEnabled = !running && recoveryData != nil
+        buttons[5].isEnabled = !running && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
+        buttons[6].isEnabled = !running && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && readback != nil
+    }
+    func fail(_ error:Error){state.stringValue=error.localizedDescription}
+    @objc func load(){
+        guard !running else{return};let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        guard panel.runModal() == .OK,let url=panel.url else{return}
+        review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新文件；旧选择已清除。"
+        do{
+            let data=try Data(contentsOf:url);guard data.count<=3_000_000 else{throw HardwareError(message:"文件超过 3 MB。")}
+            let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+            if root?["format"] as? String=="CherryMacLightingDraftReview" {
+                let value=try JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:data)
+                guard value.version==1,!value.hardwareReady,try value.plan.expectedReadback(from:value.original)==value.target else{throw HardwareError(message:"灯效核对目标与计划不一致。")}
+                _ = try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:value.plan,baseline:value.original)
+                review=value;summary.stringValue="模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
+            }else if root?["format"] as? String=="CherryMacLightingRecoveryRecord" {
+                _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data).assess();recoveryData=data;summary.stringValue="已载入写入恢复记录；恢复前重新读取配置。"
+            }else if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
+                _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data).assess();recoveryData=data;summary.stringValue="已载入恢复中断记录；保留原计划并核对新读回。"
+            }else{throw HardwareError(message:"请选择灯效核对文件、写入记录或恢复记录。")}
+            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try data.write(to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"),options:.atomic)
+            state.stringValue="文件已核对，未连接或写入键盘。"
+        }catch{review=nil;recoveryData=nil;fail(error)};render()
+    }
+    func startMonitor()throws {
+        guard manager==nil else{return}
+        let m=IOHIDManagerCreate(kCFAllocatorDefault,0)
+        IOHIDManagerSetDeviceMatching(m,[kIOHIDVendorIDKey:0x046A,kIOHIDProductIDKey:0x01CE,kIOHIDTransportKey:"USB"] as CFDictionary)
+        let context=Unmanaged.passUnretained(self).toOpaque()
+        IOHIDManagerRegisterDeviceRemovalCallback(m,{context,_,_,device in
+            guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
+            guard selfRef.writtenTarget != nil,selfRef.id(device)==selfRef.registryID else{return}
+            selfRef.cycle = .init(originalRegistryID:selfRef.registryID!);selfRef.cycle?.disconnected(at:ProcessInfo.processInfo.systemUptime);selfRef.readback=nil;selfRef.savePowerEvent("usbDisconnected");selfRef.render()
+        },context)
+        IOHIDManagerRegisterDeviceMatchingCallback(m,{context,_,_,device in
+            guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
+            if let id=selfRef.id(device),selfRef.cycle?.reconnected(at:ProcessInfo.processInfo.systemUptime,registryID:id)==true{selfRef.savePowerEvent("usbReconnected")};selfRef.render()
+        },context)
+        IOHIDManagerScheduleWithRunLoop(m,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue)
+        guard IOHIDManagerOpen(m,0)==0 else{IOHIDManagerUnscheduleFromRunLoop(m,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue);throw HardwareError(message:"无法监测 USB 连接，请检查研究 App 的输入监控权限。")}
+        manager=m
+    }
+    func savePowerEvent(_ kind:String){
+        powerEvents.append(["kind":kind,"at":ISO8601DateFormatter().string(from:Date()),"uptime":ProcessInfo.processInfo.systemUptime,"registryID":registryID ?? 0])
+        do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:powerEvents,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("power-events.json"),options:.atomic)}catch{monitorFailure=error.localizedDescription;fail(error)}
+    }
+    func id(_ device:IOHIDDevice)->UInt64?{var value:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&value)==KERN_SUCCESS ? value:nil}
+    func perform(_ kind:String,_ body:@escaping (CherryUSB,HardwareOperationLog)throws->HardwareSnapshot?){
+        guard !running else{return};let operation:HardwareOperationLog
+        do{operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");try operation.requireStorageHealthy()}catch{fail(error);return}
+        log=operation;running=true;render();state.stringValue="正在操作，请保持窗口前台并松开全部按键…"
+        queue.async{[weak self] in
+            guard let self else{return}
+            let result=Result<HardwareSnapshot?,Error>{let usb=try CherryUSB();usb.trace=operation.trace;return try body(usb,operation)}
+            DispatchQueue.main.async{self.running=false;self.log=nil
+                if case .success(let snapshot)=result{if let snapshot{self.readback=snapshot}}
+                else if case .failure(let error)=result{self.readback=nil;self.fail(error)}
+                self.render()
+            }
+        }
+    }
+    @objc func read(){
+        guard !running else{return}
+        do{try startMonitor();let devices=IOHIDManagerCopyDevices(manager!) as? Set<IOHIDDevice> ?? [];guard devices.count==1,let device=devices.first,let found=id(device)else{throw HardwareError(message:"需连接且仅连接一把目标 USB 键盘。")};registryID=found}
+        catch{fail(error);return}
+        perform("lighting-acceptance-read"){usb,log in let snapshot=try usb.completeSnapshot();try self.saveSnapshot(snapshot,log);try log.requireStorageHealthy();DispatchQueue.main.async{self.state.stringValue="完整配置已读取；没有写入。"};return snapshot}
+    }
+    func confirmation(_ title:String)->Bool{let alert=NSAlert();alert.messageText=title;alert.informativeText="将实际发送灯效配置。请关闭其他配置程序、松开全部按键，保持此窗口前台。自动备份与日志保存后才发送；不自动重试。";alert.addButton(withTitle:"全部已松开，继续");alert.addButton(withTitle:"取消");return alert.runModal() == .alertFirstButtonReturn}
+    func saveSnapshot(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(snapshot).write(to:directory.appendingPathComponent("snapshot-\(log.url.lastPathComponent)"),options:.atomic)}
+    func backup(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let url=directory.appendingPathComponent("backup-\(UUID().uuidString).json");try encoder.encode(snapshot).write(to:url,options:.atomic);let read=try JSONDecoder().decode(HardwareSnapshot.self,from:Data(contentsOf:url));guard read==snapshot else{throw HardwareError(message:"备份读回不一致。")};log.record("backup",url.path);try log.requireStorageHealthy()}
+    func persist<T:Encodable>(_ record:T,_ log:HardwareOperationLog)throws {
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(record)
+        try data.write(to:directory.appendingPathComponent("record-\(log.url.lastPathComponent)"),options:.atomic);try log.requireStorageHealthy()
+        DispatchQueue.main.async{self.recoveryData=data}
+    }
+    @objc func write(){
+        guard !running,!attempted,let review,readback != nil,confirmation("写入所选灯效计划？") else{return}
+        attempted=true;cycle=nil;writtenTarget=nil
+        perform("lighting-acceptance-write"){usb,log in
+            let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
+            guard result.readbackMatches else{throw HardwareError(message:result.failure)}
+            DispatchQueue.main.async{self.writtenTarget=review.target;self.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"}
+            return result.current
+        }
+    }
+    @objc func restore(){
+        guard !running,let data=recoveryData,confirmation("重新核对并恢复原始灯效数据？")else{return}
+        perform("lighting-acceptance-restore"){usb,log in
+            let current=try usb.completeSnapshot(),plan=try WindowsProfile.restorePlanFromRecord(data,current:current)
+            let attempt=try usb.restoreLightingCandidate(plan,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
+            let assessment=try attempt.assess();guard ["readbackMatched","alreadyMatched"].contains(assessment.status)else{throw HardwareError(message:attempt.failure.isEmpty ? assessment.status:attempt.failure)}
+            DispatchQueue.main.async{self.writtenTarget=nil;self.cycle=nil;self.state.stringValue="恢复与原始备份读回一致。请核对键盘输出与灯光外观，再保存本轮资料。"};return attempt.current
+        }
+    }
+    @objc func stop(){log?.requestCancellation();state.stringValue="已请求停止后续报告，不能撤回已发送的报告。"}
+    @objc func powerOff(){guard !running,cycle?.confirmPowerOff(at:ProcessInfo.processInfo.systemUptime)==true else{return};savePowerEvent("userConfirmedPowerOff");state.stringValue=monitorFailure.map{"关电记录保存失败：\($0)"} ?? "已记录你的关电确认。至少等待 15 秒后开电、接 USB，并重新读取。";render()}
+    @objc func retention(){
+        guard !running,let target=writtenTarget,let evidence=cycle,evidence.hasConfirmedPowerCycle,monitorFailure==nil else{return}
+        perform("lighting-acceptance-retention"){usb,log in
+            log.record("userConfirmedPowerOff",true);log.record("confirmedOffInterval",evidence.confirmedOffInterval ?? -1);log.record("originalRegistryID",evidence.originalRegistryID);log.record("reconnectedRegistryID",evidence.reconnectedRegistryID ?? 0)
+            let current=try usb.completeSnapshot();try self.saveSnapshot(current,log);let matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData
+            log.record("readbackMatches",matches);try log.requireStorageHealthy()
+            guard matches else{throw HardwareError(message:"断电重连读回与目标不同。请保存资料并核对恢复。")}
+            DispatchQueue.main.async{self.state.stringValue="关电确认后的重连读回符合目标。请观察灯光，之后恢复原始数据。"};return current
+        }
+    }
+    @objc func showFiles(){do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{fail(error)}}
+    @objc func finish(){guard !running else{return};refresh?.invalidate();refresh=nil;if let observer=focusObserver{NotificationCenter.default.removeObserver(observer);focusObserver=nil};if let manager{IOHIDManagerRegisterDeviceRemovalCallback(manager,nil,nil);IOHIDManagerRegisterDeviceMatchingCallback(manager,nil,nil);IOHIDManagerUnscheduleFromRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue);IOHIDManagerClose(manager,0);self.manager=nil};window?.sheetParent?.endSheet(window!)}
+    func windowShouldClose(_ sender:NSWindow)->Bool{finish();return false}
+}
+#endif

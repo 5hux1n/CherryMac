@@ -139,6 +139,10 @@ final class HardwareOperationLog {
         if cancelled{throw HardwareError(message:"用户已停止发送；原配置和恢复记录保留。日志：\(url.path)")}
         if let failure{throw HardwareError(message:"操作日志保存失败，停止后续写入：\(failure)。日志：\(url.path)")}
     }
+    func requireStorageHealthy() throws {
+        lock.lock();defer{lock.unlock()}
+        if let failure{throw HardwareError(message:"操作日志保存失败，停止后续写入：\(failure)。日志：\(url.path)")}
+    }
     func string(_ key:String)->String?{lock.lock();defer{lock.unlock()};return state[key] as? String}
 }
 

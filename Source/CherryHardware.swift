@@ -265,14 +265,15 @@ struct ReleasedKeyGate {
 // The keyboard remains available to macOS; no seize/detach options are used.
 final class CherryUSB: CherryHardwareAccess {
     private var lightingAuthorization:WindowsProfile.OfficialLightingPlan.CandidateAuthorization?
+    private var lightingLog:HardwareOperationLog?
     private var macroAuthorization:MacroWriteAuthorization?
     #if CHERRY_LIGHTING_TEST
     func restoreLightingCandidate(_ recovery:WindowsProfile.OfficialLightingPlan.RecoveryPlan,
                                   cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
-                                  persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
+                                  persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(recovery:recovery)
-        stopHostTextObservation();lightingAuthorization=authorization;defer{lightingAuthorization=nil}
+        stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log;defer{lightingAuthorization=nil;lightingLog=nil}
         return try recovery.execute(source:"usbTrace",assertCurrent:{
             guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"恢复 USB 会话已经改变。")}
         },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
@@ -283,11 +284,11 @@ final class CherryUSB: CherryHardwareAccess {
     // Only an explicitly compiled research entry can install this scope.
     func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
-                                persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
+                                persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:plan,baseline:baseline)
-        stopHostTextObservation();lightingAuthorization=authorization
-        defer{lightingAuthorization=nil}
+        stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log
+        defer{lightingAuthorization=nil;lightingLog=nil}
         return try plan.executeCandidate(baseline:baseline,source:"usbTrace",assertCurrent:{
             guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"灯效 USB 会话已经改变。")}
         },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
@@ -468,7 +469,7 @@ final class CherryUSB: CherryHardwareAccess {
         let scopedWrite=try validateMacroResearchPacket(request)
         let lightingWrite=request.count==64 && [UInt8(1),2,6,0x0B].contains(request[3]) && lightingAuthorization != nil
         if lightingWrite {
-            try lightingAuthorization!.validate(request);try waitUntilKeysReleased()
+            try lightingAuthorization!.validate(request);try lightingLog?.requireHealthy();try waitUntilKeysReleased();try lightingLog?.requireHealthy()
         }else if scopedWrite{
             try keymapLog?.requireHealthy()
             if let lastKeyWriteAt{while ProcessInfo.processInfo.systemUptime-lastKeyWriteAt<1.5{RunLoop.current.run(until:Date().addingTimeInterval(0.02))}}
@@ -492,6 +493,7 @@ final class CherryUSB: CherryHardwareAccess {
         guard !transportDead,let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())
+        if lightingWrite{try lightingLog?.requireHealthy()}
         if scopedWrite || (request[3]==9 && keymapAuthorization != nil){try keymapLog?.requireHealthy();lastKeyWriteAt=ProcessInfo.processInfo.systemUptime}
         let result = request.withUnsafeBufferPointer { IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 4, $0.baseAddress!, 64) }
         guard result == 0 else { transportDead=true;throw HardwareError(message: "USB 发送失败（\(result)）。") }

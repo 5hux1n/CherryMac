@@ -1276,6 +1276,18 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--prepare-lighting-recovery") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+4 else{throw HardwareError(message:"需要恢复记录、当前快照和计划输出路径。")}
+        let inputs=args[(index+1)...(index+2)].map{URL(fileURLWithPath:$0).standardizedFileURL.resolvingSymlinksInPath()},output=URL(fileURLWithPath:args[index+3]).standardizedFileURL.resolvingSymlinksInPath()
+        guard !inputs.contains(output)else{throw HardwareError(message:"不能覆盖原始记录或当前快照。")}
+        let record=try Data(contentsOf:inputs[0]),snapshot=try Data(contentsOf:inputs[1]);guard snapshot.count<=3_000_000 else{throw HardwareError(message:"当前快照超过 3 MB。")}
+        let current=try HardwareProfile.decode(snapshot).snapshot,plan=try WindowsProfile.restorePlanFromRecord(record,current:current),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(plan).write(to:output,options:.atomic)
+        print("PASS: fresh snapshot recovery preparation; files only, no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--export-lighting-restore-plan") {
     do{
         let args=CommandLine.arguments
