@@ -24,8 +24,8 @@ if [[ $# -eq 2 ]]; then
     TASK_PREVIEW_APP_NAME="CherryMacLightingAcceptance.app"
     TASK_PREVIEW_IDENTIFIER="local.cherrymac.lighting-acceptance"
     TASK_PREVIEW_DISPLAY="CherryMac Lighting Acceptance"
-    TASK_PREVIEW_VERSION="0.1.2"
-    TASK_PREVIEW_BUILD="3"
+    TASK_PREVIEW_VERSION="0.1.3"
+    TASK_PREVIEW_BUILD="4"
     TASK_PREVIEW_FLAGS+=(-D CHERRY_LIGHTING_TEST)
     TASK_PREVIEW_BUNDLE_NAME="$TASK_PREVIEW_DISPLAY"
 fi

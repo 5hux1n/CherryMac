@@ -45,6 +45,7 @@ if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
     manifest['features']['lightingEditorPlanHandoff'] = True
+    manifest['features']['lightingOperationDiagnostics'] = True
     manifest['compileFlags'] = ['CHERRY_MACRO_PRODUCT', 'CHERRY_LIGHTING_TEST']
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
@@ -87,6 +88,8 @@ if lighting_acceptance:
 写入读回通过后观察灯光，拔 USB、关闭键盘电源并点击关电确认；至少等待 15 秒后开电、接 USB，重新读取并核对。记录包含操作系统拔插事件和用户关电确认，不能证明电池实际断电或灯光外观正确。
 
 最后点击恢复原始数据并核对键盘功能。恢复先重新读取并检查范围，拒绝未知变化；原始颜色不会再次缩放，不自动重试。超时或断开后可在新会话载入保存的独立恢复记录再核对，恢复中断保留原计划。关闭验收窗口后主页面需要重新读取配置。
+
+操作日志包含开始、完成／取消／失败、错误和打开的 USB 标识，并关联独立恢复记录文件。准备阶段失败也会保存原因；日志保存失败不能作为操作通过。
 
 “打开本轮资料”显示完整备份、读取快照、操作日志、power-events.json 和独立恢复记录，无需手工抓包。记录可在网页端导入核对，文件不上传。不含官方 EXE、用户配置或既有真机日志。普通配置页仍不提供灯效写入，只有独立研究窗口提供实际发送入口。
 '''.encode()

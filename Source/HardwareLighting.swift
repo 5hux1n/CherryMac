@@ -288,22 +288,36 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     func id(_ device:IOHIDDevice)->UInt64?{var value:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&value)==KERN_SUCCESS ? value:nil}
     func perform(_ kind:String,_ body:@escaping (CherryUSB,HardwareOperationLog)throws->HardwareSnapshot?){
         guard !running else{return};let operation:HardwareOperationLog
-        do{operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");try operation.requireStorageHealthy()}catch{fail(error);return}
+        do{operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");operation.record("phase","started");try operation.requireHealthy()}catch{fail(error);return}
         log=operation;running=true;render();state.stringValue="正在操作，请保持窗口前台并松开全部按键…"
         queue.async{[weak self] in
             guard let self else{return}
-            let result=Result<HardwareSnapshot?,Error>{let usb=try CherryUSB();usb.trace=operation.trace;return try body(usb,operation)}
+            var result=Result<HardwareSnapshot?,Error>{try operation.requireHealthy();let usb=try CherryUSB();usb.trace=operation.trace;operation.record("openedRegistryID",try usb.lightingRegistryID());try operation.requireHealthy();return try body(usb,operation)}
+            operation.record("endedAt",ISO8601DateFormatter().string(from:Date()))
+            switch result {
+            case .success:
+                operation.record("phase",operation.isCancelled ? "cancelled":"complete")
+            case .failure(let error):
+                operation.record("error",error.localizedDescription)
+                operation.record("phase",operation.isCancelled ? "cancelled":"failed")
+            }
+            do{try operation.requireStorageHealthy()}catch{result = .failure(error)}
+            let finalResult=result
             DispatchQueue.main.async{self.running=false;self.log=nil
-                if case .success(let snapshot)=result{if let snapshot{self.readback=snapshot}}
-                else if case .failure(let error)=result{self.readback=nil;self.fail(error)}
+                if case .success(let snapshot)=finalResult{if let snapshot{self.readback=snapshot}}
+                else if case .failure(let error)=finalResult{self.readback=nil;self.fail(error)}
                 self.render()
             }
         }
     }
     @objc func read(){
-        guard !running else{return}
+        guard !running else{return};readback=nil;registryID=nil;render()
         do{try startMonitor();let devices=IOHIDManagerCopyDevices(manager!) as? Set<IOHIDDevice> ?? [];guard devices.count==1,let device=devices.first,let found=id(device)else{throw HardwareError(message:"需连接且仅连接一把目标 USB 键盘。")};registryID=found}
-        catch{fail(error);return}
+        catch{
+            do{let operation=try HardwareOperationLog(kind:"lighting-acceptance-read",directory:directory);operation.record("scope","read-only preparation");operation.record("error",error.localizedDescription);operation.record("endedAt",ISO8601DateFormatter().string(from:Date()));operation.record("phase","failed");try operation.requireStorageHealthy();fail(error)}
+            catch{fail(error)}
+            return
+        }
         let selectedID=registryID!
         perform("lighting-acceptance-read"){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"读取会话与选定 USB 设备不同，请重新读取。")}
@@ -317,8 +331,10 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     func backup(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let url=directory.appendingPathComponent("backup-\(UUID().uuidString).json");try encoder.encode(snapshot).write(to:url,options:.atomic);let read=try JSONDecoder().decode(HardwareSnapshot.self,from:Data(contentsOf:url));guard read==snapshot else{throw HardwareError(message:"备份读回不一致。")};log.record("backup",url.path);try log.requireStorageHealthy()}
     func persist<T:Encodable>(_ record:T,_ log:HardwareOperationLog)throws {
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(record)
-        try data.write(to:directory.appendingPathComponent("record-\(log.url.lastPathComponent)"),options:.atomic);try log.requireStorageHealthy()
-        DispatchQueue.main.async{self.recoveryData=data}
+        let filename="record-\(log.url.lastPathComponent)"
+        try data.write(to:directory.appendingPathComponent(filename),options:.atomic)
+        if log.string("recoveryRecordFile")==nil{log.record("recoveryRecordFile",filename)}
+        try log.requireStorageHealthy();DispatchQueue.main.async{self.recoveryData=data}
     }
     @objc func write(){
         guard !running,!attempted,let review,let selectedID=registryID,readback != nil,confirmation("写入所选灯效计划？") else{return}

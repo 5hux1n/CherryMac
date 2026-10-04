@@ -41,3 +41,22 @@ export class LightingPowerCycle {
     return {userConfirmedPowerOff:true,elapsedMilliseconds:Math.floor(this.returnedAt-this.powerOffAt),originalDeviceToken:this.originalToken,reconnectedDeviceToken:this.returnedToken};
   }
 }
+
+// Records failures before the first USB report as well as terminal results.
+// Persistence must succeed before operational callbacks; downloading existing
+// diagnostics remains available when storage itself is the failure.
+export async function recordLightingOperation(session,kind,body,{persist,now=()=>new Date().toISOString(),cancelled=()=>false}={}){
+  requireThat(session&&typeof kind==='string'&&typeof body==='function'&&typeof persist==='function','灯效操作记录接口无效。');
+  const offlineExport=['download','download-record'].includes(kind);
+  session.operations??=[];
+  const record={index:session.operations.length,kind,startedAt:now(),status:'started'};
+  session.operations.push(record);
+  let value,failure;
+  try{if(!offlineExport)await persist();value=await body();record.status=cancelled()?'cancelled':'complete';}
+  catch(error){failure=error;record.status=cancelled()?'cancelled':'failed';record.error=String(error?.message??error).slice(0,4096);}
+  record.endedAt=now();
+  if(!offlineExport){
+    try{await persist();}catch(error){record.persistenceError=String(error?.message??error).slice(0,4096);record.status='failed';failure??=error;}
+  }
+  if(failure)throw failure;return value;
+}

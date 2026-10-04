@@ -14,7 +14,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--ligh
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.2' if lighting_acceptance else '0.20.0'
+version = '0.1.3' if lighting_acceptance else '0.20.0'
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
@@ -89,6 +89,8 @@ if lighting_acceptance:
 
 最后点击恢复原始数据并核对键盘功能。恢复会重新读取完整配置、拒绝范围外变化，原始颜色不重复缩放，不自动重试。超时或断开后用新会话载入独立恢复记录再核对。备份和记录存于当前网址的浏览器本地数据库，文件不上传；清理数据前分别下载本轮资料与独立恢复记录。日志保存失败时仍能下载现有资料，导出会标注日志缺失。
 
+本轮资料的 operations 包含每次操作开始、结束、完成／取消／失败及错误，首包前失败也能追踪。操作记录无法保存时，不开始下一项配置操作；已有资料仍可下载。
+
 此包与旧灯效版本不同，名字和端口独立，不替换旧包。它包含实际发送入口，请按统一验收安排使用；打包过程没有运行网页服务、申请权限或访问键盘。
 '''.encode()
 manifest = {'format': 'CherryMacWebLightingAcceptance' if lighting_acceptance else 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
@@ -100,6 +102,7 @@ if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
     manifest['features']['lightingEditorPlanHandoff'] = True
+    manifest['features']['lightingOperationDiagnostics'] = True
     contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 prefix = f'{package_name}-{version}/'
 with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
