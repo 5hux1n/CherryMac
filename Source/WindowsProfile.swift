@@ -454,24 +454,50 @@ enum WindowsProfile {
             var source:String;var status:String;var acceptedReports:Int;var expectedReports:Int;var failedIndex:Int
         }
         struct ExecutionResult {
-            var trace:Trace;var current:HardwareSnapshot?;var readbackMatches:Bool;var failure:String
+            var trace:Trace;var current:HardwareSnapshot?;var readbackMatches:Bool;var failure:String;var record:RecoveryRecord
+        }
+        struct RecoveryRecord:Codable {
+            var format="CherryMacLightingRecoveryRecord";var version=1;var hardwareReady=false
+            var operationID:String;var plan:OfficialLightingPlan;var original:HardwareSnapshot
+            var trace:Trace;var current:HardwareSnapshot?;var failure:String
+            struct Assessment:Codable {
+                var format="CherryMacLightingRecordAssessment";var version=1;var hardwareReady=false
+                var operationID:String;var status:String;var traceReview:TraceReview;var readbackMatches:Bool
+                var recoveryStatus:String;var matchedWritePrefixes:[Int];var restoreData:[Write]
+            }
+            func assess()throws->Assessment {
+                let allowed=CharacterSet(charactersIn:"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+                guard format=="CherryMacLightingRecoveryRecord",version==1,!hardwareReady,!operationID.isEmpty,operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}),failure.utf8.count<=4096 else{throw HardwareError(message:"灯效恢复记录格式无效。")}
+                let target=try plan.expectedReadback(from:original),review=try plan.reviewTrace(trace)
+                var matches=false,recoveryStatus="unavailable",prefixes:[Int]=[],restore:[Write]=[]
+                if let current {
+                    try current.validate();guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"灯效恢复记录缺少完整读回。")}
+                    matches=plan.sameConfiguration(current,target)
+                    do{let recovery=try plan.recoveryReview(original:original,current:current);recoveryStatus=recovery.requiresRecovery ? "available":"unchanged";prefixes=recovery.matchedWritePrefixes;restore=recovery.restoreData}
+                    catch{recoveryStatus="unrecognized"}
+                }
+                let status = !failure.isEmpty || review.status=="failed" ? "failed":review.status != "complete" ? "incomplete":matches ? "readbackMatched":"readbackMismatch"
+                return .init(operationID:operationID,status:status,traceReview:review,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedWritePrefixes:prefixes,restoreData:restore)
+            }
         }
         // Injectable transport only; deliberately not connected to CherryUSB.
         // The caller must exclusively own one current device/session. Durable
         // pending records precede exchange, so a crash cannot hide an attempt.
-        func executeCandidate(baseline:HardwareSnapshot,source:String,
+        func executeCandidate(baseline:HardwareSnapshot,source:String,operationID:String=UUID().uuidString,
                               assertCurrent:()throws->Void,cancelled:()->Bool,
                               read:()throws->HardwareSnapshot,
                               backup:(HardwareSnapshot)throws->Void,
-                              persist:(Trace)throws->Void,clock:()->Int,
+                              persist:(RecoveryRecord)throws->Void,clock:()->Int,
                               wait:(Int)throws->Void,exchange:([UInt8])throws->[UInt8])throws->ExecutionResult {
             let packets=try reports(),target=try expectedReadback(from:baseline)
             var trace=Trace(format:"CherryMacLightingTrace",version:1,source:source,entries:[])
             _ = try reviewTrace(trace)
+            func record(_ current:HardwareSnapshot?=nil,_ failure:String="")->RecoveryRecord{.init(operationID:operationID,plan:self,original:baseline,trace:trace,current:current,failure:failure)}
+            _ = try record().assess()
             func check()throws{try assertCurrent();guard !cancelled() else{throw HardwareError(message:"灯效流程已取消。")}}
             try check();let fresh=try read();try fresh.validate()
             guard sameConfiguration(fresh,baseline) else{throw HardwareError(message:"灯效基线已改变，请重新读取。")}
-            try backup(fresh);try persist(trace);try check()
+            try backup(fresh);try persist(record());try check()
             let afterBackup=try read();try afterBackup.validate()
             guard sameConfiguration(afterBackup,baseline) else{throw HardwareError(message:"备份后配置发生变化，未发送灯效指令。")}
             var failure=""
@@ -479,11 +505,11 @@ enum WindowsProfile {
                 do{try check();try wait(packet.delayMilliseconds);try check()}catch{failure=error.localizedDescription;break}
                 let index=trace.entries.count
                 trace.entries.append(.init(request:packet.request,sentMilliseconds:clock()))
-                _ = try reviewTrace(trace);try persist(trace)
+                _ = try reviewTrace(trace);try persist(record())
                 do{try check();let reply=try exchange(packet.request);trace.entries[index].reply=reply}
                 catch{trace.entries[index].error=error.localizedDescription}
                 trace.entries[index].endedMilliseconds=clock()
-                let assessment=try reviewTrace(trace);try persist(trace)
+                let assessment=try reviewTrace(trace);try persist(record())
                 if assessment.status=="failed"{failure=trace.entries[index].error ?? "灯效回复校验失败。";break}
             }
             var current:HardwareSnapshot?
@@ -491,7 +517,8 @@ enum WindowsProfile {
             catch{if failure.isEmpty{failure=error.localizedDescription}}
             let matches=current.map{sameConfiguration($0,target)} ?? false
             if failure.isEmpty && !matches{failure="灯效读回与目标不一致。"}
-            return .init(trace:trace,current:current,readbackMatches:failure.isEmpty && matches,failure:failure)
+            let final=record(current,failure);_ = try final.assess();try persist(final)
+            return .init(trace:trace,current:current,readbackMatches:failure.isEmpty && matches,failure:failure,record:final)
         }
         // A trace is untrusted evidence, never permission to send or proof of
         // persistence. A pending/failed exchange must be the final entry.

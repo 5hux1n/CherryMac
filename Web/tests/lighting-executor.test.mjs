@@ -10,8 +10,8 @@ test('lighting candidate execution backs up, stops on uncertainty and checks com
     const adapter={source:'simulation',assertCurrent:()=>{},cancelled:()=>mode==='cancel'&&sends===1,clock:()=>now,wait:ms=>{now+=ms;},
       read:()=>{reads++;if(mode==='stale'&&reads===2)state.keymap[0]^=1;return clone(state);},
       backup:value=>{assert.deepEqual(value,baseline);if(mode==='backupFailure')throw Error('backup failed');backedUp=true;},
-      persist:value=>{if(mode==='pendingLogFailure'&&value.entries.length===1)throw Error('log failed');records.push(clone(value));},
-      exchange:request=>{assert.ok(backedUp);assert.deepEqual(records.at(-1).entries.at(-1).request,request);assert.equal(records.at(-1).entries.at(-1).reply,undefined);sends++;now++;
+      persist:value=>{if(mode==='pendingLogFailure'&&value.trace.entries.length===1)throw Error('log failed');records.push(clone(value));},
+      exchange:request=>{assert.ok(backedUp);assert.deepEqual(records.at(-1).trace.entries.at(-1).request,request);assert.equal(records.at(-1).trace.entries.at(-1).reply,undefined);sends++;now++;
         if(request[3]===6)state.parameters.splice(request[5]+request[6]*256,request[4],...request.slice(8,8+request[4]));
         if(mode==='unrelatedChange')state.keymap[0]=baseline.keymap[0]^1;
         if(mode==='lostReply')throw Error('reply timeout');

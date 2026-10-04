@@ -1277,16 +1277,16 @@ func runLightingExecutionChecks(){
     let baseline=HardwareSnapshot.demo(),writes=[Plan.Write(command:6,offset:0,flag:85,data:[0,1,2,3,1,0,7,123,249]),Plan.Write(command:6,offset:21,flag:85,data:[1]),Plan.Write(command:6,offset:24,flag:85,data:[1])]
     let plan=Plan(bank:0,transportSelector:0,chunkCapacity:56,stages:[.init(name:"parameters",beginRequired:true,beginCommand:1,writes:writes,finishCommand:2,finishDelayMilliseconds:10)])
     for mode in ["success","backupFailure","pendingLogFailure","lostReply","badReply","cancel","stale","unrelatedChange"]{
-        var state=baseline,now=0,sends=0,reads=0,backedUp=false,records:[Plan.Trace]=[]
+        var state=baseline,now=0,sends=0,reads=0,backedUp=false,records:[Plan.RecoveryRecord]=[]
         do{
             let result=try plan.executeCandidate(baseline:baseline,source:"simulation",assertCurrent:{},cancelled:{mode=="cancel" && sends==1},read:{
                 reads+=1;if mode=="stale" && reads==2{state.keymap[0] ^= 1};return state
             },backup:{value in
                 precondition(value==baseline);if mode=="backupFailure"{throw HardwareError(message:"backup failed")};backedUp=true
             },persist:{value in
-                if mode=="pendingLogFailure" && value.entries.count==1{throw HardwareError(message:"log failed")};records.append(value)
+                if mode=="pendingLogFailure" && value.trace.entries.count==1{throw HardwareError(message:"log failed")};records.append(value)
             },clock:{now},wait:{now+=$0},exchange:{request in
-                precondition(backedUp && records.last!.entries.last!.request==request && records.last!.entries.last!.reply==nil)
+                precondition(backedUp && records.last!.trace.entries.last!.request==request && records.last!.trace.entries.last!.reply==nil)
                 sends+=1;now+=1
                 if request[3]==6{let offset=Int(request[5])+Int(request[6])*256;state.parameters.replaceSubrange(offset..<offset+Int(request[4]),with:request[8..<8+Int(request[4])])}
                 if mode=="unrelatedChange"{state.keymap[0]=baseline.keymap[0]^1}

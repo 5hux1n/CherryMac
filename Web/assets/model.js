@@ -471,29 +471,43 @@ export function officialLightingReports(plan){
 }
 
 const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+export function assessLightingRecoveryRecord(record){
+  requireThat(record?.format==='CherryMacLightingRecoveryRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'灯效恢复记录格式无效。');
+  const target=officialLightingReadbackTarget(record.plan,record.original),traceReview=reviewOfficialLightingTrace(record.plan,record.trace);
+  let readbackMatches=false,recoveryStatus='unavailable',matchedWritePrefixes=[],restoreData=[];
+  if(record.current!=null){
+    validateSnapshot(record.current,true);readbackMatches=lightingConfigurationEqual(record.current,target);
+    try{const recovery=officialLightingRecoveryReview(record.plan,record.original,record.current);recoveryStatus=recovery.requiresRecovery?'available':'unchanged';matchedWritePrefixes=recovery.matchedWritePrefixes;restoreData=recovery.restoreData;}catch{recoveryStatus='unrecognized';}
+  }
+  const status=record.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':readbackMatches?'readbackMatched':'readbackMismatch';
+  return {format:'CherryMacLightingRecordAssessment',version:1,hardwareReady:false,operationID:record.operationID,status,traceReview,readbackMatches,recoveryStatus,matchedWritePrefixes,restoreData};
+}
 // Injectable transaction; no import or connection to the WebHID sender.
-export async function executeOfficialLightingCandidate(plan,baseline,{source,assertCurrent,cancelled,read,backup,persist,clock,wait,exchange}){
+export async function executeOfficialLightingCandidate(plan,baseline,{source,operationID=globalThis.crypto.randomUUID(),assertCurrent,cancelled,read,backup,persist,clock,wait,exchange}){
   plan=clone(plan);baseline=clone(baseline);
   const reports=officialLightingReports(plan),target=officialLightingReadbackTarget(plan,baseline);
   const trace={format:'CherryMacLightingTrace',version:1,source,entries:[]};reviewOfficialLightingTrace(plan,trace);
+  const record=(current=null,failure='')=>({format:'CherryMacLightingRecoveryRecord',version:1,hardwareReady:false,operationID,plan:clone(plan),original:clone(baseline),trace:clone(trace),current:clone(current),failure});
+  assessLightingRecoveryRecord(record());
   const check=async()=>{await assertCurrent();requireThat(!cancelled(),'灯效流程已取消。');};
   await check();const fresh=await read();validateSnapshot(fresh,true);requireThat(lightingConfigurationEqual(fresh,baseline),'灯效基线已改变，请重新读取。');
-  await backup(clone(fresh));await persist(clone(trace));await check();
+  await backup(clone(fresh));await persist(record());await check();
   const afterBackup=await read();validateSnapshot(afterBackup,true);requireThat(lightingConfigurationEqual(afterBackup,baseline),'备份后配置发生变化，未发送灯效指令。');
   let failure='';
   for(const report of reports){
     try{await check();await wait(report.delayMilliseconds);await check();}catch(error){failure=String(error.message||error);break;}
     const entry={request:clone(report.request),sentMilliseconds:clock()};trace.entries.push(entry);
-    reviewOfficialLightingTrace(plan,trace);await persist(clone(trace));
+    reviewOfficialLightingTrace(plan,trace);await persist(record());
     try{await check();entry.reply=Array.from(await exchange(clone(report.request)));}catch(error){entry.error=String(error.message||error);}
-    entry.endedMilliseconds=clock();const assessment=reviewOfficialLightingTrace(plan,trace);await persist(clone(trace));
+    entry.endedMilliseconds=clock();const assessment=reviewOfficialLightingTrace(plan,trace);await persist(record());
     if(assessment.status==='failed'){failure=entry.error||'灯效回复校验失败。';break;}
   }
   let current=null;
   try{await assertCurrent();const value=await read();validateSnapshot(value,true);await assertCurrent();current=clone(value);}catch(error){if(!failure)failure=String(error.message||error);}
   const matches=current!=null&&lightingConfigurationEqual(current,target);
   if(!failure&&!matches)failure='灯效读回与目标不一致。';
-  return {trace,current,readbackMatches:!failure&&matches,failure};
+  const final=record(current,failure);assessLightingRecoveryRecord(final);await persist(clone(final));
+  return {trace,current,readbackMatches:!failure&&matches,failure,record:final};
 }
 // Pure trace review. Accepted replies are not proof of flash persistence.
 export function reviewOfficialLightingTrace(plan,trace){

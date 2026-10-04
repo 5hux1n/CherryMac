@@ -1249,6 +1249,18 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-recovery-record") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+3 else{throw HardwareError(message:"需要恢复记录和分析输出路径。")}
+        let input=URL(fileURLWithPath:args[index+1]).standardizedFileURL.resolvingSymlinksInPath(),output=URL(fileURLWithPath:args[index+2]).standardizedFileURL.resolvingSymlinksInPath()
+        guard input != output else{throw HardwareError(message:"分析不能覆盖原始恢复记录。")}
+        let data=try Data(contentsOf:input);guard data.count<=3_000_000 else{throw HardwareError(message:"灯效恢复记录超过 3 MB。")}
+        let record=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data),review=try record.assess()
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:output,options:.atomic)
+        print("PASS: lighting recovery record assessed offline; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--review-official-lighting-trace") {
     do{
         let args=CommandLine.arguments

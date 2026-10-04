@@ -316,6 +316,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("导入到编辑区，或把当前配置保存成文件。",13),8,52,850,26,in:files)
         place(button("导入配置…",#selector(importProfile)),8,94,180,32,in:files)
         place(button("导出配置…",#selector(exportProfile)),208,94,180,32,in:files)
+        place(button("检查灯效恢复记录…",#selector(inspectLightingRecovery)),708,94,190,32,in:files)
         #if CHERRY_MACRO_PRODUCT
         place(button("导出 Windows 配置草稿…",#selector(exportWindowsProfile)),408,94,280,32,in:files)
         #else
