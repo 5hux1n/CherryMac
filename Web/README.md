@@ -4,7 +4,7 @@
 
 ## 在线使用
 
-打开 [CherryMac 键盘配置](https://cherrymac.goforit.si/)，使用 Chrome 或 Edge 直接编辑配置、连接 USB 键盘。网页由原有 PHP 模板在构建时生成静态文件，运行时无需 PHP。所有设备操作仍需浏览器授权和页面确认。
+打开 [CherryMac 键盘配置](https://cherrymac.goforit.si/app/)，使用 Chrome 或 Edge 直接编辑配置、连接 USB 键盘。网页由原有 PHP 模板在构建时生成静态文件，运行时无需 PHP。所有设备操作仍需浏览器授权和页面确认。
 
 推送 `Web/` 更新后，GitHub Actions 自动构建并发布真实网页应用。静态构建命令：`python3 Web/build-static.py`。未设置开发预览环境变量时沿用源码默认功能开关。
 
