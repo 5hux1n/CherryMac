@@ -1097,19 +1097,27 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             }
         }catch{message.stringValue=error.localizedDescription}
     }
-    @objc func exportProfile(){guard let p=profile else{message.stringValue="请先读取或导入配置。";return};let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json";panel.beginSheetModal(for:window!){[weak self] result in guard result == .OK,let url=panel.url else{return};do{try p.encoded().write(to:url,options:.atomic);self?.message.stringValue="配置已导出。"}catch{self?.message.stringValue=error.localizedDescription}}}
+    @objc func exportProfile(){
+        guard var p=profile else{message.stringValue="请先读取或导入配置。";return}
+        #if CHERRY_MACRO_PRODUCT
+        p.hostTextJSON=hostTextJSON.map{String(decoding:$0,as:UTF8.self)}
+        #endif
+        do{
+            let data=try p.encoded(),panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-键盘配置.json"
+            panel.beginSheetModal(for:window!){[weak self] result in
+                guard result == .OK,let url=panel.url else{return}
+                do{try data.write(to:url,options:.atomic);self?.message.stringValue="配置已导出，包含选中的文本定义；文本恢复记录需在文本页另行导出。"}catch{self?.message.stringValue=error.localizedDescription}
+            }
+        }catch{message.stringValue=error.localizedDescription}
+    }
     func loadImport(_ data:Data)throws {
         guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}
         guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")}
         let next:HardwareProfile;let summary:String
-        #if CHERRY_MACRO_PRODUCT
-        var importedText:Data?
-        #endif
         if WindowsProfile.isOfficial(data){
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
             #if CHERRY_MACRO_PRODUCT
             let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true)
-            if imported.deferredTextCount>0{importedText=data}
             #else
             let imported=try WindowsProfile.decode(data,baseline:baseline)
             #endif
@@ -1117,7 +1125,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}
         suspendHostTextForConfiguration()
         #if CHERRY_MACRO_PRODUCT
-        if let importedText{hostTextJSON=importedText;hostTextFile.stringValue="导入的混合配置 · 文本绑定待安装"}
+        hostTextJSON=next.hostTextJSON.map{Data($0.utf8)}
+        hostTextFile.stringValue=hostTextJSON==nil ? "本配置未包含文本定义":"导入的文本定义 · 仅载入，尚未安装或启用"
         #endif
         profile=next;recordingPreference=nil;message.stringValue=summary;loadLighting();refreshMacroPicker();loadSelectedAssignment();update()
     }

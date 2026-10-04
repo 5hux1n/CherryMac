@@ -1209,6 +1209,14 @@ if CommandLine.arguments.contains("--macro-editor-self-test"){
     runMacroEditorChecks();exit(0)
 }
 #endif
+if let index=CommandLine.arguments.firstIndex(of:"--portable-profile-roundtrip") {
+    do{
+        guard CommandLine.arguments.count==index+3 else{throw HardwareError(message:"需要输入和输出配置路径。")}
+        let profile=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index+1])))
+        try profile.encoded().write(to:URL(fileURLWithPath:CommandLine.arguments[index+2]),options:.atomic)
+        print("PASS: portable profile decode/encode only; no HID, permissions or services");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {

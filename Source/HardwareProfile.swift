@@ -53,10 +53,13 @@ struct HardwareProfile: Codable, Equatable {
     var macroModes:[Int:MacroPlayback]? = nil
     // Original official document, retained locally for lossless unknown fields.
     var windowsTemplateJSON:String? = nil
+    // Portable host draft only; importing never installs or enables text input.
+    var hostTextJSON:String? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
+        if let hostTextJSON{_ = try WindowsProfile.validateHostTextDefinition(Data(hostTextJSON.utf8))}
         for macro in macros { try macro.validate(); _ = try WindowsProfile.macroSource(self,macro:macro) }
         guard Set(macros.map { $0.name }).count == macros.count else { throw HardwareError(message: "宏名称不能重复。") }
         for (slot,playback) in macroModes ?? [:]{
@@ -200,7 +203,8 @@ struct HardwareProfile: Codable, Equatable {
     }
     func encoded() throws -> Data {
         try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]
-        return try encoder.encode(self)
+        let data=try encoder.encode(self)
+        guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB，请精简文本或分别导出。")};return data
     }
 }
 

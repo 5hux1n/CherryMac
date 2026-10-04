@@ -1239,6 +1239,14 @@ func runMixedOfficialImportChecks(){
     precondition(imported.profile.snapshot.keymap[306..<309]==baseline.keymap[306..<309])
     precondition(imported.profile.macroBindings?[102]==(try! HardwareProfile.fromHardware(baseline)).macroBindings?[102] && imported.profile.macroModes?[102]==original.macroModes?[102])
     precondition(imported.profile.macroBindings?[WindowsProfile.physicalSlot(WindowsProfile.defaults[0])!]==new.name)
+    precondition(imported.profile.hostTextJSON==imported.profile.windowsTemplateJSON)
+    let portable=try! imported.profile.encoded(),decoded=try! HardwareProfile.decode(portable)
+    precondition(decoded==imported.profile)
+    var legacyProfile=imported.profile;legacyProfile.hostTextJSON=nil
+    precondition(try! HardwareProfile.decode(legacyProfile.encoded()).hostTextJSON==nil)
+    var brokenText=root,brokenKeys=keys;brokenKeys[17]["ActionLinkIndex"]=999;brokenText["KeyList"]=brokenKeys
+    var brokenProfile=imported.profile;brokenProfile.hostTextJSON=String(decoding:try! JSONSerialization.data(withJSONObject:brokenText),as:UTF8.self)
+    rejected{_ = try brokenProfile.encoded()}
     let retained=try! WindowsProfile.templateRoot(Data(imported.profile.windowsTemplateJSON!.utf8))
     precondition((retained["ActionInfo"] as! [[String:Any]])[0]["ActionTextFlag"] as! Int==1)
     var text=root,textActions=text["ActionInfo"] as! [[String:Any]]

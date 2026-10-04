@@ -36,7 +36,7 @@ manifest = {'format': 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'lightingWrite': False}, 'files': files}
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingWrite': False}, 'files': files}
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
 
@@ -56,7 +56,7 @@ readme = '''# CherryMac 宏与文本预览
 
 “配置与备份”可导入同时包含键位、宏和文本的 Windows 官方 JSON：键位和宏进入编辑区，文本定义进入文本页；文本键保留当前键盘功能，需要单独安装。“导出 Windows 键位、宏与文本”会合并宏编辑和文本页当前定义，保留共享引用与附加字段。同一键若同时有普通键位修改和文本绑定，会提示先解除冲突；导入、导出都不会自动写入。
 
-灯效和设备设置在 Windows 导出中沿用最初导入模板。普通 CherryMac 配置导出不包含完整主机文本状态；请同时保存文本定义与恢复记录，或使用上述 Windows 合并导出保存编辑结果。
+灯效和设备设置在 Windows 导出中沿用最初导入模板。普通 CherryMac 配置导出已包含文本页选中的草稿，可在两端离线导入；安装版本与恢复记录仍需在文本页另行导出。导入只载入草稿，不写键盘、不覆盖安装记录、不启用输入服务。旧配置不含文本时会清空选中的文本草稿，已保存安装记录保留。
 
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
 '''.encode()

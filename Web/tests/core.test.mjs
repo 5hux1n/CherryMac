@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -890,4 +890,18 @@ test('mixed official export remaps shared text and macro actions and rejects con
   const removed=clone(text);removed.KeyList[17].ActionLink=0;removed.KeyList[17].ActionLinkIndex=-1;assert.throws(()=>exportWindowsKeysMacrosAndText(installed,root,removed,baseline),/缺少当前文本定义/);
   const malformed=clone(text);malformed.KeyList[17].ActionLinkIndex=999;assert.throws(()=>exportWindowsKeysMacrosAndText(p,root,malformed,baseline));
   assert.deepEqual({p,root,text,baseline},before);
+});
+
+test('portable profiles retain host text drafts offline and reject invalid references',()=>{
+  const root=windowsFixture();root.ActionInfo=[{ActionType:'03',ActionName:'中文',ActionTextFlag:1,ActionContent:{ActionText:'中😀\r\n'}}];
+  root.KeyList[17].ActionLink='01';root.KeyList[17].ActionLinkIndex='0';
+  assert.equal(validateHostTextDefinition(root),1);
+  const p=importWindows(root,demoSnapshot(),{deferHostText:true});assert.deepEqual(JSON.parse(p.hostTextJSON),root);
+  assert.deepEqual(parseProfile(JSON.stringify(p)),p);
+  const raw={format:'CherryMacProfile',version:1,snapshot:demoSnapshot(),macros:[],hostTextJSON:JSON.stringify(root)};
+  assert.equal(parseProfile(JSON.stringify(raw)).hostTextJSON,raw.hostTextJSON);
+  const old=fromHardware(demoSnapshot());assert.equal(parseProfile(JSON.stringify(old)).hostTextJSON,undefined);
+  const bad=clone(p),broken=clone(root);broken.KeyList[17].ActionLinkIndex=999;bad.hostTextJSON=JSON.stringify(broken);
+  assert.throws(()=>parseProfile(JSON.stringify(bad)),/ActionLinkIndex|引用/);assert.equal(JSON.parse(p.hostTextJSON).KeyList[17].ActionLinkIndex,'0');
+  bad.hostTextJSON=17;assert.throws(()=>parseProfile(JSON.stringify(bad)),/文本/);
 });

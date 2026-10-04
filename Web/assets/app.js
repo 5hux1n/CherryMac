@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -133,13 +133,14 @@ $('file').onchange=()=>operation(async()=>{
   const file=$('file').files[0];$('file').value='';if(!file)return;
   requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');
   const raw=await file.text(),root=JSON.parse(raw),p=parseProfile(raw,baseline,{deferHostText:textProduct});
-  const mixed=textProduct&&Array.isArray(root.KeyList)&&root.KeyList.some(k=>k.ActionLink===1&&root.ActionInfo?.[k.ActionLinkIndex]?.ActionType===3);
+  const mixed=textProduct&&typeof p.hostTextJSON==='string';
   // Both parsers validate before replacing either editor. No HID writes here.
-  if(mixed)selectImportedText(root,file.name);
+  if(mixed)selectImportedText(JSON.parse(p.hostTextJSON),file.name);
+  else if(textProduct){textRoot=null;$('text-summary').textContent='本配置未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
   profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
 });
-$('export').onclick=()=>act(()=>{validateProfile(profile);download(profile,'CherryMac-profile.json');status('已导出当前编辑配置。');});
+$('export').onclick=()=>act(()=>{const output=clone(profile);if(textProduct){delete output.hostTextJSON;if(textRoot!==null)output.hostTextJSON=JSON.stringify(textRoot);}validateProfile(output);requireThat(new TextEncoder().encode(JSON.stringify(output,null,2)).length<=3_000_000,'配置文件超过 3 MB，请精简文本或分别导出。');download(output,'CherryMac-profile.json');status('配置已导出，包含选中的文本定义；文本恢复记录需在文本页另行导出。');});
 $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const template=JSON.parse(profile.windowsTemplateJSON),mixed=textProduct&&textRoot!==null;const output=mixed?exportWindowsKeysMacrosAndText(profile,template,textRoot,baseline):exportWindowsKeysAndMacros(profile,template);download(output,mixed?'CHERRY-keys-macros-text.json':'CHERRY-keys-macros.json');status(mixed?'已合并导出 Windows 格式键位、宏与文本；灯效和设备设置沿用导入模板。':'已导出 Windows 格式键位与宏；灯效和设备设置沿用导入模板。');});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(record.snapshot,`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=safeProfile(record.snapshot);refreshMacros();loadMacro();loadPlayback();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
 $('diagnostics').onclick=()=>operation(async()=>{
@@ -223,9 +224,7 @@ if(textProduct){
     });
   };
   function selectTextConfiguration(root,name){
-    prepareHostTextBindings(root,Array(378).fill(0),Array(378).fill(0));
-    let count=0;
-    for(const action of root.ActionInfo){requireThat(Number.isInteger(action.ActionType)&&action.ActionType>=0&&action.ActionType<=4,'Windows 动作类型无效。');if(action.ActionType===3&&officialHostTextPlan(action).marker!==null)count++;}
+    const count=validateHostTextDefinition(root);
     textRoot=clone(root);$('text-summary').textContent=`${name} · ${count} 个文本动作。准备安装时读取默认表并显示实体键。`;$('text-bindings').replaceChildren();
   }
   selectImportedText=selectTextConfiguration;

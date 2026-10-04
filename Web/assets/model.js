@@ -202,6 +202,7 @@ export function fromHardware(snapshot){
 export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
+  if(p.hostTextJSON!=null){requireThat(typeof p.hostTextJSON==='string','文本配置定义无效。');validateHostTextDefinition(JSON.parse(p.hostTextJSON));}
   p.macros.forEach(m=>officialMacroSource(p,m));
   requireThat(new Set(p.macros.map(m=>macroNameKey(m.name))).size===p.macros.length,'宏名称不能重复。');
   if(p.macroModes!=null){requireThat(typeof p.macroModes==='object'&&!Array.isArray(p.macroModes),'宏执行方式结构无效。');for(const [slot,playback] of Object.entries(p.macroModes)){requireThat(Object.hasOwn(p.macroBindings??{},slot),'宏执行方式缺少对应绑定。');validatePlayback(playback);}}
@@ -219,7 +220,7 @@ export function parseProfile(text,baseline,options={}){
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
-  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;return editable;}catch{}}
+  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;return editable;}catch{}}
   if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
@@ -314,6 +315,14 @@ export function exportWindowsKeysAndMacros(profile,template,{preservingTextIndic
   encodeBank(emitted);root.ActionInfo=actions;
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
 }
+// Portable draft validation does not require a connected keyboard.
+export function validateHostTextDefinition(root){
+  validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
+  requireThat(Array.isArray(root.ActionInfo),'文本配置缺少动作列表。');let count=0;
+  for(const action of root.ActionInfo)if(winInt(action?.ActionType,'ActionType',0,4)===3){officialHostTextPlan(action);count++;}
+  for(const key of root.KeyList)if(winInt(key.ActionLink??0,'ActionLink',0,1)===1){const index=winInt(key.ActionLinkIndex,'ActionLinkIndex',0,Math.max(0,root.ActionInfo.length-1));requireThat(root.ActionInfo[index],'文本配置动作引用无效。');}
+  return count;
+}
 export function exportWindowsKeysMacrosAndText(profile,template,textConfiguration,baseline){
   validateSnapshot(baseline,true);const snapshot=resolveMacros(profile),root=clone(template),text=clone(textConfiguration);
   for(const value of [root,text])validateWindowsTemplate(value,new TextEncoder().encode(JSON.stringify(value)).length);
@@ -341,7 +350,7 @@ export function importWindows(root,baseline,{deferHostText=false}={}){
   const p=fromHardware(baseline),old=clone(p.macroBindings),actions=root.ActionInfo??[],imported=new Map(),physical=new Set(WINDOWS_DEFAULTS.map(physicalSlot));
   p.windowsTemplateJSON=JSON.stringify(root);
   const oldModes=clone(p.macroModes??{});
-  if(deferHostText)for(const action of actions){const type=winInt(action?.ActionType,'ActionType',0,4);if(type===3)officialHostTextPlan(action);}
+  if(deferHostText&&validateHostTextDefinition(root)>0)p.hostTextJSON=p.windowsTemplateJSON;
   p.macroBindings=Object.fromEntries(Object.entries(old).filter(([slot])=>!physical.has(Number(slot))));
   p.macroModes=Object.fromEntries(Object.entries(p.macroModes??{}).filter(([slot])=>!physical.has(Number(slot))));
   const record=v=>{v=winInt(v,'按键动作',0,0xffffff);const b=[v>>16,(v>>8)&255,v&255];requireThat([0x20,0x30].includes(b[0]),'不支持此 Windows 按键动作。');return b;};

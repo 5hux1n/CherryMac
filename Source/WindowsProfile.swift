@@ -251,6 +251,22 @@ enum WindowsProfile {
         _ = try systemStageWords(root)
         return root
     }
+    // Validate a portable text draft without a factory read or installed marker.
+    static func validateHostTextDefinition(_ data:Data)throws->Int {
+        let root=try templateRoot(data)
+        guard let actions=root["ActionInfo"] as? [[String:Any]] else{throw HardwareError(message:"文本配置缺少动作列表。")}
+        var count=0
+        for action in actions {
+            if try integer(action["ActionType"],"ActionType",range:0...4)==3 {_ = try HostTextPlan(action:action);count+=1}
+        }
+        for key in root["KeyList"] as! [[String:Any]] {
+            if try integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==1 {
+                let index=try integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
+                guard actions.indices.contains(index) else{throw HardwareError(message:"文本配置动作引用无效。")}
+            }
+        }
+        return count
+    }
     // ActionInfo serializer shared by the forthcoming full-document exporter.
     // An explicit key binding takes precedence over the library preference.
     static func macroAction(_ macro:KeyboardMacro,playback:MacroPlayback?=nil)throws->[String:Any] {
@@ -412,12 +428,7 @@ enum WindowsProfile {
         var result=try HardwareProfile.fromHardware(baseline)
         result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
         let oldBindings=result.macroBindings ?? [:],oldModes=result.macroModes ?? [:]
-        if deferHostText {
-            for action in actions {
-                let type=try integer(action["ActionType"],"ActionType",range:0...4)
-                if type==3 {_ = try HostTextPlan(action:action)}
-            }
-        }
+        if deferHostText,try validateHostTextDefinition(data)>0 {result.hostTextJSON=result.windowsTemplateJSON}
         let physicalSlots=Set(defaults.compactMap{physicalSlot($0)})
         // Replace the imported physical bindings while preserving any raw hidden data.
         result.macroBindings=oldBindings.filter{!physicalSlots.contains($0.key)}
