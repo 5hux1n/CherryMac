@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the supplied Utility's fallback lighting parameter sequence; no execution or HID."""
+"""Audit supplied Utility lighting parameter/color paths; no execution or HID."""
 import argparse
 import hashlib
 import importlib.util
@@ -107,6 +107,110 @@ def audit_selector(pe, selector=0x1CE):
             'limits': 'Conditional decision-table audit only. The source of the live object field and its equivalence to USB PID remain unproven; this is not a trace of device execution.'}
 
 
+COLOR_CHECKS = {
+    0x501210: "83b84022000000",
+    0x501217: "0f842c070000",
+    0x501288: "81c138210000",
+    0x50128E: "e85da6fbff",
+    0x5012B1: "6bc203",
+    0x5012F5: "0fb64003",
+    0x5012F9: "0faff0",
+    0x50130A: "c1f908",
+    0x501317: "888c05d0fdffff",
+    0x501354: "0fb64003",
+    0x501358: "0faff0",
+    0x501369: "c1f908",
+    0x501376: "888c05d1fdffff",
+    0x5013B3: "0fb64003",
+    0x5013B7: "0faff0",
+    0x5013C8: "c1f908",
+    0x5013D5: "888c05d2fdffff",
+    0x50184D: "83ba840a000000",
+    0x501854: "7411",
+    0x501862: "e84986fdff",
+    0x50186D: "0fb7881a1e0000",
+    0x501874: "81f9da010000",
+    0x50187A: "743e",
+    0x501889: "3de6010000",
+    0x50188E: "742a",
+    0x50189D: "81faef010000",
+    0x5018A3: "7415",
+    0x5018B2: "81f94c010000",
+    0x5018B8: "753d",
+    0x5018F7: "8b5508",
+    0x5018FA: "c1e209",
+    0x50190A: "e8c1a7fbff",
+    0x50190F: "6bc003",
+    0x501926: "e8b5b4fdff",
+    0x50192B: "8985b4fdffff",
+    0x501931: "6a01",
+    0x50193F: "e89c87fdff",
+    0x501944: "e9f4030000",
+    0x501D3D: "83bdb4fdffff01",
+    0x501D44: "740b",
+    0x501D46: "68c8000000",
+    0x501D4B: "ff15f4bc6e00",
+    0x4DCE25: "c64405bc04",
+    0x4DCE34: "83fa01",
+    0x4DCE37: "750f",
+    0x4DCE41: "c6440dbc8b",
+    0x4DCE50: "c64405bc0b",
+    0x4DCE79: "c64405bc00",
+    0x4DCE90: "0fb69190060000",
+    0x4DCEFC: "884c05bc",
+    0x4DCF06: "034510",
+    0x4DCF1A: "88540dbc",
+    0x4DCF24: "035510",
+    0x4DCF27: "c1ea08",
+    0x4DCF32: "88540dbc",
+    0x4DCF54: "e8c79d1a00",
+    0x4DCF81: "83bd70ffffff40",
+    0x4DCF95: "03956cffffff",
+    0x4DD000: "e87bc3ffff",
+    0x4DD028: "83bd64ffffff01",
+    0x4DD049: "81faff000000",
+    0x4DD068: "81fafe000000",
+    0x4B198D: "8b82bc020000",
+    0x4B1993: "ffd0",
+    0x4B199C: "e88fad0300",
+    0x4B19A5: "83fa15",
+    0x4B19A8: "751f",
+    0x4B19C1: "8b82c4020000",
+    0x4B19C7: "ffd0",
+}
+
+
+def audit_colors(pe):
+    if pe.pointer(0x77F604 + 0x2C4) != 0x501190:
+        raise ValueError('Unexpected color virtual method')
+    for address, encoded in COLOR_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected color instruction at {address:#x}')
+    return {
+        'method': '0x501190', 'helper': '0x4dcde0', 'instructionChecks': len(COLOR_CHECKS),
+        'scope': 'Main RGB-table path requires object+0x2240 != 0. Alternate path and live field initialization remain unverified.',
+        'buffer': {'mappingLookup': 'object+0x2138; lookup helper 0x4bb8f0',
+                   'rgb': 'buffer[mappedIndex*3+channel] = (component*fourthColorByte) >> 8',
+                   'limits': 'Fourth in-memory color byte; JSON Alpha linkage not yet established. Do not use this as a profile conversion rule.'},
+        'conditionalBank': {'objectField': 'word at object+0x1e1a',
+                            'specialValues': ['0x01da', '0x01e6', '0x01ef', '0x014c'],
+                            'otherBankBase': 'caller argument << 9',
+                            'length': 'mapping container size returned by 0x4bc0d0 multiplied by 3'},
+        'sequence': ['optional begin 0x4d9eb0 when object+0xa84 != 0',
+                     'color helper 0x4dcde0', 'finish 0x4da0e0 with argument 1'],
+        'helperReport': {'reportID': 4, 'command': '0x8b for transport selector 1; 0x0b otherwise',
+                         'flagByte7': 0, 'lengthByte': 4, 'offsetBytesLittleEndian': [5, 6],
+                         'payloadStart': 8, 'chunkCapacity': 'object+0x690',
+                         'checksum': 'sum report bytes 3 through 63 into bytes 1 and 2'},
+        'helperFailure': 'Returns exchange failure or FF/FE reply status failure before continuing the next chunk.',
+        'callerFailure': 'Stores color result, still calls finish, waits 200 ms on color failure, then returns zero; finish result is not checked here.',
+        'observedStaticCaller': {'method': '0x4b1930',
+                                'order': ['parameter virtual +0x2bc', 'color virtual +0x2c4 only when getter first byte equals 21'],
+                                'limits': 'One static call site, not proof of every UI path or actual execution. Its parameter getter field identity is not fully traced.'},
+        'limits': 'Static evidence only. No actual mapping, bank argument, timing, packets or incident cause established. No device accessed.'}
+
+
 def cstring(pe, address):
     result = bytearray()
     for offset in range(256):
@@ -160,6 +264,7 @@ def audit_sequence(pe):
         'format': 'CherryMacStaticLightingSequence', 'version': 1,
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
         'selectorAudit': audit_selector(pe),
+        'colorAudit': audit_colors(pe),
         'bankBase': 'caller argument << 6',
         'tailField': {'jsonKey': 'LightOpenFlag', 'getter': '0x47ade0', 'getterStructByte': 11, 'parameterByte': 21, 'limits': 'Field origin only; physical on/off semantics and accepted values are not proven'},
         'optionalBegin': {'guard': 'object+0xa84 != 0', 'helper': '0x4d9eb0'},
@@ -172,7 +277,7 @@ def audit_sequence(pe):
         'finish': {'helper': '0x4da0e0', 'command': '0x82 for selector 1; 0x02 otherwise',
                    'delayBeforeExchangeMilliseconds': 10, 'delayImport': f'{dll}!{function}'},
         'failureObservation': '4dd640 checks exchange result and reply statuses FF/FE; the high-level fallback caller does not branch on each returned result',
-        'limits': 'Only the fixed executable fallback branch. Does not establish the live object selector, caller bank argument, actual USB packets/timing, color-write ordering, firmware semantics or incident cause. No packets generated or sent.',
+        'limits': 'Only the fixed executable fallback branch. Does not establish the live object selector, caller bank argument, actual USB packets/timing, all UI write ordering, firmware semantics or incident cause. No packets generated or sent.',
     }
 
 

@@ -26,6 +26,9 @@ class MemoryPE:
         for address, encoded in audit.CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
 
+        self.put(0x77F604 + 0x2C4, struct.pack('<I', 0x501190))
+        for address, encoded in audit.COLOR_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
         for address, load, compare, jump in audit.PREDICATES:
             self.put(address - 7, bytes.fromhex(load))
             self.put(address, bytes.fromhex(compare))
@@ -75,6 +78,26 @@ class LightingAuditTests(unittest.TestCase):
             pe.put(address, b'\x90')
             with self.assertRaisesRegex(ValueError, 'selector instruction'):
                 audit.audit_sequence(pe)
+
+    def test_color_layout_and_static_call_order(self):
+        result = audit.audit_colors(MemoryPE())
+        self.assertEqual(result['method'], '0x501190')
+        self.assertEqual(result['helperReport']['flagByte7'], 0)
+        self.assertEqual(result['helperReport']['offsetBytesLittleEndian'], [5, 6])
+        self.assertEqual(result['conditionalBank']['otherBankBase'], 'caller argument << 9')
+        self.assertEqual(result['observedStaticCaller']['order'][0], 'parameter virtual +0x2bc')
+        self.assertIn('fourthColorByte', result['buffer']['rgb'])
+
+    def test_changed_color_bank_checksum_and_caller_rejected(self):
+        for address in (0x5018FA, 0x4DCF95, 0x4B19C1):
+            pe = MemoryPE()
+            pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'color instruction'):
+                audit.audit_sequence(pe)
+        pe = MemoryPE()
+        pe.put(0x77F604 + 0x2C4, struct.pack('<I', 0x500790))
+        with self.assertRaisesRegex(ValueError, 'color virtual'):
+            audit.audit_colors(pe)
 
     def test_changed_instruction_rejected(self):
         pe = MemoryPE()
