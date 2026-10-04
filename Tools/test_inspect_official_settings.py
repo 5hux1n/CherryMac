@@ -28,6 +28,17 @@ def fixture():
 
 
 class AuditTests(unittest.TestCase):
+    def test_selected_dialog_polling_order_and_legacy_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'KbBasicSetWnd.xml'
+            body = ''.join('<Option style="a" style="b" name="polling_rate_option_' + str(i) + '" text="' + str(hz) + 'Hz" visible="' + ('true' if i<4 else 'false') + '"/>' for i,hz in enumerate([125,250,500,1000,2000,4000,8000]))
+            source = '<Window><!--<Option name="polling_rate_option_0" text="1000Hz"/>-->' + body + '</Window>';path.write_text(source)
+            result = audit.inspect_basic_settings_dialog(directory)
+            self.assertEqual([p['labelHz'] for p in result['pollingControls'][:4]], [125,250,500,1000])
+            for text in [source.replace('text="125Hz"', 'text="1000Hz"'),source.replace('</Window>', '<Option name="winlockflag_option"/></Window>')]:
+                path.write_text(text)
+                with self.assertRaises(ValueError):audit.inspect_basic_settings_dialog(directory)
+
     def test_selected_system_paths_reject_altered_fields_or_calls(self):
         class MemoryPE:
             def __init__(self):

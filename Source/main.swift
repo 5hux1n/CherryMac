@@ -1217,6 +1217,17 @@ if let index=CommandLine.arguments.firstIndex(of:"--portable-profile-roundtrip")
         print("PASS: portable profile decode/encode only; no HID, permissions or services");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--edit-official-polling-draft") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+4,let selection=Int(args[index+2])else{throw HardwareError(message:"需要官方 JSON、回报率索引和输出路径。")}
+        let input=URL(fileURLWithPath:args[index+1]),output=URL(fileURLWithPath:args[index+3])
+        guard input.standardizedFileURL.resolvingSymlinksInPath() != output.standardizedFileURL.resolvingSymlinksInPath() else{throw HardwareError(message:"不能覆盖输入配置。")}
+        let data=try Data(contentsOf:input);guard data.count<=1_000_000 else{throw HardwareError(message:"官方配置超过 1 MB。")}
+        try WindowsProfile.encodePollingDraft(data,index:selection).write(to:output,options:.atomic)
+        print("PASS: official polling draft file only; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-draft") {
     do{
         let args=CommandLine.arguments

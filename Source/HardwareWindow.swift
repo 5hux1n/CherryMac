@@ -343,6 +343,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let scopeDescription="仅开放按键写入，自动备份、逐包检查释放并完整读回。灯效与宏写入暂缓。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。"
         #endif
         place(label(scopeDescription,13),8,148,850,70,in:device)
+        place(button("编辑官方回报率草稿…",#selector(editPollingDraft)),465,253,230,32,in:device)
         place(button("打开操作日志",#selector(openLogs)),261,253,180,32,in:device)
         place(button("Mac 端按键适配设置",#selector(openMacSettings)),8,253,230,32,in:device)
         place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。",12),8,299,850,36,in:device)
@@ -1079,6 +1080,18 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func clearMacros(){guard var p=profile else{return};do{try p.clearMacros();profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。"}catch{message.stringValue=error.localizedDescription}}
     @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key) else{return};do{try p.unassignMacro(from:slot);profile=p;loadSelectedAssignment();update();message.stringValue="已解除 \(key.label) 的宏绑定并设为禁用；宏库保留，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func editPollingDraft(){
+        guard !busy else{return}
+        do{
+            guard var draft=profile,let template=draft.windowsTemplateJSON,let words=try WindowsProfile.systemStageWords(WindowsProfile.templateRoot(Data(template.utf8)))else{throw HardwareError(message:"请先导入包含设备设置的 Windows 官方 JSON。")}
+            let picker=NSPopUpButton(frame:NSRect(x:0,y:0,width:300,height:28));picker.addItems(withTitles:["125 Hz","250 Hz","500 Hz","1000 Hz"])
+            if words[3]<=3{picker.selectItem(at:Int(words[3]))}else{picker.addItem(withTitle:"保留原值（\(words[3])）");picker.selectItem(at:4)}
+            let alert=NSAlert();alert.messageText="官方回报率草稿";alert.informativeText="只修改官方配置文件里的 USB 回报率。保存后可在配置与备份导出；尚未写入键盘。无线回报率及其他设备设置沿用模板。";alert.accessoryView=picker;alert.addButton(withTitle:"保存草稿");alert.addButton(withTitle:"取消")
+            guard alert.runModal()==NSApplication.ModalResponse.alertFirstButtonReturn,picker.indexOfSelectedItem<4 else{return}
+            let data=try WindowsProfile.encodePollingDraft(Data(template.utf8),index:picker.indexOfSelectedItem);draft.windowsTemplateJSON=String(decoding:data,as:UTF8.self);try draft.validate();profile=draft
+            message.stringValue="回报率已保存到官方配置草稿，尚未写入键盘。";update()
+        }catch{message.stringValue=error.localizedDescription}
+    }
     @objc func exportWindowsProfile(){
         guard !busy,let p=profile else{message.stringValue="请先读取或导入配置。";return}
         do{

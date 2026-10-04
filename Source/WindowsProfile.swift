@@ -228,6 +228,15 @@ enum WindowsProfile {
         guard let stages=value as? [String:Any] else{throw HardwareError(message:"Windows SystemStages 结构无效。")}
         return try systemStageFields.map{UInt16(try integer(stages[$0],$0,range:0...65535))}
     }
+    // KbBasicSetWnd index -> SystemStages.ReportSelectItem, file only.
+    static func encodePollingDraft(_ data:Data,index:Int)throws->Data {
+        guard (0...3).contains(index)else{throw HardwareError(message:"本型号官方草稿回报率只支持 125、250、500、1000 Hz。")}
+        var root=try templateRoot(data)
+        guard try systemStageWords(root) != nil,var stages=root["SystemStages"] as? [String:Any]else{throw HardwareError(message:"请先导入包含设备设置的 Windows 官方 JSON。")}
+        stages["ReportSelectItem"]=index;root["SystemStages"]=stages
+        let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
+        guard output.count<=1_000_000 else{throw HardwareError(message:"官方配置草稿超过 1 MB。")};return output
+    }
     struct Imported {
         let profile:HardwareProfile
         let keyCount:Int

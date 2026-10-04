@@ -13,7 +13,7 @@ root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) != 2:
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY')
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.18.0'
+version = '0.19.0'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
     raise SystemExit('Cannot determine source version')
@@ -66,10 +66,12 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 本包不含研究测试页面，也没有启动真机测试。请等统一验收安排后再进行写入测试。
 
 灯效页的“核对灯效写入”仅生成本地计划，不写入键盘。自定义配色核对和 Windows 草稿导出需要明确的官方原始 RGB；直接读回或来源未知的颜色不能直接转为原始配色。内置灯效遇到读回颜色时保留官方模板里的逐键配色。
+
+在“设备与诊断”可编辑官方 USB 回报率草稿，支持 125、250、500、1000 Hz。先导入包含设备设置的 Windows 官方 JSON，保存草稿后在“配置与备份”导出。这里只更新文件，尚未写入键盘；无线回报率和其他设备设置沿用模板。
 '''.encode()
 manifest = {'format': 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True},
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'officialPollingDraft': True},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 prefix = f'CherryMac-Web-MacroPreview-{version}/'

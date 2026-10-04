@@ -117,6 +117,18 @@ def initialized_words(pe, start, end, destination):
 
 
 SYSTEM_DEVICE_CHECKS = {
+    0x4AEDF1: "680c027600",          # KbBasicSetWnd.xml
+    0x4AEDDC: "e84fcb0400",          # initial settings getter
+    0x4AF14D: "e82ea2f7ff",          # normal polling UI setup
+    0x4AF16B: "e880a5f7ff",          # populate selected report index
+    0x4AFA7A: "e8c19df7ff",          # read edited polling index
+    0x42984A: "8b806c0a0000",        # selected-index getter
+    0x4AFF1F: "e80cba0400",          # refresh seven-word settings
+    0x4AFFF4: "668945e6",            # ordinary branch ReportSelectItem
+    0x4B001C: "e89fb80400",          # save settings JSON
+    0x4B002F: "8b8200030000",        # profile save virtual +0x300
+    0x4B0045: "8b8230020000",        # device virtual +0x230
+    0x4B007F: "8b82bc020000",        # parameter send virtual +0x2bc
     0x4FB8C0: "558bec",              # selected seven-word device setter
     0x4FB8CA: "05e03f0000",          # in-memory seven-word structure
     0x4FB8D2: "8908",
@@ -202,6 +214,27 @@ def inspect_settings_resources(skin):
     return {"resourceSHA256": hashlib.sha256(data).hexdigest(), "controls": required,
             "repeatSliderRange": [0, 31], "pollingControlLabelsHz": [1000, 500, 250, 125],
             "limits": "Static resource declarations only; runtime visibility, JSON bindings and hardware write path require separate evidence."}
+
+
+def inspect_basic_settings_dialog(skin):
+    path = Path(skin) / "KbBasicSetWnd.xml";data = path.read_bytes()
+    if len(data) > 500_000:
+        raise ValueError("Basic settings resource exceeds audit bounds")
+    text = re.sub(r"<!--.*?-->", "", data.decode("utf-8"), flags=re.S)
+    controls = {}
+    for tag in re.finditer(r"<([A-Za-z_][A-Za-z_0-9:]*)\b([^<>]*)>", text):
+        attrs = dict(re.findall(r'\b([A-Za-z_][A-Za-z_0-9]*)="([^"<>]*)"', tag[2]))
+        if "name" in attrs:controls.setdefault(attrs["name"], []).append((tag[1],attrs))
+    labels = []
+    for index,hz in enumerate([125,250,500,1000,2000,4000,8000]):
+        nodes = controls.get("polling_rate_option_" + str(index), [])
+        if len(nodes) != 1 or nodes[0][0] != "Option" or nodes[0][1].get("text") != str(hz)+"Hz":
+            raise ValueError("Unexpected basic polling control")
+        labels.append({"index": index, "labelHz": hz, "declaredVisible": nodes[0][1].get("visible", "true") != "false"})
+    legacy = [name for name in controls if name in ["winlockflag_option", "wflag_option", "6flag_option"] or name.startswith("repeat_delay_check_")]
+    if legacy:raise ValueError("Unexpected legacy settings controls in selected dialog")
+    return {"resourceSHA256": hashlib.sha256(data).hexdigest(), "resource": "KbBasicSetWnd.xml", "pollingControls": labels,
+            "legacyControlNamesPresent": legacy, "limits": "Declared visibility only; later UI changes and firmware setting support are not inferred."}
 
 
 def inspect_macro_resources(skin):
@@ -395,7 +428,7 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 4,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 5,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -417,6 +450,7 @@ def inspect(path, skin=None, macro_ui=False):
     if skin is not None:
         result["modelResource"] = inspect_model_resources(skin)
         result["settingsResource"] = inspect_settings_resources(skin)
+        result["basicSettingsDialog"] = inspect_basic_settings_dialog(skin)
     if macro_ui:
         if skin is None:
             raise ValueError("Macro UI audit requires --skin")

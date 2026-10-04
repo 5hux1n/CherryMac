@@ -373,6 +373,11 @@ export function exportWindowsKeysMacrosAndText(profile,template,textConfiguratio
 }
 // File-only conversion; unknown light fields and unmapped colors survive.
 // A profile-aware export preserves the distinction between raw and stored RGB.
+export function officialPollingDraft(template,index){
+  const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);requireThat(Number.isInteger(index)&&index>=0&&index<=3,'本型号官方草稿回报率只支持 125、250、500、1000 Hz。');
+  requireThat(officialSystemStageWords(root)!=null,'请先导入包含设备设置的 Windows 官方 JSON。');root.SystemStages.ReportSelectItem=index;
+  requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'官方配置草稿超过 1 MB。');return root;
+}
 export function exportProfileWindowsLightingDraft(profile,template){
   validateProfile(profile);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
   if(profile.lightingColorEncoding==='officialRGB'&&root.CustomLightMode!=null)return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
