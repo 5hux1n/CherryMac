@@ -8,6 +8,8 @@ import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.
 import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
 import {HostTextStore,mergeHostTextDraft,textRecordPlan} from './product-text.js?v=0.6.0';
 import {saveLog,listLogs} from './logs.js?v=0.6.0';
+import {runPageOperation} from './page-operation.js?v=0.6.0';
+const pageFailures=[];let pageLogTasks=Promise.resolve();
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
@@ -101,7 +103,15 @@ function renderSteps(){
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];if(p.macroModes)delete p.macroModes[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
 async function read(){const s=await hid.snapshot();let mapping=null,mappingError=null;try{mapping=await hid.readLightingMapping(s);}catch(error){mappingError=error.message;}baseline=clone(s);baselineLightingMapping=clone(mapping);profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}if(mapping)profile.lightingMapping=mapping;else delete profile.lightingMapping;refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status(mappingError?'按键、灯效和宏配置已读取并备份；灯光映射未取得：'+mappingError:'已读取完整配置和灯光映射并保存本地备份。编辑后点击“写入按键”才会修改键盘。',!!mappingError);}
-async function operation(fn){if(busy)return;hid?.stopHostTextObservation();if(textProduct){textFactory=null;$('text-editor').hidden=true;}busy=true;render();try{if(textBridge?.paired)await textBridge.suspend();await fn();}catch(error){status(error.message,true);}finally{busy=false;render();}}
+async function operation(fn,{localOnly=false}={}){
+  if(busy)return;const action=document.activeElement?.id??'page-operation';busy=true;render();
+  try{await runPageOperation(fn,{localOnly,stopObservation:()=>hid?.stopHostTextObservation(),invalidateText:()=>{if(textProduct){textFactory=null;$('text-editor').hidden=true;}},suspendHostText:async()=>{if(textBridge?.paired)await textBridge.suspend();}});}
+  catch(error){
+    const entry={id:crypto.randomUUID(),at:new Date().toISOString(),kind:'phase',phase:'page-failed',action,tab,error:String(error?.message??error).slice(0,4096)};
+    pageFailures.push(entry);pageLogTasks=pageLogTasks.then(()=>saveLog(clone(entry))).catch(failure=>{entry.persistenceError=String(failure?.message??failure).slice(0,4096);});
+    status(entry.error,true);
+  }finally{busy=false;render();}
+}
 function switchTab(next){if(!pages[next])return;tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
 for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
@@ -184,13 +194,14 @@ $('export').onclick=()=>act(()=>{const output=clone(profile);if(textProduct){del
 $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const template=JSON.parse(profile.windowsTemplateJSON),mixed=textProduct&&textRoot!==null;const output=mixed?exportWindowsKeysMacrosAndText(profile,template,textRoot,baseline):exportWindowsKeysAndMacros(profile,template);download(exportProfileWindowsLightingDraft(profile,output),'CHERRY-configuration.json');const lightingNote=profile.lightingColorEncoding==='officialRGB'?'包含当前灯效草稿':'包含当前内置灯效；逐键配色沿用导入模板';status(`${mixed?'已合并导出 Windows 格式键位、宏与文本':'已导出 Windows 格式键位与宏'}；${lightingNote}；设备设置沿用导入模板。`);});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(backupConfiguration(record),`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=parseProfile(JSON.stringify(backupConfiguration(record)));refreshMacros();loadMacro();loadPlayback();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
 $('diagnostics').onclick=()=>operation(async()=>{
-  await hid?.logTasks;
+  await Promise.all([hid?.logTasks,pageLogTasks]);
   const results=await Promise.allSettled([listLogs(),listBackups(),macroLocalRecords()]),names=['usbLogs','backups','macroLocalRecords'],records={},storageErrors={};
   results.forEach((result,i)=>{records[names[i]]=result.status==='fulfilled'?result.value:[];if(result.status==='rejected')storageErrors[names[i]]=result.reason?.message??String(result.reason);});
   if(hid?.loggingError)storageErrors.sessionLogging=hid.loggingError;
-  const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),...records,sessionLogs:clone(hid?.history??[]),logError:storageErrors.usbLogs??storageErrors.sessionLogging??null,storageErrors,note:'包含可读取的本地备份与操作日志；storageErrors 非空表示对应资料不完整。未自动上传。'};
+  if(pageFailures.some(entry=>entry.persistenceError))storageErrors.pageLogging='部分页面错误未能保存到数据库，现有页面记录已附在 pageFailures。';
+  const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),...records,sessionLogs:clone(hid?.history??[]),pageFailures:clone(pageFailures),logError:storageErrors.usbLogs??storageErrors.sessionLogging??null,storageErrors,note:'包含可读取的本地备份与操作日志；storageErrors 非空表示对应资料不完整。未自动上传。'};
   download(evidence,'CherryMac-diagnostics.json');status(Object.keys(storageErrors).length?'排查资料已下载；部分本地记录无法读取，错误已写入文件，其余日志保留。':'排查资料已下载到本地，未上传。',Object.keys(storageErrors).length>0);
-});
+},{localOnly:true});
 function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(profile.snapshot,baseline);}
 $('write').onclick=()=>act(()=>{const wanted=plan();pending={wanted,kind:tab==='macros'&&macroProduct?'macro':'key',before:clone(baseline),draft:clone(profile)};requireThat(!sameSnapshot(wanted,baseline),'选中的写入类别没有变化。');const c=counts(wanted,baseline);$('confirm-summary').textContent=pending.kind==='macro'?macroWriteReview(profile,baseline,wanted,Object.fromEntries(keys.map(key=>[key.slot,key.label.replaceAll('\n',' / ')])),Object.fromEntries(keys.map(key=>[key.slot,describe(wanted.keymap.slice(key.slot*3,key.slot*3+3))])))+'\n\n灯效和设备参数保留；普通键草稿保留，写入前保存完整备份。':`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
@@ -296,7 +307,7 @@ if(textProduct){
   $('text-file').onchange=()=>{const file=$('text-file').files[0];$('text-file').value='';if(!file)return;void operation(async()=>{requireThat(file.size<=1_000_000,'文本配置超过 1 MB。');selectTextConfiguration(JSON.parse(await file.text()),file.name);status('文本配置已选中，编辑区和键盘没有变化。');});};
   $('text-load').onclick=()=>operation(async()=>{const root=await textStore.active();requireThat(root,'没有已安装并保存的文本配置。');selectTextConfiguration(root,'已保存文本配置');status('已载入文本定义，尚未启用输入服务。');});
   $('text-export').onclick=()=>act(()=>{requireThat(textRoot,'请先选择文本配置。');download(textRoot,'CherryMac-文本配置.json');});
-  $('text-history').onclick=()=>operation(async()=>{download(await textStore.exportRecords(),'CherryMac-文本恢复记录.json');status('恢复记录已导出，包含原键盘配置和文本内容，请妥善保存。');});
+  $('text-history').onclick=()=>operation(async()=>{download(await textStore.exportRecords(),'CherryMac-文本恢复记录.json');status('恢复记录已导出，包含原键盘配置和文本内容，请妥善保存。');},{localOnly:true});
   $('text-install').onclick=()=>operation(async()=>{
     requireThat(hid&&!hid.dead&&baseline&&textRoot,'请先连接键盘并选择文本配置。');
     const root=clone(textRoot),before=clone(baseline),plan=await hid.readHostTextInstallation(root,before);

@@ -12,6 +12,9 @@ const raw=readFileSync(filename);if(raw.length>50_000_000)throw new Error('排�
 const data=JSON.parse(raw);if(data.format!=='CherryMacWebDiagnostics'||data.version!==1)throw new Error('排查文件格式无效。');
 const logs=new Map();for(const entry of [...(data.usbLogs??[]),...(data.sessionLogs??[])])logs.set(entry.id,entry);
 const report={mode:'offline; no USB access',logs:logs.size,phases:0,blockedRequests:0,validReplies:0,missingReplies:0,issues:[],snapshotChanges:[],macroStopRecords:[],macroExecutionRecords:[]};
+const pageFailures=new Map();
+for(const entry of [...logs.values(),...(data.pageFailures??[])])if(entry.kind==='phase'&&entry.phase==='page-failed')pageFailures.set(entry.id,entry);
+report.pageFailures=[...pageFailures.values()];
 const authorizations=new Map();
 for(const e of logs.values())if(e.kind==='phase'){
   report.phases++;

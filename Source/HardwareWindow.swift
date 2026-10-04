@@ -745,13 +745,14 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard !busy else{return};suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在读取 USB 配置…"
         queue.async{[weak self] in
             let result:Result<(snapshot:HardwareSnapshot,mapping:LightingMappingContext?,mappingError:String?),Error>=Result{
-                let usb=try CherryUSB(),log=try? HardwareOperationLog(kind:"read")
-                usb.trace=log?.trace
-                do{let snapshot=try usb.completeSnapshot();log?.record("phase","lighting-mapping-read")
+                let log=try HardwareOperationLog(kind:"read")
+                do{
+                    try log.requireHealthy();let usb=try CherryUSB();usb.trace=log.trace
+                    let snapshot=try usb.completeSnapshot();log.record("phase","lighting-mapping-read")
                     var mapping:LightingMappingContext?,mappingError:String?
-                    do{mapping=try usb.readLightingMapping(snapshot)}catch{mappingError=error.localizedDescription;log?.record("lighting-mapping-error",error.localizedDescription)}
-                    log?.record("phase","complete");return (snapshot,mapping,mappingError)}
-                catch{log?.record("phase","failed");log?.record("error",error.localizedDescription);throw error}
+                    do{mapping=try usb.readLightingMapping(snapshot)}catch{mappingError=error.localizedDescription;log.record("lighting-mapping-error",error.localizedDescription)}
+                    log.record("phase","complete");try log.requireHealthy();return (snapshot,mapping,mappingError)
+                }catch{log.record("phase","failed");log.record("error",error.localizedDescription);throw error}
             }
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let read):
