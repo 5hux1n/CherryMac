@@ -456,6 +456,44 @@ enum WindowsProfile {
         struct ExecutionResult {
             var trace:Trace;var current:HardwareSnapshot?;var readbackMatches:Bool;var failure:String;var record:RecoveryRecord
         }
+        // Rebuild raw restore reports from the retained original bytes. Never
+        // accept caller-supplied restore blocks or run color scaling again.
+        struct RecoveryPlan:Codable {
+            var format="CherryMacLightingRestorePlan";var version=1;var hardwareReady=false
+            var sourceRecord:RecoveryRecord;var before:HardwareSnapshot
+            func reports()throws->[Report]{
+                guard format=="CherryMacLightingRestorePlan",version==1,!hardwareReady else{throw HardwareError(message:"灯效恢复计划格式无效。")}
+                _ = try sourceRecord.assess()
+                let plan=sourceRecord.plan,review=try plan.recoveryReview(original:sourceRecord.original,current:before)
+                var result:[Report]=[]
+                for (index,stage) in plan.stages.enumerated(){
+                    let writes=review.restoreData.filter{write in stage.writes.contains{$0.command==write.command && $0.offset==write.offset}}
+                    guard !writes.isEmpty else{continue}
+                    if stage.beginRequired{result.append(.init(stage:index,kind:"begin",delayMilliseconds:0,request:try CherryPacket.make(UInt8(stage.beginCommand))))}
+                    for write in writes{result.append(.init(stage:index,kind:"data",delayMilliseconds:0,request:try CherryPacket.make(UInt8(write.command),payload:[UInt8(write.data.count),UInt8(write.offset&255),UInt8(write.offset>>8),UInt8(write.flag)]+write.data)))}
+                    result.append(.init(stage:index,kind:"finish",delayMilliseconds:stage.finishDelayMilliseconds,request:try CherryPacket.make(UInt8(stage.finishCommand))))
+                }
+                return result
+            }
+            struct Progress:Codable {
+                var format="CherryMacLightingRestoreProgress";var version=1;var hardwareReady=false
+                var matchedWritePrefixes:[Int];var configurationMatchesOriginal:Bool
+            }
+            struct Assessment:Codable{var reports:[Report];var progress:Progress}
+            func reviewProgress(_ current:HardwareSnapshot)throws->Progress {
+                let packets=try reports();try current.validate()
+                guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"恢复读回缺少完整配置。")}
+                let plan=sourceRecord.plan;var state=before,matched:[Int]=[],count=0
+                if plan.sameConfiguration(state,current){matched.append(0)}
+                for packet in packets where packet.kind=="data"{
+                    let bytes=packet.request,offset=Int(bytes[5])+Int(bytes[6])*256,length=Int(bytes[4])
+                    state=plan.applying(.init(command:Int(bytes[3]),offset:offset,flag:Int(bytes[7]),data:Array(bytes[8..<8+length])),to:state);count+=1
+                    if plan.sameConfiguration(state,current){matched.append(count)}
+                }
+                guard !matched.isEmpty else{throw HardwareError(message:"配置不是本次恢复的完整分块前缀，停止覆盖。")}
+                return .init(matchedWritePrefixes:matched,configurationMatchesOriginal:plan.sameConfiguration(current,sourceRecord.original))
+            }
+        }
         final class CandidateAuthorization {
             private let packets:[Report]
             private var index=0
@@ -464,6 +502,11 @@ enum WindowsProfile {
                 _ = try plan.expectedReadback(from:baseline)
                 guard baseline.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56 else{throw HardwareError(message:"灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。")}
                 packets=try plan.reports()
+            }
+            init(recovery:RecoveryPlan)throws{
+                packets=try recovery.reports()
+                let plan=recovery.sourceRecord.plan
+                guard recovery.before.deviceInfo[6]==24,plan.bank==0,plan.transportSelector==0,plan.chunkCapacity==56 else{throw HardwareError(message:"灯效恢复研究范围无效。")}
             }
             func validate(_ request:[UInt8])throws{
                 guard !invalidated,index<packets.count,request==packets[index].request else{throw HardwareError(message:"灯效报告偏离本次计划顺序或会话已失效，停止发送。")}

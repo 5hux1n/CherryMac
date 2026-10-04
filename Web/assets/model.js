@@ -471,6 +471,28 @@ export function officialLightingReports(plan){
 }
 
 const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+// Restore payloads are reconstructed solely from retained raw original data.
+export function lightingRestoreReports(recovery){
+  requireThat(recovery?.format==='CherryMacLightingRestorePlan'&&recovery.version===1&&recovery.hardwareReady===false,'灯效恢复计划格式无效。');
+  const {sourceRecord,before}=recovery;assessLightingRecoveryRecord(sourceRecord);
+  const review=officialLightingRecoveryReview(sourceRecord.plan,sourceRecord.original,before);
+  const encode=(command,payload=[])=>{const bytes=Array(64).fill(0);bytes[0]=4;bytes[3]=command;bytes.splice(4,payload.length,...payload);const sum=bytes.slice(3).reduce((n,v)=>n+v,0);bytes[1]=sum&255;bytes[2]=sum>>8;return bytes;};
+  return sourceRecord.plan.stages.flatMap((stage,index)=>{
+    const writes=review.restoreData.filter(write=>stage.writes.some(w=>w.command===write.command&&w.offset===write.offset));if(!writes.length)return [];
+    return [...(stage.beginRequired?[{stage:index,kind:'begin',delayMilliseconds:0,request:encode(stage.beginCommand)}]:[]),...writes.map(w=>({stage:index,kind:'data',delayMilliseconds:0,request:encode(w.command,[w.data.length,w.offset&255,w.offset>>8,w.flag,...w.data])})),{stage:index,kind:'finish',delayMilliseconds:stage.finishDelayMilliseconds,request:encode(stage.finishCommand)}];
+  });
+}
+export function reviewLightingRestoreProgress(recovery,current){
+  const reports=lightingRestoreReports(recovery);validateSnapshot(current,true);
+  let state=clone(recovery.before),count=0;const matchedWritePrefixes=[];
+  if(lightingConfigurationEqual(state,current))matchedWritePrefixes.push(0);
+  for(const report of reports.filter(r=>r.kind==='data')){
+    const bytes=report.request;state=applyLightingCandidate(state,{command:bytes[3],offset:bytes[5]+bytes[6]*256,data:bytes.slice(8,8+bytes[4])});count++;
+    if(lightingConfigurationEqual(state,current))matchedWritePrefixes.push(count);
+  }
+  requireThat(matchedWritePrefixes.length>0,'配置不是本次恢复的完整分块前缀，停止覆盖。');
+  return {format:'CherryMacLightingRestoreProgress',version:1,hardwareReady:false,matchedWritePrefixes,configurationMatchesOriginal:lightingConfigurationEqual(current,recovery.sourceRecord.original)};
+}
 export function assessLightingRecoveryRecord(record){
   requireThat(record?.format==='CherryMacLightingRecoveryRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'灯效恢复记录格式无效。');
   const target=officialLightingReadbackTarget(record.plan,record.original),traceReview=reviewOfficialLightingTrace(record.plan,record.trace);

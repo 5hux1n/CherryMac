@@ -1249,6 +1249,19 @@ if let index=CommandLine.arguments.firstIndex(of:"--render-official-lighting-pla
         print("PASS: candidate lighting reports rendered offline; no HID or write authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-restore") {
+    do{
+        let args=CommandLine.arguments
+        guard args.count==index+4 else{throw HardwareError(message:"需要恢复计划、当前快照和分析输出路径。")}
+        let output=URL(fileURLWithPath:args[index+3]).standardizedFileURL.resolvingSymlinksInPath()
+        guard !args[(index+1)...(index+2)].contains(where:{URL(fileURLWithPath:$0).standardizedFileURL.resolvingSymlinksInPath()==output}) else{throw HardwareError(message:"分析不能覆盖原始文件。")}
+        let data=try Data(contentsOf:URL(fileURLWithPath:args[index+1]));guard data.count<=3_000_000 else{throw HardwareError(message:"恢复计划超过 3 MB。")}
+        let plan=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.self,from:data),current=try HardwareProfile.decode(Data(contentsOf:URL(fileURLWithPath:args[index+2]))).snapshot
+        let assessment=WindowsProfile.OfficialLightingPlan.RecoveryPlan.Assessment(reports:try plan.reports(),progress:try plan.reviewProgress(current)),encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        try encoder.encode(assessment).write(to:output,options:.atomic)
+        print("PASS: raw restore plan and progress reviewed offline; no HID");exit(0)
+    }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
+}
 if let index=CommandLine.arguments.firstIndex(of:"--review-lighting-recovery-record") {
     do{
         let args=CommandLine.arguments

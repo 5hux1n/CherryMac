@@ -1,4 +1,4 @@
-import {officialLightingReports,officialLightingReadbackTarget,clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements,prepareHostTextInstallation} from './model.js?v=0.6.0';
+import {lightingRestoreReports,officialLightingReports,officialLightingReadbackTarget,clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements,prepareHostTextInstallation} from './model.js?v=0.6.0';
 import {keys} from './layout.js?v=0.6.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
@@ -13,6 +13,10 @@ export class LightingCandidateAuthorization{
     officialLightingReadbackTarget(plan,baseline);
     requireThat(baseline.deviceInfo[6]===24&&plan.bank===0&&plan.transportSelector===0&&plan.chunkCapacity===56,'灯效研究仅允许指定固件、配置 0 和明确的 USB 候选布局。');
     this.#reports=officialLightingReports(plan);
+  }
+  static recovery(recovery){
+    const reports=lightingRestoreReports(recovery),scope=new LightingCandidateAuthorization(recovery.sourceRecord.plan,recovery.sourceRecord.original);
+    scope.#reports=reports;return scope;
   }
   validate(request){requireThat(!this.#invalidated&&this.#index<this.#reports.length&&equal(Array.from(request),this.#reports[this.#index].request),'灯效报告偏离本次计划顺序或会话已失效，停止发送。');}
   accept(reply,request){
