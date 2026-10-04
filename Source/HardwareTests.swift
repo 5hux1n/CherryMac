@@ -1335,7 +1335,7 @@ func runLightingDraftExportChecks(){
     let colorData=try! JSONSerialization.data(withJSONObject:colorRoot)
     let prepared=try! WindowsProfile.prepareOfficialCustomColors(colorData,baseline:snapshot,lightingMapping:mapping)
     let mapped=Set(try! mapping.slots(for:snapshot).compactMap{$0})
-    for slot in 0..<126{precondition(Array(prepared[slot*3..<slot*3+3])==(mapped.contains(slot) ? [134,67,0]:Array(snapshot.colors![slot*3..<slot*3+3])))}
+    for slot in 0..<126{precondition(Array(prepared[slot*3..<slot*3+3])==(mapped.contains(slot) ? [134,67,0]:[0,0,0]))}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
     let mappedProfile=try! WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:mapping).profile
     precondition(try! HardwareProfile.decode(mappedProfile.encoded()).lightingMapping==mapping)

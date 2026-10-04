@@ -442,7 +442,8 @@ export function prepareOfficialCustomColors(template,baseline,lightingMapping){
   validateSnapshot(baseline,true);validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   const light=template.LightInfo,groups=template.CustomLightMode?.LightColorInfo;
   requireThat(light&&winInt(light.SelectItem,'SelectItem',0,24)===21&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'官方颜色准备仅支持完整的自定义颜色配置和当前颜色表。');
-  const level=winInt(light.Light,'Light',0,4),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[level],slots=lightingMappingSlots(lightingMapping,baseline),result=clone(baseline.colors);
+  // Official 501190 zeroes the output buffer before filling mapped colors.
+  const level=winInt(light.Light,'Light',0,4),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[level],slots=lightingMappingSlots(lightingMapping,baseline),result=Array(378).fill(0);
   groups[0].forEach((color,index)=>{
     requireThat(color&&typeof color==='object'&&!Array.isArray(color),'逐键颜色记录结构无效。');
     const raw=['Red','Green','Blue'].map(name=>winInt(color[name],name,0,255));if(Object.hasOwn(color,'Alpha'))winInt(color.Alpha,'Alpha',0,255);

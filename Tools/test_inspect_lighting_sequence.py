@@ -27,6 +27,8 @@ class MemoryPE:
         self.put(0x401520, b'\0\0HidD_GetAttributes\0')
         for address, encoded in audit.IDENTITY_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
+        for address, encoded in audit.TRANSPORT_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
         self.put(0x745750, b'LightOpenFlag\0')
         self.put(0x77F604 + 0x2BC, struct.pack('<I', 0x500790))
         for address, encoded in audit.CHECKS.items():
@@ -63,6 +65,19 @@ class MemoryPE:
 
 
 class LightingAuditTests(unittest.TestCase):
+    def test_separate_transport_word_and_selected_bank_caller(self):
+        result = audit.audit_transport_and_bank(MemoryPE())
+        self.assertEqual(result['registryTrailingWord']['initialValue'], 0)
+        self.assertEqual(result['registryTrailingWord']['rowOffset'], 156)
+        self.assertEqual(result['zeroSelectorReports']['parameterFlag'], 85)
+        self.assertEqual(result['zeroSelectorReports']['finishCommand'], 2)
+        self.assertEqual(result['oneSelectorReports']['colorCommand'], 139)
+        for address in (0x41213C, 0x49832F, 0x4DE67A, 0x4B197F, 0x42B4BA):
+            pe = MemoryPE()
+            pe.put(address, b'\x90')
+            with self.assertRaisesRegex(ValueError, 'transport/bank instruction'):
+                audit.audit_transport_and_bank(pe)
+
     def test_product_id_structure_copy_and_branch(self):
         result = audit.audit_device_identity(MemoryPE())
         self.assertEqual(result['attributeImport'], 'HID.DLL!HidD_GetAttributes')
@@ -117,7 +132,7 @@ class LightingAuditTests(unittest.TestCase):
         self.assertIn('fourthColorByte', result['buffer']['rgb'])
 
     def test_changed_color_bank_checksum_and_caller_rejected(self):
-        for address in (0x5018FA, 0x4DCF95, 0x4B19C1):
+        for address in (0x5011B7, 0x5018FA, 0x4DCF95, 0x4B19C1):
             pe = MemoryPE()
             pe.put(address, b'\x90')
             with self.assertRaisesRegex(ValueError, 'color instruction'):

@@ -1023,12 +1023,12 @@ test('official brightness preserves exact integer scaling and exposes inverse am
 });
 
 
-test('official custom color preparation scales only mapped LEDs and preserves its inputs',()=>{
+test('official custom color preparation zeroes unmapped LEDs and preserves its inputs',()=>{
   const snapshot=demoSnapshot(),root=windowsFixture();root.LightInfo.SelectItem=21;root.LightInfo.Light=2;
   root.CustomLightMode={LightColorInfo:[WINDOWS_DEFAULTS.map(()=>({Red:255,Green:128,Blue:1,Alpha:0}))]};
   const mapping={deviceInfo:clone(snapshot.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)},before=clone(snapshot),original=clone(root);
   const slots=lightingMappingSlots(mapping,snapshot),mapped=new Set(slots.filter(x=>x!=null)),result=prepareOfficialCustomColors(root,snapshot,mapping);
-  for(let slot=0;slot<126;slot++)assert.deepEqual(result.slice(slot*3,slot*3+3),mapped.has(slot)?[134,67,0]:snapshot.colors.slice(slot*3,slot*3+3));
+  for(let slot=0;slot<126;slot++)assert.deepEqual(result.slice(slot*3,slot*3+3),mapped.has(slot)?[134,67,0]:[0,0,0]);
   assert.deepEqual(snapshot,before);assert.deepEqual(root,original);
   root.LightInfo.SelectItem=8;assert.throws(()=>prepareOfficialCustomColors(root,snapshot,mapping),/自定义/);
 });

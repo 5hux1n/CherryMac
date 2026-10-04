@@ -426,15 +426,15 @@ enum WindowsProfile {
         root["KeyList"]=keys;root["ActionInfo"]=actions
         return try encodeKeysAndMacros(profile,template:JSONSerialization.data(withJSONObject:root,options:.sortedKeys),preservingTextIndices:textIndices)
     }
-    // File-only conversion. USB parameters outside 1...8 and unmapped logical
-    // colors remain untouched; this does not authorize any lighting write.
     // Offline preparation for the specifically traced custom-color load path.
-    // Existing read-back colors are never globally rescaled; unmapped LEDs stay.
+    // Existing read-back colors are never globally rescaled. The traced official
+    // method starts with a zeroed buffer, including unmapped LED positions.
     static func prepareOfficialCustomColors(_ data:Data,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext)throws->[UInt8]{
         try baseline.validate();let root=try templateRoot(data)
         guard let light=root["LightInfo"] as? [String:Any],try integer(light["SelectItem"],"SelectItem",range:0...24)==21,
               let custom=root["CustomLightMode"] as? [String:Any],let groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,
-              var result=baseline.colors else{throw HardwareError(message:"官方颜色准备仅支持完整的自定义颜色配置和当前颜色表。")}
+              baseline.colors != nil else{throw HardwareError(message:"官方颜色准备仅支持完整的自定义颜色配置和当前颜色表。")}
+        var result=Array(repeating:UInt8(0),count:378)
         let level=try integer(light["Light"],"Light",range:0...4),coefficient=CherryLighting.officialBrightnessCoefficients[level]
         let slots=try lightingMapping.slots(for:baseline)
         for (index,color) in groups[0].enumerated(){
@@ -444,6 +444,8 @@ enum WindowsProfile {
             result.replaceSubrange(slot*3..<slot*3+3,with:raw.map{UInt8(($0*coefficient)>>8)})
         };return result
     }
+    // File-only draft export. Parameters outside 1...8 and unmapped logical
+    // template colors remain untouched; this does not authorize a lighting write.
     static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data,lightingMapping:LightingMappingContext?=nil)throws->Data {
         try snapshot.validate();var root=try templateRoot(template)
         guard var light=root["LightInfo"] as? [String:Any],var custom=root["CustomLightMode"] as? [String:Any],

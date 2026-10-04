@@ -121,6 +121,43 @@ def audit_device_identity(pe):
     }
 
 
+TRANSPORT_CHECKS = {
+    0x41213A: '33d2', 0x41213C: '668915e4b18300',
+    0x4121D3: '33d2', 0x4121D5: '66891584b28300',
+    0x41226C: '33d2', 0x41226E: '66891524b38300',
+    0x498328: '668b829c000000', 0x49832F: '6689819c000000',
+    0x4291B8: '668b829c000000', 0x4291BF: '6689819c000000',
+    0x4F7D89: '0fb782b41e0000', 0x4F7D90: '50',
+    0x4F7DCF: '81c1380a0000', 0x4F7DD5: 'e86668feff',
+    0x4DE676: '668b4518', 0x4DE67A: '66894244',
+    0x4DD68D: '0fb74244', 0x4DD691: '83f801',
+    0x4DA120: '0fb74844', 0x4DA124: '83f901',
+    0x4B1979: '8b88c01e0000', 0x4B197F: 'e82c9bf7ff',
+    0x4B1984: '50', 0x4B1993: 'ffd0',
+    0x4B19AD: '8b88c01e0000', 0x4B19B3: 'e8f89af7ff',
+    0x4B19B8: '50', 0x4B19C7: 'ffd0',
+    0x42B4BA: '8b80240b0000',
+}
+
+
+def audit_transport_and_bank(pe):
+    for address, encoded in TRANSPORT_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected transport/bank instruction at {address:#x}')
+    return {
+        'instructionChecks': len(TRANSPORT_CHECKS),
+        'registryTrailingWord': {'rowOffset': 156, 'targetRegisteredRows': ['0x83b148', '0x83b1e8', '0x83b288'], 'initialValue': 0},
+        'selectorCopy': 'record+0x9c -> object+0x1eb4 -> fifth argument of 0x4de640 -> transport object+0x44',
+        'distinctFromConnectionKind': 'record+8 / object+0x1e20 selects connection dispatch; it is not the field compared by lighting report helpers',
+        'zeroSelectorReports': {'parameterCommand': 6, 'parameterFlag': 85, 'colorCommand': 11, 'finishCommand': 2},
+        'oneSelectorReports': {'parameterCommand': 6, 'parameterFlag': 0, 'colorCommand': 139, 'finishCommand': 130},
+        'bankCaller': '0x4b1930 passes return of 0x42b4b0 on object+0x1ec0 into both parameter and custom-color virtual calls',
+        'bankGetter': '0x42b4b0 returns the control field +0xb24; this call site does not hardcode bank zero',
+        'limits': 'Registered trailing words initialize to zero and the copied-word route is traced, but enumeration list population and all later changes of that word remain unproven. Selected-control value/range and actual active bank are not established. No HID or packet generation.',
+    }
+
+
 def audit_selector(pe, selector=0x1CE):
     if type(selector) is not int or not 0 <= selector <= 0xFFFF:
         raise ValueError('Selector must be an unsigned word')
@@ -155,6 +192,9 @@ def audit_selector(pe, selector=0x1CE):
 
 
 COLOR_CHECKS = {
+    0x5011AB: 'c685d0fdffff00',
+    0x5011B2: '68ff010000', 0x5011B7: '6a00',
+    0x5011B9: '8d85d1fdffff', 0x5011C0: 'e8db601800',
     0x501210: "83b84022000000",
     0x501217: "0f842c070000",
     0x501288: "81c138210000",
@@ -237,7 +277,8 @@ def audit_colors(pe):
     return {
         'method': '0x501190', 'helper': '0x4dcde0', 'instructionChecks': len(COLOR_CHECKS),
         'scope': 'Main RGB-table path requires object+0x2240 != 0. Alternate path and live field initialization remain unverified.',
-        'buffer': {'mappingLookup': 'object+0x2138; lookup helper 0x4bb8f0',
+        'buffer': {'initialization': '512-byte output buffer zeroed at 0x5011ab..0x5011c5 before mapping; unmapped positions remain zero',
+                   'mappingLookup': 'object+0x2138; lookup helper 0x4bb8f0',
                    'rgb': 'buffer[mappedIndex*3+channel] = (component*fourthColorByte) >> 8',
                    'limits': 'Fourth in-memory color byte. See brightnessAudit for traced JSON loading and global-brightness override paths; other paths remain unverified.'},
         'conditionalBank': {'objectField': 'word at object+0x1e1a',
@@ -439,6 +480,7 @@ def audit_sequence(pe):
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
         'selectorAudit': audit_selector(pe),
         'deviceIdentityAudit': audit_device_identity(pe),
+        'transportBankAudit': audit_transport_and_bank(pe),
         'colorAudit': audit_colors(pe),
         'brightnessAudit': audit_brightness(pe),
         'mappingAudit': audit_mapping(pe),
