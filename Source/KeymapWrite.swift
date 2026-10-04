@@ -2,7 +2,15 @@ import Foundation
 
 // Immutable, transaction-specific permission: exact original/target blocks only.
 // Lighting, macros, firmware commands and internal/hidden keys are excluded.
-struct KeymapWriteAuthorization {
+protocol KeymapTransactionAuthorization {
+    var before:HardwareSnapshot {get}
+    var expected:HardwareSnapshot {get}
+    var changedSlots:[Int] {get}
+    func validate(_ request:[UInt8])throws
+    func validateRecovery(_ current:HardwareSnapshot)throws
+}
+
+struct KeymapWriteAuthorization:KeymapTransactionAuthorization {
     let before:HardwareSnapshot
     let expected:HardwareSnapshot
     let changedSlots:[Int]
@@ -37,6 +45,51 @@ struct KeymapWriteAuthorization {
             try validate(CherryPacket.chunk(9,offset:offset,length:54,data:Array(current.keymap[offset..<offset+54])))
         }
     }
+}
+
+// A separate text permission; ordinary key writes never accept A1 markers.
+// Rebuild from the official document and factory map, not caller target bytes.
+struct HostTextWriteAuthorization:KeymapTransactionAuthorization {
+    let before:HardwareSnapshot
+    let expected:HardwareSnapshot
+    let changedSlots:[Int]
+    init(officialJSON:Data,factoryKeymap:[UInt8],baseline:HardwareSnapshot)throws {
+        let plan=try WindowsProfile.HostTextInstallation(officialJSON:officialJSON,factoryKeymap:factoryKeymap,baseline:baseline)
+        before=plan.before;expected=plan.expected;changedSlots=plan.changedSlots
+    }
+    func validate(_ request:[UInt8])throws {
+        guard request.count==64,request[0]==4,request[3]==9,request[4]==54 else{throw HardwareError(message:"文本安装只允许标准键位表分块。")}
+        let offset=Int(request[5]) | Int(request[6])<<8
+        guard offset%54==0,offset<=324 else{throw HardwareError(message:"文本键位写入偏移无效。")}
+        for snapshot in [before,expected] {
+            if request == (try CherryPacket.chunk(9,offset:offset,length:54,data:Array(snapshot.keymap[offset..<offset+54]))){return}
+        }
+        throw HardwareError(message:"写包与文本安装备份／目标不一致，停止发送。")
+    }
+    func validateRecovery(_ current:HardwareSnapshot)throws {
+        try current.validate()
+        guard current.deviceInfo==before.deviceInfo,current.parameters==before.parameters,current.colors==before.colors,current.macroData==before.macroData else{throw HardwareError(message:"文本安装范围之外的配置发生变化，停止恢复。")}
+        for offset in stride(from:0,to:378,by:54) {
+            try validate(CherryPacket.chunk(9,offset:offset,length:54,data:Array(current.keymap[offset..<offset+54])))
+        }
+    }
+}
+
+// Restore only a saved transaction's exact packet scope, from a verified
+// original/target block mixture. No arbitrary backup target is accepted.
+struct KeymapRecoveryAuthorization:KeymapTransactionAuthorization {
+    let before:HardwareSnapshot
+    let expected:HardwareSnapshot
+    let changedSlots:[Int]
+    private let original:KeymapTransactionAuthorization
+    init(original:KeymapTransactionAuthorization,current:HardwareSnapshot)throws {
+        try original.validateRecovery(current)
+        let target=original.before
+        self.original=original;before=current;expected=target
+        changedSlots=(0..<126).filter{slot in let range=slot*3..<slot*3+3;return current.keymap[range] != target.keymap[range]}
+    }
+    func validate(_ request:[UInt8])throws{try original.validate(request)}
+    func validateRecovery(_ current:HardwareSnapshot)throws{try original.validateRecovery(current)}
 }
 
 final class HardwareOperationLog {

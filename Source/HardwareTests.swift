@@ -605,6 +605,24 @@ func runHostTextPlanChecks(){
     let installReader=SimulatedCherry(installBaseline);installReader.factoryKeymap=factory
     let readInstallation=try! installReader.readHostTextInstallation(officialJSON:installationData,baseline:installBaseline)
     precondition(readInstallation.expected==snapshot && installReader.readCommands==[8,7,8] && installReader.packets.isEmpty)
+    let textAuthorization=try! HostTextWriteAuthorization(officialJSON:installationData,factoryKeymap:factory,baseline:installBaseline)
+    for table in [textAuthorization.before.keymap,textAuthorization.expected.keymap] {
+        for offset in stride(from:0,to:378,by:54){try! textAuthorization.validate(CherryPacket.chunk(9,offset:offset,length:54,data:Array(table[offset..<offset+54])))}
+    }
+    do{try textAuthorization.validate(CherryPacket.chunk(0x0B,offset:0,length:54,data:Array(installBaseline.colors!.prefix(54))));preconditionFailure("text permission allowed colors")}catch{}
+    var outOfScope=snapshot;outOfScope.parameters[2] ^= 1
+    do{try textAuthorization.validateRecovery(outOfScope);preconditionFailure("text recovery ignored parameter changes")}catch{}
+    let textRecovery=try! KeymapRecoveryAuthorization(original:textAuthorization,current:snapshot)
+    precondition(textRecovery.expected==installBaseline && textRecovery.changedSlots==[102])
+    let recoveryWriter=SimulatedCherry(snapshot)
+    precondition(try! recoveryWriter.writeKeymap(textRecovery.expected.keymap,baseline:snapshot,recoveryAuthorization:textRecovery)==installBaseline)
+    precondition(recoveryWriter.packets.count==7)
+    let textWriter=SimulatedCherry(installBaseline)
+    precondition(try! textWriter.writeKeymap(textAuthorization.expected.keymap,baseline:installBaseline,recoveryAuthorization:textAuthorization)==snapshot)
+    precondition(textWriter.packets.count==7 && textWriter.saved==[installBaseline])
+    let failedTextWriter=SimulatedCherry(installBaseline);failedTextWriter.failSendAt=2
+    do{_ = try failedTextWriter.writeKeymap(textAuthorization.expected.keymap,baseline:installBaseline,recoveryAuthorization:textAuthorization);preconditionFailure("injected text write failure ignored")}catch{}
+    precondition(failedTextWriter.state==installBaseline)
     let installed=try! WindowsProfile.HostTextInstallation(officialJSON:installationData,factoryKeymap:factory,baseline:snapshot)
     precondition(installed.changedSlots.isEmpty && installed.bindings.count==1)
     func rejectsInstallation(_ document:[String:Any],_ baseline:HardwareSnapshot,_ factory:[UInt8]){

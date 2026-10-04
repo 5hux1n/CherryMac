@@ -1,6 +1,6 @@
 import {requireThat,validateSnapshot} from './model.js?v=0.6.0';
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
-import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.6.0';
+import {assertReadOnlyRequest,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const READ_COMMANDS=new Set([3,5,7,8,0x0a,0x14,0x1b]);
 export function packet(command,offset,length,data=[],flag=0){
@@ -25,11 +25,12 @@ export class CherryHID{
   #keyAuthorization=null;#macroAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
   #configurationGeneration=0;
   #hostTextObservation=null;#hostTextObservationGeneration=0;
-  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false}={}){
+  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false,textProduct=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
     // Both entries use the same immutable packet authorization. Product
     // preview is explicitly gated by the PHP deployment environment.
+    if(textProduct===true)this.withHostTextAuthorization=(authorization,gate,body)=>this.#withHostTextAuthorization(authorization,gate,body);
     if(macroResearch===true||macroProduct===true)this.withMacroAuthorization=(authorization,gate,body)=>this.#withMacroAuthorization(authorization,gate,body);
     this.history=[];this.log=log;this.logTasks=Promise.resolve();this.loggingError=null;this.keyWritesSent=0;
     this.input=e=>{
@@ -62,6 +63,11 @@ export class CherryHID{
   async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
   async withKeymapAuthorization(authorization,gate,body){
     requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
+    this.#keyAuthorization=authorization;this.#writeGate=gate;
+    try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
+  }
+  async #withHostTextAuthorization(authorization,gate,body){
+    requireThat(authorization instanceof HostTextWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&gate&&typeof gate.check==='function'&&typeof body==='function','文本安装授权或按键释放确认无效。');
     this.#keyAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
   }

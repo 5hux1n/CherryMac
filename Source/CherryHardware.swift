@@ -294,15 +294,40 @@ final class CherryUSB: CherryHardwareAccess {
         guard !transportDead,hostTextGeneration==generation else{throw HardwareError(message:"准备文本监听期间配置或 USB 会话发生变化，请重新读取。")}
         hostTextRouting=routing;hostTextSink=onBinding;hostTextObservationToken=generation;hostTextTicket=WindowsProfile.HostTextTicket(id:generation)
     }
-    private var keymapAuthorization:KeymapWriteAuthorization?
+    private var keymapAuthorization:KeymapTransactionAuthorization?
     private var keymapLog:HardwareOperationLog?
     private var lastKeyWriteAt:TimeInterval?
     func applyKeymap(_ keymap:[UInt8],baseline:HardwareSnapshot,log:HardwareOperationLog) throws -> HardwareSnapshot {
+        try applyAuthorizedKeymap(KeymapWriteAuthorization(baseline:baseline,keymap:keymap),log:log)
+    }
+    #if CHERRY_MACRO_PRODUCT
+    func applyHostTextInstallation(_ plan:WindowsProfile.HostTextInstallation,log:HardwareOperationLog,saveHostConfiguration:(Data)throws->Void)throws->HardwareSnapshot {
+        guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能安装文本绑定。")}
+        stopHostTextObservation();try log.requireHealthy()
+        let fresh=try readHostTextInstallation(officialJSON:plan.officialJSON,baseline:plan.before)
+        guard fresh.factoryKeymap==plan.factoryKeymap,fresh.expected==plan.expected else{throw HardwareError(message:"文本安装默认表或目标变化，请重新准备。")}
+        let authorization=try HostTextWriteAuthorization(officialJSON:fresh.officialJSON,factoryKeymap:fresh.factoryKeymap,baseline:fresh.before)
+        // Host text must be saved successfully before installing its trigger.
+        // Callers supply their persistent configuration store, never a log.
+        try saveHostConfiguration(fresh.officialJSON)
+        return try applyAuthorizedKeymap(authorization,log:log)
+    }
+    func recoverHostTextInstallation(_ plan:WindowsProfile.HostTextInstallation,log:HardwareOperationLog)throws->HardwareSnapshot {
+        guard keymapAuthorization==nil,macroAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能恢复文本安装。")}
+        stopHostTextObservation();try log.requireHealthy()
+        guard try read(7,count:378)==plan.factoryKeymap else{throw HardwareError(message:"恢复时固件默认表不同，停止发送。")}
+        let original=try HostTextWriteAuthorization(officialJSON:plan.officialJSON,factoryKeymap:plan.factoryKeymap,baseline:plan.before)
+        let recovery=try KeymapRecoveryAuthorization(original:original,current:completeSnapshot())
+        log.record("scope","saved text installation recovery only")
+        return try applyAuthorizedKeymap(recovery,log:log)
+    }
+    #endif
+    private func applyAuthorizedKeymap(_ authorization:KeymapTransactionAuthorization,log:HardwareOperationLog)throws->HardwareSnapshot {
+        let baseline=authorization.before,keymap=authorization.expected.keymap
         guard keymapAuthorization==nil else{throw HardwareError(message:"此会话已经用于键位写入，不能更换目标。")}
         #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
         guard macroAuthorization==nil else{throw HardwareError(message:"宏事务尚未结束，不能更换目标。")}
         #endif
-        let authorization=try KeymapWriteAuthorization(baseline:baseline,keymap:keymap)
         try log.requireHealthy();keymapAuthorization=authorization;keymapLog=log;trace=log.trace
         log.record("changedSlots",authorization.changedSlots);log.record("phase","preflight")
         log.record("beforeKeymap",baseline.keymap);log.record("targetKeymap",keymap)
@@ -502,7 +527,7 @@ extension CherryHardwareAccess {
         try writeKeymap(expected)
     }
     @discardableResult
-    func writeKeymap(_ data: [UInt8], baseline: HardwareSnapshot? = nil,recoveryAuthorization:KeymapWriteAuthorization? = nil,operationLog:HardwareOperationLog? = nil) throws -> HardwareSnapshot {
+    func writeKeymap(_ data: [UInt8], baseline: HardwareSnapshot? = nil,recoveryAuthorization:KeymapTransactionAuthorization? = nil,operationLog:HardwareOperationLog? = nil) throws -> HardwareSnapshot {
         guard data.count == 378 else { throw HardwareError(message: "键位表长度必须为 378 字节。") }
         let before=try snapshotForBaseline(baseline)
         if let baseline {

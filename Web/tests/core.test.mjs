@@ -8,7 +8,7 @@ import {keys,demoSnapshot} from '../assets/layout.js';
 import {officialHostTextEvent} from '../assets/model.js';
 import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
-import {validatePlan,applyConfiguration,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
+import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
 test('host text reports reject configuration replies and malformed input',()=>{
   const report=[5,0x66,7,0,0,0,0,0,0];
@@ -17,7 +17,7 @@ test('host text reports reject configuration replies and malformed input',()=>{
     [5,0x7e,7,0,0,0,0,0,0],[5,0,8,0,0,0,0,0,0],
     [5,256,7,0,0,0,0,0,0],null])assert.equal(officialHostTextEvent(invalid),null);
 });
-import {KeymapWriteAuthorization,MacroWriteAuthorization} from '../assets/safety.js?v=0.6.0';
+import {KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from '../assets/safety.js?v=0.6.0';
 import {WINDOWS_DEFAULTS} from '../assets/tables.js';
 const macro={name:'AB',steps:[{usage:4,pressed:true,delayMilliseconds:0},{usage:4,pressed:false,delayMilliseconds:30},{usage:5,pressed:true,delayMilliseconds:10},{usage:5,pressed:false,delayMilliseconds:30}]};
 class FakeDevice extends EventTarget{
@@ -805,4 +805,36 @@ test('host text installation changes only bound keys and rejects unsafe targets 
   const stale=clone(baseline);stale.keymap[306]=32;await assert.rejects(hid.readHostTextInstallation(root,stale),/基线/);
   await hid.close();root.ActionInfo[0].ActionContent.ActionText='改动';baseline.keymap[306]=0;
   assert.equal(installation.bindings[0].plan.originalText,'中😀');assert.equal(installation.before.keymap[306],48);
+});
+
+
+test('host text writer gates transport, persists host configuration and restores failed writes',async()=>{
+  const root=windowsFixture(),before=demoSnapshot();before.factoryKeymap=Array(378).fill(0);before.factoryKeymap.splice(306,3,48,146,1);
+  root.KeyList[17].ActionLink=1;root.KeyList[17].ActionLinkIndex=0;
+  root.ActionInfo=[{ActionType:3,ActionTextFlag:1,ActionContent:{ActionText:'中😀'}}];
+  const permission=new HostTextWriteAuthorization(root,before.factoryKeymap,before);
+  assert.deepEqual(permission.changedSlots,[102]);
+  const installed=permission.expected,recovery=permission.recovery(installed);
+  assert.deepEqual(recovery.expected,before);assert.deepEqual(recovery.changedSlots,[102]);
+  installed.keymap[0]^=1;assert.deepEqual(recovery.before,permission.expected);
+  for(const map of [recovery.before.keymap,recovery.expected.keymap])for(let offset=0;offset<378;offset+=54)recovery.validate(recovery.packet(map,offset));
+  assert.throws(()=>permission.recovery(installed),/备份|目标/);
+
+  assert.throws(()=>permission.validate(packet(11,0,54,before.colors.slice(0,54))));
+  const external=clone(before);external.colors[0]^=1;assert.throws(()=>permission.validateRecovery(external),/范围之外/);
+  const closed=await transport(before);
+  await assert.rejects(applyHostTextInstallation(closed.hid,root,before,{gate,backup:async()=>{},saveTextConfiguration:async()=>{}}),/尚未开放/);
+  assert.equal(closed.device.requests.length,0);await closed.hid.close();
+  const unrelated=clone(before);unrelated.parameters[2]^=1;
+  const blockedRecovery=await transport(unrelated,{textProduct:true});
+  await assert.rejects(restoreHostTextInstallation(blockedRecovery.hid,root,before.factoryKeymap,before,{gate,backup:async()=>{}}),/范围之外/);
+  assert.equal(blockedRecovery.device.writeCount,0);await blockedRecovery.hid.close();
+  const {hid,device}=await transport(before,{textProduct:true});let saves=0,backups=0;
+  await assert.rejects(applyHostTextInstallation(hid,root,before,{gate,backup:async()=>{},saveTextConfiguration:async()=>{throw new Error('host save failed');}}),/host save failed/);
+  assert.equal(device.writeCount,0);
+  device.wrongReadback=true;
+  await assert.rejects(applyHostTextInstallation(hid,root,before,{gate,backup:async snapshot=>{backups++;assert.ok(sameSnapshot(snapshot,before));},saveTextConfiguration:async config=>{saves++;assert.deepEqual(config,root);assert.equal(device.writeCount,0);}}),/已恢复写入前/);
+  assert.equal(backups,1);assert.equal(saves,1);assert.equal(device.writeCount,14);assert.ok(sameSnapshot(device.s,before));
+  assert.ok(device.requests.filter(r=>r[3]===9).every(r=>r[4]===54));
+  await assert.rejects(hid.exchange(permission.packet(permission.expected.keymap,0)),/写入暂缓/);await hid.close();
 });

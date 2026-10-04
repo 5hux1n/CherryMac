@@ -1,6 +1,6 @@
 import {clone,equal,requireThat,validateSnapshot,decodeBank} from './model.js?v=0.6.0';
 import {editableSlots,modes} from './layout.js?v=0.6.0';
-import {KeymapWriteAuthorization,MacroWriteAuthorization} from './safety.js?v=0.6.0';
+import {KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sameSnapshot=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(k=>equal(a[k],b[k]));
 const slots=s=>Array.from({length:126},(_,i)=>i).filter(i=>[0x70,0x71].includes(s.keymap[i*3]));
 function macroDuration(s,indices){const macros=decodeBank(s.macroData);let max=0;
@@ -33,6 +33,30 @@ export async function applyConfiguration(hid,wanted,before,{gate,backup,progress
   validateSnapshot(wanted,true);validateSnapshot(before,true);
   requireThat(['deviceInfo','parameters','colors','macroData'].every(k=>equal(wanted[k],before[k])),'仅允许键位写入；灯效、颜色与宏必须保留原始值。');
   const authorization=new KeymapWriteAuthorization(before,wanted.keymap);
+  return applyAuthorizedKeymap(hid,authorization,{gate,backup,progress},'withKeymapAuthorization');
+}
+export async function applyHostTextInstallation(hid,root,before,{gate,backup,saveTextConfiguration,progress=()=>{}}={}){
+  requireThat(typeof hid?.withHostTextAuthorization==='function','文本安装尚未开放，未读取或写入键盘。');
+  requireThat(gate&&typeof gate.check==='function'&&typeof backup==='function'&&typeof saveTextConfiguration==='function','缺少松键检查、键盘备份或主机文本配置保存，停止安装。');
+  hid.stopHostTextObservation();
+  const plan=await hid.readHostTextInstallation(root,before);
+  const authorization=new HostTextWriteAuthorization(plan.officialJSON,plan.factoryKeymap,plan.before);
+  // Even an already installed marker needs a persistent host text definition.
+  if(!authorization.changedSlots.length){await saveTextConfiguration(clone(plan.officialJSON));return clone(plan.before);}
+  return applyAuthorizedKeymap(hid,authorization,{gate,progress,backup:async current=>{await backup(current);await saveTextConfiguration(clone(plan.officialJSON));}},'withHostTextAuthorization');
+}
+export async function restoreHostTextInstallation(hid,root,factoryKeymap,before,{gate,backup,progress=()=>{}}={}){
+  requireThat(typeof hid?.withHostTextAuthorization==='function','文本恢复尚未开放，未读取或写入键盘。');
+  requireThat(gate&&typeof gate.check==='function'&&typeof backup==='function','缺少按键释放检查或可靠备份，停止恢复。');
+  hid.stopHostTextObservation();
+  factoryKeymap=clone(factoryKeymap);
+  const original=new HostTextWriteAuthorization(root,factoryKeymap,before);
+  requireThat(equal(await hid.read(7,378),factoryKeymap),'恢复时固件默认表不同，停止发送。');
+  const recovery=original.recovery(await hid.snapshot());
+  return applyAuthorizedKeymap(hid,recovery,{gate,backup,progress},'withHostTextAuthorization');
+}
+async function applyAuthorizedKeymap(hid,authorization,{gate,backup,progress},entry){
+  const before=authorization.before,wanted=authorization.expected;
   requireThat(gate&&typeof gate.check==='function'&&typeof backup==='function','缺少按键释放检查或可靠备份，停止写入。');
   if(!authorization.changedSlots.length)return clone(before);
   const id=crypto.randomUUID(),previousOperationId=hid.operationId;hid.operationId=id;
@@ -41,7 +65,7 @@ export async function applyConfiguration(hid,wanted,before,{gate,backup,progress
   await phase('核对写入前配置');const current=await hid.snapshot();
   requireThat(sameSnapshot(current,before),'键盘配置已经变化，请重新读取后写入。');
   await backup(current);await phase('写入前备份已保存',{changedSlots:authorization.changedSlots,baseline:current,targetKeymap:wanted.keymap});await gate.check();
-  return await hid.withKeymapAuthorization(authorization,gate,async()=>{
+  return await hid[entry](authorization,gate,async()=>{
     const startingWrites=hid.keyWritesSent;
     const send=async map=>{for(let offset=0;offset<378;offset+=54)await hid.exchange(authorization.packet(map,offset));};
     try{

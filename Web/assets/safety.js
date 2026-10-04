@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,bytes,validateSnapshot,decodeBank,decodeMacroBinding,macroCompletionRequirements,prepareHostTextInstallation} from './model.js?v=0.6.0';
 import {keys} from './layout.js?v=0.6.0';
 const KEYMAP_SLOTS=new Set(keys.filter(k=>![6,71].includes(k.slot)).map(k=>k.slot));
 // Lighting, macros and unknown mutations remain blocked.
@@ -40,6 +40,42 @@ export class KeymapWriteAuthorization{
   validateRecovery(current){
     validateSnapshot(current,true);
     requireThat(['deviceInfo','parameters','colors','macroData'].every(k=>equal(current[k],this.#before[k])),'读取到操作范围之外的配置变化，停止自动覆盖；请保留备份。');
+    for(let offset=0;offset<378;offset+=54)this.validate(this.packet(current.keymap,offset));
+  }
+}
+
+// Separate text-trigger permission. No caller-supplied target keymap is trusted.
+export class HostTextWriteAuthorization{
+  #before;#expected;#packets=new Set();#changed;#root;#factory;
+  constructor(root,factoryKeymap,baseline){
+    const plan=prepareHostTextInstallation(root,factoryKeymap,baseline);
+    this.#root=plan.officialJSON;this.#factory=plan.factoryKeymap;
+    this.#before=plan.before;this.#expected=plan.expected;this.#changed=plan.changedSlots;
+    for(const snapshot of [this.#before,this.#expected])for(let offset=0;offset<378;offset+=54)this.#packets.add(JSON.stringify(Array.from(this.packet(snapshot.keymap,offset))));
+  }
+  get before(){return clone(this.#before);}get expected(){return clone(this.#expected);}get changedSlots(){return [...this.#changed];}
+  packet(map,offset){
+    const b=new Uint8Array(64);b[0]=4;b[3]=9;b[4]=54;b[5]=offset&255;b[6]=offset>>8;b.set(map.slice(offset,offset+54),8);
+    const sum=b.slice(3).reduce((n,v)=>n+v,0);b[1]=sum&255;b[2]=sum>>8;return b;
+  }
+  validate(request){requireThat(this.#packets.has(JSON.stringify(Array.from(request))),'写包与文本安装备份／目标不一致，停止发送。');}
+  recovery(current){
+    this.validateRecovery(current);
+    // This private-state copy retains the original allowlist; callers cannot
+    // grant additional packets by altering the recovery snapshot afterwards.
+    return this.#recoveryInstance(current);
+  }
+  #recoveryInstance(current){
+    // Private fields require construction, then replace only verified state.
+    const result=new HostTextWriteAuthorization(this.#root,this.#factory,this.#before);
+    result.#before=clone(current);result.#expected=clone(this.#before);
+    result.#changed=Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(current.keymap.slice(slot*3,slot*3+3),this.#before.keymap.slice(slot*3,slot*3+3)));
+    result.#packets=new Set(this.#packets);
+    return result;
+  }
+  validateRecovery(current){
+    validateSnapshot(current,true);
+    requireThat(['deviceInfo','parameters','colors','macroData'].every(k=>equal(current[k],this.#before[k])),'文本安装范围之外的配置发生变化，停止恢复。');
     for(let offset=0;offset<378;offset+=54)this.validate(this.packet(current.keymap,offset));
   }
 }
