@@ -268,6 +268,12 @@ final class CherryUSB: CherryHardwareAccess {
     private var lightingLog:HardwareOperationLog?
     private var macroAuthorization:MacroWriteAuthorization?
     #if CHERRY_LIGHTING_TEST
+    func lightingRegistryID()throws->UInt64 {
+        guard !transportDead,let device else{throw HardwareError(message:"灯效 USB 会话已失效。")}
+        var id:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS else{throw HardwareError(message:"无法核对灯效 USB 设备标识。")}
+        return id
+    }
     func restoreLightingCandidate(_ recovery:WindowsProfile.OfficialLightingPlan.RecoveryPlan,
                                   cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                   persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {

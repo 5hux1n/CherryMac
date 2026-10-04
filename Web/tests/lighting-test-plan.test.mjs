@@ -39,3 +39,11 @@ if(process.argv[2]){
     console.log('PASS: native/Web fresh recovery plan parity, interrupted prefix and input overwrite rejection; files only');
   }finally{await rm(dir,{recursive:true,force:true});}
 }
+const {LightingPowerCycle}=await import('../assets/lighting-test-plan.js');
+const cycle=new LightingPowerCycle('original');assert.equal(cycle.disconnect('other',10),false);
+assert.throws(()=>cycle.confirmPowerOff(10));cycle.disconnect('original',100);cycle.confirmPowerOff(200);cycle.reconnect('returned',15_200);
+assert.equal(cycle.reconnect('other',30_000),false);assert.throws(()=>cycle.evidence('other'));
+assert.equal(cycle.evidence('returned').elapsedMilliseconds,15_000);
+cycle.disconnect('returned',40_000);assert.throws(()=>cycle.evidence('returned'));cycle.confirmPowerOff(41_000);cycle.reconnect('returned',55_999);assert.throws(()=>cycle.evidence('returned'));
+const reused=new LightingPowerCycle('same');reused.disconnect('same',0);reused.confirmPowerOff(1);reused.reconnect('same',15_001);assert.equal(reused.evidence('same').elapsedMilliseconds,15_000);
+console.log('PASS: first reconnect time preserved, selected device binding, repeated power-cycle invalidation, early reconnect rejection and reused HID object; memory only');

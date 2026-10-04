@@ -19,3 +19,25 @@ export function lightingRecoveryForFreshRead(record,current){
   // Attempt input retains its original restore plan and interrupted prefixes.
   return lightingRestorePlanFromRecord(prepared);
 }
+
+// Device tokens are assigned by the UI to actual HIDDevice objects. They are
+// session evidence, not proof that two connections are the same physical unit.
+export class LightingPowerCycle {
+  constructor(originalToken){requireThat(typeof originalToken==='string'&&originalToken.length>0,'缺少本轮 USB 会话标识。');this.originalToken=originalToken;this.disconnectedAt=null;this.powerOffAt=null;this.returnedAt=null;this.returnedToken=null;}
+  disconnect(token,now){
+    if(token!==this.originalToken&&token!==this.returnedToken)return false;
+    requireThat(Number.isFinite(now)&&now>=0,'USB 事件时钟无效。');
+    this.originalToken=token;this.disconnectedAt=now;this.powerOffAt=null;this.returnedAt=null;this.returnedToken=null;return true;
+  }
+  confirmPowerOff(now){requireThat(this.disconnectedAt!=null&&this.returnedAt==null&&Number.isFinite(now)&&now>=this.disconnectedAt,'需先检测到 USB 拔出，并保持断开。');if(this.powerOffAt==null)this.powerOffAt=now;}
+  reconnect(token,now){
+    if(this.disconnectedAt==null||this.returnedAt!=null)return false;
+    requireThat(typeof token==='string'&&token.length>0&&Number.isFinite(now)&&now>=this.disconnectedAt,'USB 重连记录无效。');
+    this.returnedToken=token;this.returnedAt=now;return true;
+  }
+  evidence(selectedToken){
+    requireThat(this.powerOffAt!=null&&this.returnedAt!=null&&this.returnedAt-this.powerOffAt>=15_000,'需检测到关电确认至少 15 秒后的 USB 重连；过早接回请再次拔出、关电并确认。');
+    requireThat(selectedToken===this.returnedToken,'当前读取设备与本轮记录的重连设备不同，请重新完成拔插确认。');
+    return {userConfirmedPowerOff:true,elapsedMilliseconds:Math.floor(this.returnedAt-this.powerOffAt),originalDeviceToken:this.originalToken,reconnectedDeviceToken:this.returnedToken};
+  }
+}

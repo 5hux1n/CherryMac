@@ -226,7 +226,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
         buttons[3].isEnabled = !running && recoveryData != nil
         buttons[5].isEnabled = !running && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
-        buttons[6].isEnabled = !running && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && readback != nil
+        buttons[6].isEnabled = !running && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && registryID==cycle?.reconnectedRegistryID && readback != nil
     }
     func fail(_ error:Error){state.stringValue=error.localizedDescription}
     @objc func load(){
@@ -291,7 +291,13 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         guard !running else{return}
         do{try startMonitor();let devices=IOHIDManagerCopyDevices(manager!) as? Set<IOHIDDevice> ?? [];guard devices.count==1,let device=devices.first,let found=id(device)else{throw HardwareError(message:"需连接且仅连接一把目标 USB 键盘。")};registryID=found}
         catch{fail(error);return}
-        perform("lighting-acceptance-read"){usb,log in let snapshot=try usb.completeSnapshot();try self.saveSnapshot(snapshot,log);try log.requireStorageHealthy();DispatchQueue.main.async{self.state.stringValue="完整配置已读取；没有写入。"};return snapshot}
+        let selectedID=registryID!
+        perform("lighting-acceptance-read"){usb,log in
+            guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"读取会话与选定 USB 设备不同，请重新读取。")}
+            let snapshot=try usb.completeSnapshot()
+            guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"读回期间 USB 设备改变。")}
+            try self.saveSnapshot(snapshot,log);try log.requireStorageHealthy();DispatchQueue.main.async{self.state.stringValue="完整配置已读取；没有写入。"};return snapshot
+        }
     }
     func confirmation(_ title:String)->Bool{let alert=NSAlert();alert.messageText=title;alert.informativeText="将实际发送灯效配置。请关闭其他配置程序、松开全部按键，保持此窗口前台。自动备份与日志保存后才发送；不自动重试。";alert.addButton(withTitle:"全部已松开，继续");alert.addButton(withTitle:"取消");return alert.runModal() == .alertFirstButtonReturn}
     func saveSnapshot(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(snapshot).write(to:directory.appendingPathComponent("snapshot-\(log.url.lastPathComponent)"),options:.atomic)}
@@ -302,9 +308,10 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         DispatchQueue.main.async{self.recoveryData=data}
     }
     @objc func write(){
-        guard !running,!attempted,let review,readback != nil,confirmation("写入所选灯效计划？") else{return}
+        guard !running,!attempted,let review,let selectedID=registryID,readback != nil,confirmation("写入所选灯效计划？") else{return}
         attempted=true;cycle=nil;writtenTarget=nil
         perform("lighting-acceptance-write"){usb,log in
+            guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
             let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
             DispatchQueue.main.async{self.writtenTarget=review.target;self.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"}
@@ -323,10 +330,11 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     @objc func stop(){log?.requestCancellation();state.stringValue="已请求停止后续报告，不能撤回已发送的报告。"}
     @objc func powerOff(){guard !running,cycle?.confirmPowerOff(at:ProcessInfo.processInfo.systemUptime)==true else{return};savePowerEvent("userConfirmedPowerOff");state.stringValue=monitorFailure.map{"关电记录保存失败：\($0)"} ?? "已记录你的关电确认。至少等待 15 秒后开电、接 USB，并重新读取。";render()}
     @objc func retention(){
-        guard !running,let target=writtenTarget,let evidence=cycle,evidence.hasConfirmedPowerCycle,monitorFailure==nil else{return}
+        guard !running,let target=writtenTarget,let evidence=cycle,evidence.hasConfirmedPowerCycle,let reconnectedID=evidence.reconnectedRegistryID,registryID==reconnectedID,monitorFailure==nil else{return}
         perform("lighting-acceptance-retention"){usb,log in
+            guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"读回会话不是本轮记录的重连设备，请重新核对。")}
             log.record("userConfirmedPowerOff",true);log.record("confirmedOffInterval",evidence.confirmedOffInterval ?? -1);log.record("originalRegistryID",evidence.originalRegistryID);log.record("reconnectedRegistryID",evidence.reconnectedRegistryID ?? 0)
-            let current=try usb.completeSnapshot();try self.saveSnapshot(current,log);let matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData
+            let current=try usb.completeSnapshot();guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"断电读回期间 USB 设备改变。")};try self.saveSnapshot(current,log);let matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData
             log.record("readbackMatches",matches);try log.requireStorageHealthy()
             guard matches else{throw HardwareError(message:"断电重连读回与目标不同。请保存资料并核对恢复。")}
             DispatchQueue.main.async{self.state.stringValue="关电确认后的重连读回符合目标。请观察灯光，之后恢复原始数据。"};return current

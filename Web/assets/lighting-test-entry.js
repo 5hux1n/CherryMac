@@ -1,12 +1,14 @@
-import {CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
+import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.6.0';
 import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v=0.6.0';
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
-import {lightingAcceptanceInput,lightingRecoveryForFreshRead} from './lighting-test-plan.js?v=0.6.0';
+import {lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
 import {saveBackup,download} from './storage.js?v=0.6.0';
 import {saveLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
-let input=null,hid=null,busy=false,abort=null,latestRecord=null,writeAttempted=false,writtenTarget=null,unpluggedAt=null,powerOffAt=null,usbReturnAt=null;
+let input=null,hid=null,busy=false,abort=null,latestRecord=null,writeAttempted=false,writtenTarget=null,powerCycle=null;
+const deviceTokens=new WeakMap();
+function token(device){if(!deviceTokens.has(device))deviceTokens.set(device,crypto.randomUUID());return deviceTokens.get(device);}
 const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(k=>equal(a[k],b[k]));
 function status(text,error=false){$('lighting-state').textContent=text;$('lighting-state').classList.toggle('error',error);}
 function render(){
@@ -18,8 +20,8 @@ function render(){
   $('lighting-restore').disabled=busy||!online||!latestRecord;
   $('lighting-stop').disabled=!abort||abort.signal.aborted;
   $('lighting-download-record').disabled=busy||!latestRecord;
-  $('lighting-power-off').disabled=busy||!writtenTarget||unpluggedAt==null||online||usbReturnAt!=null;
-  $('lighting-retention').disabled=busy||!online||!writtenTarget||powerOffAt==null;
+  $('lighting-power-off').disabled=busy||!writtenTarget||powerCycle?.disconnectedAt==null||online||powerCycle?.returnedAt!=null;
+  $('lighting-retention').disabled=busy||!online||!writtenTarget||powerCycle?.powerOffAt==null;
 }
 async function persistSession(){await saveLog({id:`lighting-session-${runID}`,at:artifacts.startedAt,kind:'lightingAcceptance',session:clone(artifacts)});}
 async function backup(snapshot){const record=await saveBackup(snapshot);artifacts.backups.push(clone(record));await persistSession();}
@@ -37,14 +39,14 @@ async function operation(body){
 }
 $('lighting-file').onchange=()=>operation(async()=>{
   const file=$('lighting-file').files[0];if(!file)return;
-  input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;unpluggedAt=null;powerOffAt=null;usbReturnAt=null;
+  input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;
   $('lighting-plan').textContent='正在核对新文件；此前选择已清除。';
   requireThat(file.size<=3_000_000,'文件超过 3 MB。');
   const prepared=lightingAcceptanceInput(JSON.parse(await file.text()));
   // Validate the exact scope now; files cannot broaden the research sender.
   if(prepared.kind==='write')new LightingCandidateAuthorization(prepared.value.plan,prepared.value.original);
   input=prepared;latestRecord=prepared.kind==='restore'?clone(prepared.value):null;
-  writeAttempted=false;writtenTarget=null;unpluggedAt=null;powerOffAt=null;usbReturnAt=null;
+  writeAttempted=false;writtenTarget=null;powerCycle=null;
   $('lighting-plan').textContent=prepared.kind==='write'?`已载入写入核对：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
   artifacts.observations.push({kind:'loaded',at:new Date().toISOString(),name:file.name,input:clone(prepared.value)});await persistSession();status('文件已核对；请单独选择并读取 USB 键盘。');
 });
@@ -61,20 +63,21 @@ $('lighting-connect').onclick=()=>operation(async()=>{
 $('lighting-close').onclick=()=>operation(async()=>{await hid.close();status('会话已关闭。此操作不代表 USB 已拔出或键盘已断电。');});
 navigator.hid?.addEventListener('disconnect',event=>{
   if(event.device!==hid?.device)return;
-  unpluggedAt=performance.now();powerOffAt=null;usbReturnAt=null;artifacts.observations.push({kind:'usbDisconnected',at:new Date().toISOString()});
+  if(!powerCycle?.disconnect(token(event.device),performance.now()))return;
+  artifacts.observations.push({kind:'usbDisconnected',at:new Date().toISOString(),deviceToken:token(event.device)});
   void persistSession().catch(error=>status(`断开记录保存失败：${error.message}`,true));render();
 });
 navigator.hid?.addEventListener('connect',event=>{
-  if(unpluggedAt==null||event.device.vendorId!==1130||event.device.productId!==462)return;
-  usbReturnAt=performance.now();artifacts.observations.push({kind:'usbReconnected',at:new Date().toISOString()});
+  if(!supportsDevice(event.device)||!powerCycle?.reconnect(token(event.device),performance.now()))return;
+  artifacts.observations.push({kind:'usbReconnected',at:new Date().toISOString(),deviceToken:token(event.device)});
   void persistSession().catch(error=>status(`重连记录保存失败：${error.message}`,true));render();
 });
 $('lighting-write').onclick=event=>operation(async()=>{
   requireThat(input?.kind==='write'&&!writeAttempted,'请先载入新的写入核对文件。');
   requireThat(confirm('本研究入口将实际写入灯效。请确认已保存恢复资料、松开全部按键，并保持页面前台。是否继续？'),'已取消，未写入。');
-  gate.acknowledge(event);abort=new AbortController();writeAttempted=true;unpluggedAt=null;powerOffAt=null;usbReturnAt=null;writtenTarget=null;render();
+  gate.acknowledge(event);abort=new AbortController();writeAttempted=true;powerCycle=null;writtenTarget=null;render();
   const result=await hid.applyLightingCandidate(input.value.plan,input.value.original,{gate,cancelled:()=>abort.signal.aborted,backup,persist});
-  if(result.readbackMatches){writtenTarget=clone(input.target);status('写入与完整读回一致。请观察灯光，再按下方提示断电重连。尚未验证外观或断电保留。');}
+  if(result.readbackMatches){writtenTarget=clone(input.target);powerCycle=new LightingPowerCycle(token(hid.device));status('写入与完整读回一致。请观察灯光，再按下方提示断电重连。尚未验证外观或断电保留。');}
   else status(`本次写入未通过：${result.failure}。请保留记录，重新连接后核对恢复。`,true);
 });
 $('lighting-restore').onclick=event=>operation(async()=>{
@@ -84,18 +87,20 @@ $('lighting-restore').onclick=event=>operation(async()=>{
   const current=await hid.snapshot(),recovery=lightingRecoveryForFreshRead(latestRecord,current);
   const attempt=await hid.restoreLightingCandidate(recovery,{gate,cancelled:()=>abort.signal.aborted,backup,persist});
   const review=assessLightingRestoreAttempt(attempt);
-  writtenTarget=null;powerOffAt=null;unpluggedAt=null;
+  writtenTarget=null;powerCycle=null;
   status(['readbackMatched','alreadyMatched'].includes(review.status)?'原始备份与完整读回一致。请确认键盘操作与灯光外观，再下载资料。':`恢复未通过：${attempt.failure||review.status}。保留记录并重新连接，不自动重试。`,!['readbackMatched','alreadyMatched'].includes(review.status));
 });
 $('lighting-stop').onclick=()=>{abort?.abort();gate.invalidate();status('已请求停止后续发送；正在发出的报告不能撤回，恢复记录会保留。');render();};
 $('lighting-power-off').onclick=()=>operation(async()=>{
-  requireThat(writtenTarget&&unpluggedAt!=null&&usbReturnAt==null&&hid?.dead,'需先检测到 USB 拔出，并关闭键盘电源。');
-  powerOffAt=performance.now();artifacts.observations.push({kind:'userConfirmedPowerOff',at:new Date().toISOString()});await persistSession();status('已记录你的关电确认。请等待至少 15 秒，再开电、接回 USB 并重新选择键盘。');
+  requireThat(writtenTarget&&powerCycle&&hid?.dead,'需先检测到 USB 拔出，并关闭键盘电源。');
+  powerCycle.confirmPowerOff(performance.now());artifacts.observations.push({kind:'userConfirmedPowerOff',at:new Date().toISOString()});await persistSession();status('已记录你的关电确认。请等待至少 15 秒，再开电、接回 USB 并重新选择键盘。');
 });
 $('lighting-retention').onclick=()=>operation(async()=>{
-  requireThat(writtenTarget&&powerOffAt!=null&&usbReturnAt!=null&&usbReturnAt-powerOffAt>=15_000,'需检测到关电确认至少 15 秒后的 USB 重连；过早接回时请再次拔出、关电并确认。');
-  const current=await hid.snapshot(),matches=same(current,writtenTarget);
-  artifacts.observations.push({kind:'powerCycleReadback',at:new Date().toISOString(),userConfirmedPowerOff:true,elapsedMilliseconds:Math.floor(usbReturnAt-powerOffAt),matches,current:clone(current)});await persistSession();
+  requireThat(writtenTarget&&powerCycle,'尚无本轮断电记录。');
+  const session=hid,selectedToken=token(session.device),evidence=powerCycle.evidence(selectedToken);
+  const current=await session.snapshot();requireThat(hid===session&&!session.dead,'重连读回期间 USB 会话改变。');powerCycle.evidence(selectedToken);
+  const matches=same(current,writtenTarget);
+  artifacts.observations.push({kind:'powerCycleReadback',at:new Date().toISOString(),...evidence,matches,current:clone(current)});await persistSession();
   status(matches?'关电确认后的完整读回符合写入目标。灯光外观仍需观察；接下来可以恢复原始数据。':'重连后的配置与目标不同。请保留资料，核对原始数据恢复。',!matches);
 });
 $('lighting-download').onclick=()=>operation(async()=>{let logFailure=null;try{await hid?.flushLogs();}catch(error){logFailure=error.message;}const saved=clone(artifacts);if(logFailure)saved.exportWarning=logFailure;download(saved,`CherryMac-灯效验收-${runID}.json`);status(logFailure?`已下载现有资料；日志未完整保存：${logFailure}`:'资料已下载；不会自动恢复或修改键盘。',!!logFailure);});
