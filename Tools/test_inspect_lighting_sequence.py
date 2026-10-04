@@ -40,6 +40,8 @@ class MemoryPE:
         self.put(0x77F604 + 0x2BC, struct.pack('<I', 0x500790))
         for address, encoded in audit.CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
+        for address, encoded in audit.SETTINGS_COVERAGE_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
         for address, encoded in audit.BEGIN_CHECKS.items():
             self.put(address, bytes.fromhex(encoded))
         for address, encoded in audit.BEGIN_STATE_CHECKS.items():
@@ -76,6 +78,17 @@ class MemoryPE:
 
 
 class LightingAuditTests(unittest.TestCase):
+    def test_settings_fields_built_but_not_in_target_parameter_writes(self):
+        result = audit.audit_settings_coverage(MemoryPE())
+        self.assertEqual(result['workingBufferFields'], [
+            {'field':'ReportSelectItem','structByteOffset':6,'parameterByte':53},
+            {'field':'RFReportSelectItem','structByteOffset':8,'parameterByte':54}])
+        self.assertEqual(result['fieldsOutsideSelectedWrites'], ['ReportSelectItem','RFReportSelectItem'])
+        self.assertEqual(result['sentParameterBytes'], list(range(9))+[21,24])
+        for address in audit.SETTINGS_COVERAGE_CHECKS:
+            pe = MemoryPE();pe.put(address, bytes([pe.at(address,1)[0]^1]))
+            with self.assertRaises(ValueError):audit.audit_settings_coverage(pe)
+
     def test_begin_guard_is_selected_communication_open_state(self):
         result = audit.audit_begin_state(MemoryPE())
         self.assertEqual(result['communicationOffset'] + result['fieldInCommunication'], result['fieldInDevice'])

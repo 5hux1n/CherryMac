@@ -27,6 +27,47 @@ CHECKS = {
     0x500A94: '8a8d57ffffff', 0x500A9A: '888d05ffffff', 0x500AB8: 'c68508ffffff01',
 }
 
+SETTINGS_COVERAGE_CHECKS = {
+    0x5007E3: 'c685f0feffff00',       # zero-initialized parameter buffer at EBP-110
+    0x500A64: '8d8d3cffffff',         # seven-word JSON getter destination EBP-C4
+    0x500A77: 'e88426f8ff',
+    0x500A7C: '8a9542ffffff',         # low byte at struct offset 6
+    0x500A82: '889525ffffff',         # into parameter buffer byte 53
+    0x500A88: '8a8544ffffff',         # low byte at struct offset 8
+    0x500A8E: '888526ffffff',         # into parameter buffer byte 54
+    0x500AC7: '8d7c15bc',            # final 64-byte send buffer EBP-44
+    0x500ACB: 'b910000000',
+    0x500AD0: '8db5f0feffff',
+    0x500AD6: 'f3a5',
+}
+
+
+def audit_settings_coverage(pe):
+    for address, encoded in SETTINGS_COVERAGE_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError('Unexpected settings parameter construction instruction')
+    selector = audit_selector(pe)
+    if selector['selectedBranch'] != '0x5010d8':
+        raise ValueError('Settings coverage requires selected target fallback')
+    # These bounds are guarded by the fallback report construction in CHECKS.
+    for address, encoded in CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError('Unexpected settings parameter send instruction')
+    buffer_base = struct.unpack('<i', pe.at(0x5007E3+2,4))[0]
+    fields = []
+    for name, load, store in [('ReportSelectItem',0x500A7C,0x500A82),('RFReportSelectItem',0x500A88,0x500A8E)]:
+        destination = struct.unpack('<i', pe.at(store+2,4))[0] - buffer_base
+        struct_offset = struct.unpack('<i',pe.at(load+2,4))[0] + 0xC4
+        fields.append({'field': name,'structByteOffset': struct_offset,'parameterByte': destination})
+    written = list(range(9)) + [21,24]
+    return {'productID': '0x01ce', 'method': '0x500790','selectedBranch': selector['selectedBranch'],
+            'instructionChecks': len(SETTINGS_COVERAGE_CHECKS), 'workingBufferFields': fields,
+            'sentParameterBytes': written,
+            'fieldsOutsideSelectedWrites': [f['field'] for f in fields if f['parameterByte'] not in written],
+            'limits': 'Only this static parameter branch. Does not prove other commands are absent, firmware capability, real readback or persistence.'}
+
 BEGIN_CHECKS = {
     0x4D9EF0: '0fb74844', 0x4D9EF4: '83f901', 0x4D9EF7: '750f',
     0x4D9F01: 'c64405bc81', 0x4D9F10: 'c64415bc01',
@@ -558,6 +599,7 @@ def audit_sequence(pe):
         'format': 'CherryMacStaticLightingSequence', 'version': 1,
         'method': '0x500790', 'branchStart': '0x5010d8', 'instructionChecks': len(CHECKS),
         'selectorAudit': audit_selector(pe),
+        'settingsCoverageAudit': audit_settings_coverage(pe),
         'deviceIdentityAudit': audit_device_identity(pe),
         'transportBankAudit': audit_transport_and_bank(pe),
         'beginAudit': audit_begin(pe),
