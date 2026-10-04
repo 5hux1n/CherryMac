@@ -34,6 +34,8 @@ class MemoryPE:
         for address, key in audit.COLOR_JSON_KEYS.items():
             self.put(address, key.encode() + b'\0')
         self.put(0x74A350, bytes([0, 65, 135, 195, 255]))
+        for address, encoded in audit.MAPPING_CHECKS.items():
+            self.put(address, bytes.fromhex(encoded))
         for address, load, compare, jump in audit.PREDICATES:
             self.put(address - 7, bytes.fromhex(load))
             self.put(address, bytes.fromhex(compare))
@@ -115,6 +117,17 @@ class LightingAuditTests(unittest.TestCase):
             pe = MemoryPE()
             pe.put(address, bytes([pe.at(address, 1)[0] ^ 1]))
             with self.assertRaises(ValueError):
+                audit.audit_sequence(pe)
+
+    def test_separate_led_mapping_source_and_disabled_positions(self):
+        result = audit.audit_mapping(MemoryPE())
+        self.assertEqual(result['ledIndices']['command'], '1b / 9b')
+        self.assertEqual(result['disabledLogicalColors'], [122, 123, 124])
+        self.assertIn('ledIndices[keyMapping]', result['colorMapping'])
+        for address in (0x4DC8D7, 0x50348C, 0x503508):
+            pe = MemoryPE()
+            pe.put(address, bytes([pe.at(address, 1)[0] ^ 1]))
+            with self.assertRaisesRegex(ValueError, 'LED mapping instruction'):
                 audit.audit_sequence(pe)
 
     def test_changed_instruction_rejected(self):

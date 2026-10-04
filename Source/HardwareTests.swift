@@ -1275,6 +1275,15 @@ func runMixedOfficialImportChecks(){
 func runLightingDraftExportChecks(){
     func rejected(_ body:()throws->Void){do{try body();preconditionFailure("invalid lighting export must reject")}catch{}}
     var root:[String:Any]=["//":"47","KeyList":WindowsProfile.defaults.map{["DefaultAssignment":$0,"Assignment":$0,"ActionLink":0]},"ActionInfo":[],"LightInfo":["opaque":["id":42]],"CustomLightMode":["opaque":"keep","LightColorInfo":[(0..<126).map{["Red":$0,"Green":255-$0,"Blue":17,"Alpha":255,"opaque":$0]}]]]
+    let factory=WindowsProfile.firmwareLogicalDefaults.reversed().flatMap{value in [UInt8((value>>16)&255),UInt8((value>>8)&255),UInt8(value&255)]}
+    var indices=(0..<126).map{UInt8(($0+7)%126)}
+    let slots=try! WindowsProfile.resolveLightingSlots(factoryKeymap:factory,ledIndices:indices)
+    for index in 0..<126{precondition(slots[index]==((122...124).contains(index) ? nil:(125-index+7)%126))}
+    var duplicate=factory;duplicate.replaceSubrange(3..<6,with:factory[0..<3]);indices[0]=255
+    precondition(try! WindowsProfile.resolveLightingSlots(factoryKeymap:duplicate,ledIndices:indices)[125]==nil)
+    indices[0]=5;precondition(try! WindowsProfile.resolveLightingSlots(factoryKeymap:duplicate,ledIndices:indices)[125]==5)
+    indices[0]=126;rejected{_ = try WindowsProfile.resolveLightingSlots(factoryKeymap:factory,ledIndices:indices)}
+    rejected{_ = try WindowsProfile.resolveLightingSlots(factoryKeymap:Array(factory.dropFirst()),ledIndices:indices)}
     let template=try! JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
     var snapshot=HardwareSnapshot.demo();snapshot.colors=(0..<378).map{UInt8($0%256)}
     for (_,mode) in CherryLighting.modes {

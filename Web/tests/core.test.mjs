@@ -5,8 +5,9 @@ import {MacroStopObservation,replayMacroStopRecord} from '../assets/macro-stop.j
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
+import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -934,4 +935,19 @@ test('official colors validate optional Alpha and hidden RGB before import or ex
   }
   for(const value of [0,255,'128']){const good=clone(root);good.CustomLightMode.LightColorInfo[0][17].Alpha=value;assert.equal(exportWindowsLightingDraft(baseline,good).CustomLightMode.LightColorInfo[0][17].Alpha,value);importWindows(good,baseline);}
   delete root.CustomLightMode.LightColorInfo[0][17].Alpha;importWindows(root,baseline);exportWindowsLightingDraft(baseline,root);
+});
+
+
+test('lighting slots use separate LED indices and firmware logical matching',()=>{
+  const factory=FIRMWARE_LOGICAL_DEFAULTS.slice().reverse().flatMap(v=>[v>>16,(v>>8)&255,v&255]),indices=Array.from({length:126},(_,slot)=>(slot+7)%126);
+  const before=clone(factory),mapping=resolveLightingSlots(factory,indices);
+  for(let i=0;i<126;i++)assert.equal(mapping[i],i>=122&&i<=124?null:(125-i+7)%126);
+  // The first physical match wins, even if a later duplicate has a valid LED.
+  factory.splice(3,3,...factory.slice(0,3));indices[0]=255;
+  assert.equal(resolveLightingSlots(factory,indices)[125],null);
+  assert.equal(resolveLightingSlots(factory,indices)[124],null);
+  indices[0]=5;assert.equal(resolveLightingSlots(factory,indices)[125],5);
+  for(const value of [126,254,-1,256]){const bad=clone(indices);bad[0]=value;assert.throws(()=>resolveLightingSlots(factory,bad));}
+  assert.throws(()=>resolveLightingSlots(before.slice(1),indices));assert.throws(()=>resolveLightingSlots(before,indices.slice(1)));
+  assert.equal(resolveLightingSlots(before,Array(126).fill(255)).every(x=>x===null),true);
 });

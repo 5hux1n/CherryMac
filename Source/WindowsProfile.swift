@@ -60,6 +60,21 @@ enum WindowsProfile {
         for (index,value) in [62:0xF00001,79:0x20008A,80:0x20008B,81:0x200090,82:0x200091,83:0x200088,100:0x200087,101:0x200089,103:0x200085,120:0xF00002,121:0xF00003,122:0xD00100,123:0xD00200,124:0xD00400]{result[index]=value}
         return result
     }()
+    // Fixed 01CE branch: logical defaults -> first matching factory key ->
+    // separate command 1B LED index. No reads or writes occur in this decoder.
+    // The current 378-byte product color bank bounds accepted LED indices.
+    static func resolveLightingSlots(factoryKeymap:[UInt8],ledIndices:[UInt8])throws->[Int?] {
+        guard factoryKeymap.count==378,ledIndices.count==126 else{throw HardwareError(message:"灯光映射需要完整默认键位表和 126 项 LED 索引。")}
+        guard ledIndices.allSatisfy({$0<126 || $0==255})else{throw HardwareError(message:"LED 索引超出当前颜色表范围，停止转换。")}
+        return firmwareLogicalDefaults.enumerated().map{index,value in
+            if (122...124).contains(index){return nil}
+            guard let slot=(0..<126).first(where:{slot in
+                let offset=slot*3
+                return Int(factoryKeymap[offset])<<16 | Int(factoryKeymap[offset+1])<<8 | Int(factoryKeymap[offset+2])==value
+            }),ledIndices[slot] != 255 else{return nil}
+            return Int(ledIndices[slot])
+        }
+    }
     struct HostTextTrigger:Equatable {let logicalIndex:Int;let physicalSlot:Int}
     // Fixed EXE: COL 5 / secondary FE -> raw receiver. Saved descriptor:
     // that top-level collection contains Report 5, eight payload bytes.

@@ -278,6 +278,66 @@ def audit_brightness(pe):
             'limits': 'Two static loading paths only. Live call reachability, brightness field initialization and all other paths remain unproven. Values after level 4 are not part of this five-level table. No device accessed.'}
 
 
+MAPPING_CHECKS = {
+    0x4FC1DE: "6bc203",
+    0x4FC1EE: "e81d24feff",
+    0x4FC209: "81fad7010000",
+    0x4FC20F: "7568",
+    0x4FC28C: "e83f00feff",
+    0x4FC297: "81c730270000",
+    0x4FC29D: "b980000000",
+    0x4FC2A8: "f3a5",
+    0x4FC2BD: "e88e05feff",
+    0x4FC2C8: "81c7302b0000",
+    0x4FC2CE: "b980000000",
+    0x4FC2D9: "f3a5",
+    0x4FC2F4: "e8f76e0000",
+    0x4DC887: "b903000000",
+    0x4DC88C: "f7f9",
+    0x4DC8AC: "c6440dbc04",
+    0x4DC8BB: "83f801",
+    0x4DC8C8: "c64415bc9b",
+    0x4DC8D7: "c6440dbc1b",
+    0x4DC900: "c6440dbc00",
+    0x503245: "c700ff000000",
+    0x50325F: "837df87e",
+    0x5033CE: "390c85c8c67600",
+    0x5033EA: "390495ccc67600",
+    0x503406: "39148dd0c67600",
+    0x503424: "8908",
+    0x50347C: "81c130210000",
+    0x503482: "e86984fbff",
+    0x50348C: "0fb6b40a302b0000",
+    0x50349B: "81c138210000",
+    0x5034A1: "e84a84fbff",
+    0x5034A6: "8930",
+    0x5034B2: "81fab4000000",
+    0x5034B8: "752a",
+    0x5034E4: "837df07a",
+    0x5034EA: "837df07b",
+    0x5034F0: "837df07c",
+    0x503508: "c700ff000000",
+}
+
+
+def audit_mapping(pe):
+    for address, encoded in MAPPING_CHECKS.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError(f'Unexpected LED mapping instruction at {address:#x}')
+    return {'initializer': '0x4fc140', 'resolver': '0x5031f0',
+            'instructionChecks': len(MAPPING_CHECKS),
+            'factoryDefaults': {'helper': '0x4dc2d0', 'command': '07 / 87', 'objectBuffer': 'object+0x2730'},
+            'ledIndices': {'helper': '0x4dc850', 'command': '1b / 9b', 'objectBuffer': 'object+0x2b30',
+                           'length': 'helper object first word divided by three'},
+            'matchingTable': '0x76c6c8 for the nonzero selector excluding 01ba',
+            'keyMapping': 'logical record matches first identical factory-default triplet; unmatched is FF',
+            'colorMapping': 'logical color -> keyMapping -> ledIndices[keyMapping]; not necessarily the physical key slot',
+            'disabledLogicalColors': [122, 123, 124],
+            'exception': '00b4 uses physical keyMapping directly instead of LED table',
+            'limits': 'Static initialization and conditional branch evidence. Actual factory table, LED indices, object selector and caller reachability require device provenance. No query generated or sent.'}
+
+
 def cstring(pe, address):
     result = bytearray()
     for offset in range(256):
@@ -333,6 +393,7 @@ def audit_sequence(pe):
         'selectorAudit': audit_selector(pe),
         'colorAudit': audit_colors(pe),
         'brightnessAudit': audit_brightness(pe),
+        'mappingAudit': audit_mapping(pe),
         'bankBase': 'caller argument << 6',
         'tailField': {'jsonKey': 'LightOpenFlag', 'getter': '0x47ade0', 'getterStructByte': 11, 'parameterByte': 21, 'limits': 'Field origin only; physical on/off semantics and accepted values are not proven'},
         'optionalBegin': {'guard': 'object+0xa84 != 0', 'helper': '0x4d9eb0'},

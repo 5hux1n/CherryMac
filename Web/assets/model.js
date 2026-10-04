@@ -4,6 +4,20 @@ export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
 export function bytes(a,n){return Array.isArray(a)&&a.length===n&&a.every(x=>Number.isInteger(x)&&x>=0&&x<=255);}
+// 01CE logical matching uses factory defaults and the separate 1B LED table.
+// Pure decoding only; no hardware calls. Bounds match the current RGB bank.
+export function resolveLightingSlots(factoryKeymap,ledIndices){
+  requireThat(bytes(factoryKeymap,378)&&bytes(ledIndices,126),'灯光映射需要完整默认键位表和 126 项 LED 索引。');
+  requireThat(ledIndices.every(value=>value<126||value===255),'LED 索引超出当前颜色表范围，停止转换。');
+  return FIRMWARE_LOGICAL_DEFAULTS.map((value,index)=>{
+    if(index>=122&&index<=124)return null;
+    for(let slot=0;slot<126;slot++){
+      const offset=slot*3,record=(factoryKeymap[offset]<<16)|(factoryKeymap[offset+1]<<8)|factoryKeymap[offset+2];
+      if(record===value)return ledIndices[slot]===255?null:ledIndices[slot];
+    }
+    return null;
+  });
+}
 // Host text preparation only; WebHID cannot inject text into other apps.
 export function officialHostTextPlan(action){
   requireThat(winInt(action?.ActionType,'ActionType',0,4)===3&&action.ActionContent&&typeof action.ActionContent.ActionText==='string','Windows 文本动作结构无效。');
