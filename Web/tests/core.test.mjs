@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {keys,demoSnapshot} from '../assets/layout.js';
 import {FIRMWARE_LOGICAL_DEFAULTS} from '../assets/tables.js';
 import {officialHostTextEvent} from '../assets/model.js';
-import {captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
+import {prepareOfficialCustomColors,officialCustomColors,officialRawChannelRange,captureLightingMapping,lightingMappingSlots,lightingColorSlot,resolveLightingSlots,clone,equal,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,decodeBank,validateMacro,MacroRecorder,MacroExecutionEvidence,replayMacroExecutionLog,finiteMacroDurationMilliseconds,fromHardware,resolveMacros,macroBinding,decodeMacroBinding,parseProfile,paint,importWindows,officialMacroAction,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportWindowsLightingDraft,validateHostTextDefinition,officialSystemStageWords,officialHostTextPlan,officialTextTriggerIndex,resolveHostTextTrigger,prepareHostTextBindings,prepareHostTextInstallation,editHostText} from '../assets/model.js';
 import {packet,validateReply,supportsDevice,CherryHID,PageReleaseGate} from '../assets/hid.js';
 import {validatePlan,applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,sameSnapshot,makeKeymapPlan,applyMacroConfiguration,restoreMacroTransaction} from '../assets/writer.js';
 
@@ -1003,4 +1003,32 @@ test('backup downloads and imports retain lighting mapping while old snapshots s
   assert.deepEqual(profile.lightingMapping,lightingMapping);assert.deepEqual(profile.snapshot,snapshot);assert.deepEqual(record,before);
   assert.deepEqual(backupConfiguration({snapshot}),snapshot);
   const bad=clone(record);bad.lightingMapping.deviceInfo[0]^=1;assert.throws(()=>backupConfiguration(bad),/固件/);
+});
+
+
+test('official brightness preserves exact integer scaling and exposes inverse ambiguity',()=>{
+  const raw=Array(378).fill(255),original=clone(raw);
+  for(const [level,expected] of [0,64,134,194,254].entries())assert.equal(officialCustomColors(raw,level).every(v=>v===expected),true);
+  assert.deepEqual(raw,original);assert.deepEqual(officialRawChannelRange(0,0),[0,255]);assert.deepEqual(officialRawChannelRange(254,4),[255,255]);
+  for(let level=0;level<=4;level++){
+    const bank=officialCustomColors(Array.from({length:378},(_,i)=>i%256),level);
+    for(let stored=0;stored<256;stored++){
+      const candidates=bank.slice(0,256).flatMap((value,raw)=>value===stored?[raw]:[]);
+      if(candidates.length)assert.deepEqual(officialRawChannelRange(stored,level),[candidates[0],candidates.at(-1)]);
+      else assert.throws(()=>officialRawChannelRange(stored,level));
+    }
+  }
+  for(const level of [-1,5,1.5,'4'])assert.throws(()=>officialCustomColors(raw,level));
+  assert.throws(()=>officialCustomColors(raw.slice(1),4));assert.throws(()=>officialCustomColors([...raw.slice(1),256],4));
+});
+
+
+test('official custom color preparation scales only mapped LEDs and preserves its inputs',()=>{
+  const snapshot=demoSnapshot(),root=windowsFixture();root.LightInfo.SelectItem=21;root.LightInfo.Light=2;
+  root.CustomLightMode={LightColorInfo:[WINDOWS_DEFAULTS.map(()=>({Red:255,Green:128,Blue:1,Alpha:0}))]};
+  const mapping={deviceInfo:clone(snapshot.deviceInfo),factoryKeymap:FIRMWARE_LOGICAL_DEFAULTS.flatMap(v=>[v>>16,(v>>8)&255,v&255]),ledIndices:Array.from({length:126},(_,i)=>(i+7)%126)},before=clone(snapshot),original=clone(root);
+  const slots=lightingMappingSlots(mapping,snapshot),mapped=new Set(slots.filter(x=>x!=null)),result=prepareOfficialCustomColors(root,snapshot,mapping);
+  for(let slot=0;slot<126;slot++)assert.deepEqual(result.slice(slot*3,slot*3+3),mapped.has(slot)?[134,67,0]:snapshot.colors.slice(slot*3,slot*3+3));
+  assert.deepEqual(snapshot,before);assert.deepEqual(root,original);
+  root.LightInfo.SelectItem=8;assert.throws(()=>prepareOfficialCustomColors(root,snapshot,mapping),/自定义/);
 });

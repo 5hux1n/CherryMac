@@ -428,6 +428,22 @@ enum WindowsProfile {
     }
     // File-only conversion. USB parameters outside 1...8 and unmapped logical
     // colors remain untouched; this does not authorize any lighting write.
+    // Offline preparation for the specifically traced custom-color load path.
+    // Existing read-back colors are never globally rescaled; unmapped LEDs stay.
+    static func prepareOfficialCustomColors(_ data:Data,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext)throws->[UInt8]{
+        try baseline.validate();let root=try templateRoot(data)
+        guard let light=root["LightInfo"] as? [String:Any],try integer(light["SelectItem"],"SelectItem",range:0...24)==21,
+              let custom=root["CustomLightMode"] as? [String:Any],let groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,
+              var result=baseline.colors else{throw HardwareError(message:"官方颜色准备仅支持完整的自定义颜色配置和当前颜色表。")}
+        let level=try integer(light["Light"],"Light",range:0...4),coefficient=CherryLighting.officialBrightnessCoefficients[level]
+        let slots=try lightingMapping.slots(for:baseline)
+        for (index,color) in groups[0].enumerated(){
+            let raw=try ["Red","Green","Blue"].map{try integer(color[$0],$0,range:0...255)}
+            if let alpha=color["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
+            guard let slot=slots[index]else{continue}
+            result.replaceSubrange(slot*3..<slot*3+3,with:raw.map{UInt8(($0*coefficient)>>8)})
+        };return result
+    }
     static func encodeLightingDraft(_ snapshot:HardwareSnapshot,template:Data,lightingMapping:LightingMappingContext?=nil)throws->Data {
         try snapshot.validate();var root=try templateRoot(template)
         guard var light=root["LightInfo"] as? [String:Any],var custom=root["CustomLightMode"] as? [String:Any],

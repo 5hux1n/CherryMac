@@ -432,6 +432,30 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
 }
 export function rgb(hex){requireThat(/^#[\da-f]{6}$/i.test(hex),'请输入六位 HEX 色号。');return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
 export const hex=b=>'#'+b.map(x=>x.toString(16).padStart(2,'0')).join('');
+// Raw draft RGB only; read-back banks may already contain this scaling.
+export const OFFICIAL_BRIGHTNESS_COEFFICIENTS=Object.freeze([0,65,135,195,255]);
+export function officialCustomColors(raw,brightness){
+  requireThat(bytes(raw,378)&&Number.isInteger(brightness)&&brightness>=0&&brightness<=4,'官方亮度转换需要完整 RGB 表和 0～4 档亮度。');
+  const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];return raw.map(value=>(value*coefficient)>>8);
+}
+export function prepareOfficialCustomColors(template,baseline,lightingMapping){
+  validateSnapshot(baseline,true);validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
+  const light=template.LightInfo,groups=template.CustomLightMode?.LightColorInfo;
+  requireThat(light&&winInt(light.SelectItem,'SelectItem',0,24)===21&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'官方颜色准备仅支持完整的自定义颜色配置和当前颜色表。');
+  const level=winInt(light.Light,'Light',0,4),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[level],slots=lightingMappingSlots(lightingMapping,baseline),result=clone(baseline.colors);
+  groups[0].forEach((color,index)=>{
+    requireThat(color&&typeof color==='object'&&!Array.isArray(color),'逐键颜色记录结构无效。');
+    const raw=['Red','Green','Blue'].map(name=>winInt(color[name],name,0,255));if(Object.hasOwn(color,'Alpha'))winInt(color.Alpha,'Alpha',0,255);
+    const slot=slots[index];if(slot!=null)result.splice(slot*3,3,...raw.map(value=>(value*coefficient)>>8));
+  });return result;
+}
+export function officialRawChannelRange(stored,brightness){
+  requireThat(Number.isInteger(stored)&&stored>=0&&stored<=255&&Number.isInteger(brightness)&&brightness>=0&&brightness<=4,'颜色或亮度数据无效。');
+  const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];
+  if(coefficient===0){requireThat(stored===0,'该颜色无法由零亮度生成。');return [0,255];}
+  const lower=Math.ceil(stored*256/coefficient),upper=Math.min(255,Math.ceil((stored+1)*256/coefficient)-1);
+  requireThat(lower<=upper,'该颜色超出此档官方亮度能生成的范围。');return [lower,upper];
+}
 export function paint(s,selection,pattern,start,end,lightingMapping=null){
   if(lightingMapping!=null)lightingMappingSlots(lightingMapping,s);
   const slotFor=key=>lightingColorSlot({lightingMapping},key.slot);

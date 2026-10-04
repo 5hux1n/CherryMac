@@ -35,6 +35,25 @@ enum CherryLighting {
     // Official DefaultLightName entry 47 for the supplied Pokémon model.
     // Names/codes come from the mode table, not this device's previous mode.
     static let modes:[(String,UInt8)] = [("自定义逐键颜色",8),("波纹",0),("光谱",1),("呼吸",2),("霓虹",10),("曲线",12),("折返",15),("放射",18),("扩散",19),("单点亮",21),("常亮",3),("闪电",23)]
+    // Fixed Utility loading paths 505900 / 5059F0 and color method 501190.
+    // Use with raw draft RGB only. A read-back bank may already be scaled.
+    static let officialBrightnessCoefficients=[0,65,135,195,255]
+    static func officialCustomColors(_ raw:[UInt8],brightness:Int)throws->[UInt8]{
+        guard raw.count==378,(0...4).contains(brightness)else{throw HardwareError(message:"官方亮度转换需要完整 RGB 表和 0～4 档亮度。")}
+        let coefficient=officialBrightnessCoefficients[brightness]
+        return raw.map{UInt8((Int($0)*coefficient)>>8)}
+    }
+    // Returning a range makes the information loss explicit: do not pretend
+    // that stored RGB uniquely recovers the original Windows editor color.
+    static func officialRawChannelRange(_ stored:UInt8,brightness:Int)throws->ClosedRange<Int>{
+        guard (0...4).contains(brightness)else{throw HardwareError(message:"亮度须为 0～4。")}
+        let coefficient=officialBrightnessCoefficients[brightness]
+        if coefficient==0{guard stored==0 else{throw HardwareError(message:"该颜色无法由零亮度生成。")};return 0...255}
+        let lower=(Int(stored)*256+coefficient-1)/coefficient
+        let upper=min(255,((Int(stored)+1)*256+coefficient-1)/coefficient-1)
+        guard lower<=upper else{throw HardwareError(message:"该颜色超出此档官方亮度能生成的范围。")}
+        return lower...upper
+    }
     static let patterns=["自定义颜色","横向渐变","纵向渐变","彩虹配色（静态）","皮卡丘配色","喷火龙配色"]
     static let regions=["当前选择","全部按键","主键区","功能键区","数字区","方向键","WASD"]
     static func region(_ index:Int,keys:[KeySpec])->Set<String>{

@@ -1296,6 +1296,18 @@ func runLightingDraftExportChecks(){
         precondition(colors[0][79]["Red"] as! Int==79 && colors[0][17]["Red"] as! Int==Int(snapshot.colors![306]) && colors[0][17]["Alpha"] as! Int==255)
         precondition(try! WindowsProfile.encodeLightingDraft(snapshot,template:output)==output)
     }
+    let rawColors=(0..<378).map{UInt8($0%256)}
+    for (level,expected) in [0,64,134,194,254].enumerated(){
+        precondition(try! CherryLighting.officialCustomColors(Array(repeating:255,count:378),brightness:level).allSatisfy{Int($0)==expected})
+        let scaled=try! CherryLighting.officialCustomColors(rawColors,brightness:level)
+        for value in 0..<256{
+            let candidates=(0..<256).filter{scaled[$0]==UInt8(value)}
+            if let first=candidates.first,let last=candidates.last{precondition(try! CherryLighting.officialRawChannelRange(UInt8(value),brightness:level)==first...last)}
+            else{rejected{_ = try CherryLighting.officialRawChannelRange(UInt8(value),brightness:level)}}
+        }
+    }
+    rejected{_ = try CherryLighting.officialCustomColors(rawColors,brightness:5)}
+    rejected{_ = try CherryLighting.officialCustomColors(Array(rawColors.dropFirst()),brightness:4)}
     let invalidAlphas:[Any]=[-1,256,NSNull()]
     for index in [17,79] {
         for invalid in invalidAlphas {
@@ -1317,6 +1329,13 @@ func runLightingDraftExportChecks(){
         call+=1;var data:[UInt8];switch command{case 7:data=mapping.factoryKeymap;case 0x1B:data=mapping.ledIndices;case 3:data=snapshot.deviceInfo;default:data=snapshot.keymap}
         if call==failedCall{data[0] ^= 1};return data
     }}}
+    var colorRoot=try! WindowsProfile.templateRoot(template)
+    colorRoot["LightInfo"]=["SelectItem":21,"Light":2]
+    colorRoot["CustomLightMode"]=["LightColorInfo":[(0..<126).map{_ in ["Red":255,"Green":128,"Blue":1,"Alpha":0]}]]
+    let colorData=try! JSONSerialization.data(withJSONObject:colorRoot)
+    let prepared=try! WindowsProfile.prepareOfficialCustomColors(colorData,baseline:snapshot,lightingMapping:mapping)
+    let mapped=Set(try! mapping.slots(for:snapshot).compactMap{$0})
+    for slot in 0..<126{precondition(Array(prepared[slot*3..<slot*3+3])==(mapped.contains(slot) ? [134,67,0]:Array(snapshot.colors![slot*3..<slot*3+3])))}
     let mappedOutput=try! WindowsProfile.encodeLightingDraft(snapshot,template:template,lightingMapping:mapping)
     let mappedProfile=try! WindowsProfile.decode(mappedOutput,baseline:.demo(),lightingMapping:mapping).profile
     precondition(try! HardwareProfile.decode(mappedProfile.encoded()).lightingMapping==mapping)
