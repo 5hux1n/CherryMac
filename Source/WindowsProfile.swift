@@ -453,6 +453,46 @@ enum WindowsProfile {
             var format="CherryMacLightingTraceReview";var version=1;var hardwareReady=false
             var source:String;var status:String;var acceptedReports:Int;var expectedReports:Int;var failedIndex:Int
         }
+        struct ExecutionResult {
+            var trace:Trace;var current:HardwareSnapshot?;var readbackMatches:Bool;var failure:String
+        }
+        // Injectable transport only; deliberately not connected to CherryUSB.
+        // The caller must exclusively own one current device/session. Durable
+        // pending records precede exchange, so a crash cannot hide an attempt.
+        func executeCandidate(baseline:HardwareSnapshot,source:String,
+                              assertCurrent:()throws->Void,cancelled:()->Bool,
+                              read:()throws->HardwareSnapshot,
+                              backup:(HardwareSnapshot)throws->Void,
+                              persist:(Trace)throws->Void,clock:()->Int,
+                              wait:(Int)throws->Void,exchange:([UInt8])throws->[UInt8])throws->ExecutionResult {
+            let packets=try reports(),target=try expectedReadback(from:baseline)
+            var trace=Trace(format:"CherryMacLightingTrace",version:1,source:source,entries:[])
+            _ = try reviewTrace(trace)
+            func check()throws{try assertCurrent();guard !cancelled() else{throw HardwareError(message:"灯效流程已取消。")}}
+            try check();let fresh=try read();try fresh.validate()
+            guard sameConfiguration(fresh,baseline) else{throw HardwareError(message:"灯效基线已改变，请重新读取。")}
+            try backup(fresh);try persist(trace);try check()
+            let afterBackup=try read();try afterBackup.validate()
+            guard sameConfiguration(afterBackup,baseline) else{throw HardwareError(message:"备份后配置发生变化，未发送灯效指令。")}
+            var failure=""
+            for packet in packets {
+                do{try check();try wait(packet.delayMilliseconds);try check()}catch{failure=error.localizedDescription;break}
+                let index=trace.entries.count
+                trace.entries.append(.init(request:packet.request,sentMilliseconds:clock()))
+                _ = try reviewTrace(trace);try persist(trace)
+                do{try check();let reply=try exchange(packet.request);trace.entries[index].reply=reply}
+                catch{trace.entries[index].error=error.localizedDescription}
+                trace.entries[index].endedMilliseconds=clock()
+                let assessment=try reviewTrace(trace);try persist(trace)
+                if assessment.status=="failed"{failure=trace.entries[index].error ?? "灯效回复校验失败。";break}
+            }
+            var current:HardwareSnapshot?
+            do{try assertCurrent();let value=try read();try value.validate();try assertCurrent();current=value}
+            catch{if failure.isEmpty{failure=error.localizedDescription}}
+            let matches=current.map{sameConfiguration($0,target)} ?? false
+            if failure.isEmpty && !matches{failure="灯效读回与目标不一致。"}
+            return .init(trace:trace,current:current,readbackMatches:failure.isEmpty && matches,failure:failure)
+        }
         // A trace is untrusted evidence, never permission to send or proof of
         // persistence. A pending/failed exchange must be the final entry.
         func reviewTrace(_ trace:Trace)throws->TraceReview {

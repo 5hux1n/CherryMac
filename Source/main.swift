@@ -1278,6 +1278,7 @@ if let index=CommandLine.arguments.firstIndex(of:"--review-official-lighting") {
         print("PASS: lighting recovery reviewed offline; no HID or restore authorization");exit(0)
     }catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}
 }
+if CommandLine.arguments.contains("--lighting-execution-self-test"){runLightingExecutionChecks();exit(0)}
 if CommandLine.arguments.contains("--lighting-draft-self-test"){runLightingDraftExportChecks();exit(0)}
 if CommandLine.arguments.contains("--mixed-import-self-test"){runMixedOfficialImportChecks();exit(0)}
 app.setActivationPolicy(.accessory)
