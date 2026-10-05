@@ -927,6 +927,42 @@ def inspect_settings_window_messages(pe):
             "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
+def inspect_settings_post_apply(pe):
+    checks = {
+        0x4B0099: "e988020000", 0x4B0336: "83b90026000000",
+        0x4B0345: "83baf405000000", 0x4B035F: "0f8481020000",
+        0x4B0365: "688c027600", 0x4B04FB: "e830c20300",
+        0x4EC73C: "81c65c210000", 0x4EC742: "b90b000000",
+        0x4EC74A: "f3a566a5a4", 0x4FB990: "e85b5b0400",
+        0x4FB998: "81c65c210000", 0x4FB9B6: "e865f9f7ff",
+        0x5414FC: "81c75c210000", 0x54150A: "f3a566a5a4",
+        0x4F6446: "c7800026000000000000",
+        0x4B88AA: "81f999000000", 0x4B88C4: "81fafb010000",
+        0x4B88DE: "3def010000", 0x4B88F7: "81f9da010000",
+        0x4B88FD: "0f85d4020000", 0x4B8909: "e8d287f7ff",
+        0x4B8911: "899570fdffff", 0x4B8BD1: "898800260000",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected settings post-apply instruction")
+    if pe.pointer(0x77F604 + 0x324) != 0x4FB970:
+        raise ValueError("Unexpected post-apply structure setter")
+    label = "device_select_layout".encode("utf-16le") + b"\0\0"
+    if pe.at(0x76028C, len(label)) != label:
+        raise ValueError("Unexpected post-apply device list")
+    return {"instructionChecks": len(checks), "entry": "0x4b0326",
+            "deviceList": "device_select_layout", "requiredDeviceMember": "0x2600",
+            "requiredWindowMember": "0x5f4", "structureBytes": 47,
+            "structureMember": "0x215c", "getter": "0x4ec730",
+            "structureSetterVirtualOffset": "0x324", "structureSetter": "0x4fb970",
+            "profileJSONSetter": "0x47b320",
+            "targetConstructorInitialFlag": 0,
+            "selectionFlagWriter": "0x4b8bd1",
+            "selectionFlagWriterProductAllowlist": [0x99, 0x1FB, 0x1EF, 0x1DA],
+            "selectionFlagWriterIncludesTarget": False,
+            "limits": "Post-apply device-list path copies the lighting structure, then invokes save/refresh/parameter virtual methods. This named selection setter excludes 01CE; initialization is not proof of every later runtime value, and other possible setters or indirect paths are not excluded. This is not a seven-word settings transport or a hardware acceptance result."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -1183,7 +1219,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 25,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 26,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1196,6 +1232,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
+        "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
