@@ -489,6 +489,13 @@ def inspect_external_property_binding(pe, dll_path=None):
         0x10002560: "83f86f", 0x10002570: "8b04b568730310",
         0x100025B0: "83fe5c", 0x10002563: "72be",
         0x100025B3: "72bb", 0x100025BA: "8d8600000100",
+        0x1000FEC7: "687cf10210", 0x1000FEF8: "ff1500a00210",
+        0x1000FF27: "68a8f10210", 0x1000FF31: "ff1520a00210",
+        0x1000FF7B: "ff1508a00210", 0x1000FF4F: "a104920310",
+        0x1000FF5E: "ffd0", 0x10010F02: "6874eb0210",
+        0x10010F0A: "6864eb0210", 0x10010F0F: "ff1504a20210",
+        0x10010F1F: "8b4a30", 0x10010F28: "ffd1",
+
     }
     for address, encoded in dll_checks.items():
         expected = bytes.fromhex(encoded)
@@ -514,9 +521,28 @@ def inspect_external_property_binding(pe, dll_path=None):
         tables.append({"address": hex(address), "count": count, "names": names})
     if not all(name in tables[1]["names"] for name in requests.values()):
         raise ValueError("Named main executable requests absent from library lookup")
+    handlers = {"EXControl": 0x1000FE80, "DeviceSpecificControl": 0x10010E40}
+    for name, target in handlers.items():
+        index = tables[1]["names"].index(name)
+        if dll.pointer(0x100375B8 + index * 4) != target:
+            raise ValueError("Unexpected generic property handler table entry")
+    imports = {0x1002A000: "RegCreateKeyExW", 0x1002A020: "RegSetValueExW",
+               0x1002A008: "RegQueryValueExW", 0x1002A204: "CoCreateInstance"}
+    for address, name in imports.items():
+        expected = (name + "\0").encode("ascii")
+        if dll.at(dll.base + dll.pointer(address) + 2, len(expected)) != expected:
+            raise ValueError("Unexpected generic property handler import")
+    for address, name in {0x1002F17C: "SOFTWARE\\C-Media\\Hook", 0x1002F1A8: "EnableEX"}.items():
+        expected = (name + "\0").encode("utf-16-le")
+        if dll.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected EXControl registry string")
     result["library"] = {"sha256": digest, "lookupMethod": "0x10002520",
                          "propertyMethod": "0x10004c70", "instructionChecks": len(dll_checks),
                          "requestTables": tables,
+                         "genericHandlers": {"functionTable": "0x100375b8", "targets": {k: hex(v) for k, v in handlers.items()},
+                                             "EXControl": {"registryKey": "SOFTWARE\\C-Media\\Hook", "value": "EnableEX", "followingCallbackPointer": "0x10039204"},
+                                             "DeviceSpecificControl": {"creationAPI": "CoCreateInstance", "followingVirtualOffset": "0x30"},
+                                             "limits": "Named registry and COM paths only; callback, virtual effects and model association remain unclassified. Not a keyboard HID setting command."},
                          "limits": "Fixed bounded name tables contain audio and generic device controls; names alone do not prove handler effects or keyboard support."}
     return result
 
@@ -906,7 +932,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 14,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 15,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
