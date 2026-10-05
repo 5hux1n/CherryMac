@@ -683,6 +683,71 @@ def inspect_default_lighting_control_updates(pe, skin=None):
                               "limits": "Declared classes only, not live control creation or group membership."}
     return result
 
+def inspect_default_mode_visibility(pe):
+    """Bind the target keyboard to the UI-layout dispatcher, never execute it."""
+    checks = {
+        0x4F609A: "c70004f67700", 0x4F6168: "c782f820000001000000",
+        0x4F70A7: "8b91f8200000", 0x4F70AD: "52",
+        0x4F70B4: "8b88b81e0000", 0x4F70BA: "e8f1b3f4ff",
+        0x4424BD: "8988b4080000", 0x442F3B: "8b82b4080000",
+        0x442F41: "50", 0x442F48: "e8830e0000",
+        0x443DDF: "837dfc01", 0x443DE3: "741c",
+        0x443DFA: "e801150000", 0x443E08: "e843000000",
+        0x443E16: "e845200000",
+        0x443F6B: "8b8218010000", 0x443F71: "ffd0",
+        0x443F99: "8b8224010000", 0x443F9F: "ffd0",
+        0x443DB6: "8b8218010000", 0x443DBC: "ffd0",
+        0x443AC3: "ff15c4b06e00", 0x443AD9: "ff15c4b06e00",
+        0x443FB9: "837db018", 0x443FBD: "0f8719120000",
+        0x443FC6: "ff249598524400",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError(f"Unexpected default mode visibility instruction at {address:#x}")
+    if pe.class_name(0x77F604) != ".?AVCEevisionKeyboardDevice@@":
+        raise ValueError("Unexpected target keyboard layout constructor class")
+    bodies = {
+        0x443A70: (0x443AE5, "9176dcb3b7a8b50eb720bbb77f5f1472e11fd7a0a787d68350d431768f3fba07"),
+        0x443D40: (0x443DC4, "92001a4aa9b9b93fd16131c7d8fba767ea88c5679bce0eda0366b2b1b777f9cd"),
+        0x443DD0: (0x443E21, "f2bad7d11a4182ff842b38a2b78463b74cfcead82a5fc632221b22e89855cbae"),
+        0x443E50: (0x445297, "86966b773c9e0f66569e6d5bea393d81bed0f8eeb33602e5e1fd70157b6d73b1"),
+        0x445300: (0x445E35, "a18b32e5e779883d99c082e6c8e8db439181cbeb734dabaa2b3b68636d328455"),
+        0x445E60: (0x4463F2, "a8bdab1cee0aa61a59630f9d32785806993ab7dd3e23d144fab00bea02f4b6b2"),
+    }
+    for address, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(address, end-address)).hexdigest() != digest:
+            raise ValueError("Unexpected mode visibility function body")
+    imports = {
+        0x6EB3A4: "?FindSubControlByName@CPaintManagerUI@DuiLib@@QBEPAVCControlUI@2@PAV32@PB_W@Z",
+        0x6EB0C4: "?SetBkImage@CControlUI@DuiLib@@QAEXPB_W@Z",
+    }
+    for slot, name in imports.items():
+        expected=(name+"\0").encode("ascii")
+        if pe.at(pe.base+pe.pointer(slot)+2,len(expected))!=expected:
+            raise ValueError("Unexpected mode visibility UI import")
+    table = pe.at(0x445298,25*4)
+    table_digest = hashlib.sha256(table).hexdigest()
+    if table_digest != "e2edccb02b7dbb3e562db26a9f15c6dcca2b56a0ce63905f87fcb2c8fa399d81":
+        raise ValueError("Unexpected target mode visibility branch table")
+    branches = struct.unpack("<25I",table)
+    if any(not 0x443FCD <= address < 0x445297 for address in branches):
+        raise ValueError("Mode visibility branch exceeds target helper")
+    return {"instructionChecks": len(checks), "hardwareWriteAuthorized": False,
+            "targetModeBranches": {"address": "0x445298", "sha256": table_digest,
+                                   "targets": [hex(v) for v in branches], "fallback": "0x4451dc",
+                                   "limits": "Helper argument positions 0..24 only; the argument's origin and per-mode capability flags require separate tracing. Not a lighting hardware-code table."},
+            "functionSHA256": {hex(k): v[1] for k,v in bodies.items()},
+            "targetLayout": {"constructorTable": "0x77f604", "deviceMember": "0x20f8", "initialValue": 1,
+                             "copyCall": "0x4f70ba", "controlMember": "0x8b4",
+                             "dispatcher": "0x443dd0", "targetHelper": "0x443e50",
+                             "otherLayouts": {"2": "0x445300", "3": "0x445e60"}},
+            "namedUIOperations": {"visibleVirtualOffset": "0x118", "enabledVirtualOffset": "0x124",
+                                  "backgroundImageHelper": "0x443a70", "sameModeVisibilityHelper": "0x443d40",
+                                  "imports": {hex(k):v for k,v in imports.items()}},
+            "limits": "The target constructor initializes layout 1 and the named initialization copies it to the light control. This narrows the next capability audit to 0x443e50; later member changes, live control types, all branch effects and callbacks remain separate work. Function hashes exclude adjacent jump-table data. No firmware macro retention, complete no-write or persistence claim."}
+
+
 def inspect_default_key_action_branch(pe):
     """Distinguish factory-record copying from action binding serialization."""
     virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
@@ -1079,6 +1144,9 @@ def inspect_settings_ui_control_actions(path):
                "?Selected@CCheckBoxUI@DuiLib@@UAEX_N0@Z": 0x110A9290,
                "??0CCheckBoxUI@DuiLib@@QAE@XZ": 0x110A8540,
                "??0COptionUI@DuiLib@@QAE@XZ": 0x110A8570,
+               "?SetVisible@CControlUI@DuiLib@@UAEX_N@Z": 0x1105B620,
+               "?SetEnabled@COptionUI@DuiLib@@UAEX_N@Z": 0x110A9820,
+               "?SetEnabled@CSliderUI@DuiLib@@UAEX_N@Z": 0x110B6510,
                "?SetValue@CSliderUI@DuiLib@@QAEXH@Z": 0x110B6610,
                "?SendNotify@CPaintManagerUI@DuiLib@@QAEXPAVCControlUI@2@PB_WIJ_N@Z": 0x11068AD0}
     directory = pe.base + pe.u32(pe.u32(0x3C) + 24 + 96)
@@ -1101,6 +1169,9 @@ def inspect_settings_ui_control_actions(path):
         raise ValueError("Unexpected slider value callback virtual table")
     if pe.class_name(0x11113E5C) != ".?AVCCheckBoxUI@DuiLib@@" or pe.pointer(0x11113E5C + 0x1C0) != 0x110A9290:
         raise ValueError("Unexpected checkbox selection virtual target")
+    for table, enabled in [(0x11113C94,0x110A9820),(0x11113E5C,0x110A9820),(0x111141BC,0x110B6510)]:
+        if pe.pointer(table+0x118)!=0x1105B620 or pe.pointer(table+0x124)!=enabled:
+            raise ValueError("Unexpected named widget visibility/enabled virtual target")
     if hashlib.sha256(pe.at(0x110A9290, 0x110A93FD - 0x110A9290)).hexdigest() != "cf73a3e50345835c37d433a6af4e41b47aeb5f006feea7c446f351ea08f183c6":
         raise ValueError("Unexpected checkbox selection function body")
     group_bodies = {
@@ -1141,6 +1212,7 @@ def inspect_settings_ui_control_actions(path):
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected UI control action instruction")
     return {"dllSHA256": digest, "instructionChecks": len(checks), "exports": {k: hex(v) for k, v in exports.items()},
+            "namedWidgetVisibility": {"visibleOffset": "0x118", "enabledOffset": "0x124", "tables": ["0x11113c94", "0x11113e5c", "0x111141bc"], "limits": "Known option, checkbox and slider vtables only; resource declarations and live layout children are not interchangeable. Nested effects of these setters are not classified here."},
             "optionGroupInitialization": {"groupMember": "0xb5c", "initialUTF16FirstUnit": 0,
                                           "emptyCheck": "0x1104f530", "emptySkipsPeerLoop": True,
                                           "managerRegistration": "Empty groups skip this method's explicit group-registration call; its base manager call is not classified here.",
@@ -2188,7 +2260,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 44,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 45,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2199,6 +2271,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
         "defaultControlRefresh": inspect_default_control_refresh(pe),
         "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
+        "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
