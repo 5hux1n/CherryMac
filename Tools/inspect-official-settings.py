@@ -927,6 +927,27 @@ def inspect_settings_window_messages(pe):
             "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
+def inspect_polling_reload_allowlist(pe):
+    checks = {0x4FDB6C: "81fada010000", 0x4FDB7E: "81f9e6010000",
+              0x4FDB90: "3df7010000", 0x4FDBA1: "81fae2010000",
+              0x4FDBB3: "81f9ef010000", 0x4FDBC5: "3dfb010000",
+              0x4FDBD6: "81fa42010000", 0x4FDBE8: "81f94c010000",
+              0x4FDBEE: "752a", 0x4FDBF3: "660fb682ba3f0000",
+              0x4FDBFE: "668981e63f0000", 0x4FDC08: "660fb682bb3f0000",
+              0x4FDC13: "668981e83f0000", 0x4FDD04: "81c1e03f0000",
+              0x4FDD30: "e83b51f8ff"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected polling reload allowlist instruction")
+    return {"instructionChecks": len(checks), "method": "0x4fd620",
+            "products": [0x1DA, 0x1E6, 0x1F7, 0x1E2, 0x1EF, 0x1FB, 0x142, 0x14C],
+            "includesTarget": False,
+            "sourceMembers": {"ReportSelectItem": "0x3fba", "RFReportSelectItem": "0x3fbb"},
+            "destinationMembers": {"ReportSelectItem": "0x3fe6", "RFReportSelectItem": "0x3fe8"},
+            "subsequentJSONSetter": "0x482e70",
+            "limits": "On this reload path, 01CE skips the two raw-byte-to-setting assignments. Subsequent JSON serialization and the previously audited polling window notification can therefore use existing settings values; they do not prove fresh firmware polling readback. Pointer-based consumers and other reload paths are not globally excluded."}
+
+
 def inspect_other_parameter_sender_classes(pe):
     tables = {
         0x77F050: (".?AVCEevisionHS6533Device@@", {0x2BC: 0x4ED810}),
@@ -1313,7 +1334,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 29,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 30,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1330,6 +1351,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
         "profileSelectionSend": inspect_profile_selection_send(pe),
         "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
+        "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
