@@ -1725,6 +1725,94 @@ def inspect_macro_capacity_sender(pe):
             "limits": "Sender structure only. Does not establish official UI limits, firmware acceptance of larger counts, or readable/writable final capacity byte. Zero collected bindings means no bank send in this method, not whole-program or firmware erasure/retention proof."}
 
 
+def inspect_macro_binding_collection_and_editor_limit(pe):
+    """Audit per-binding append, ordinal key references and dynamic editor limit."""
+    if pe.pointer(0x77F604 + 0x260) != 0x4F7D20:
+        raise ValueError("Unexpected target macro editor setup dispatch")
+    checks = {
+        0x41D963: "8b4508", 0x41C527: "8b45fc",
+        0x41EE9A: "e881d6ffff", 0x41F2CA: "e8c1fbffff",
+        0x4211AA: "e8e1dcffff", 0x4211AF: "83c004",
+        0x4F8399: "0fb681fa1d0000",
+        0x4F83A0: "c1e007",
+        0x4F83A3: "83e816",
+        0x4F83A6: "99",
+        0x4F83A7: "83e203",
+        0x4F83AA: "03c2",
+        0x4F83AC: "c1f802",
+        0x4F83BC: "e8af5ff6ff",
+        0x45E37D: "8988dc090000",
+        0x453C34: "688cab7300",
+        0x453C78: "3981dc090000",
+        0x453C7E: "0f8fad000000",
+        0x453CB1: "6a00",
+        0x453CB3: "6a00",
+        0x453CB5: "681b0c0000",
+        0x453CC7: "ff15a0be6e00",
+        0x4940B3: "817d081b0c0000",
+        0x4940CA: "e8c10e0200",
+        0x4B4FFA: "83bddcfeffff00",
+        0x4B5001: "7533",
+        0x4B5013: "68e4ac7400",
+        0x4FF990: "83bd98fcffff02",
+        0x4FF997: "7402",
+        0x4FF9B4: "83c004",
+        0x4FF9BE: "e88d31f8ff",
+        0x4FF9C9: "83c001",
+        0x482B6A: "e8e1fbf9ff",
+        0x482B74: "0f84b7000000",
+        0x42276C: "394508",
+        0x42276F: "7321",
+        0x422784: "3b4508",
+        0x422787: "7709",
+        0x482C27: "83c004",
+        0x482CA8: "83c204",
+        0x4FF00F: "c78548fdffff00000000",
+        0x4FF2D0: "888de7fdffff",
+        0x4FF2FA: "8885e7fdffff",
+        0x4FF31B: "8895e7fdffff",
+        0x4FF333: "83c101",
+        0x4FF336: "898d48fdffff",
+        0x4FFF08: "e8e325f2ff",
+        0x4FFF0D: "8b00",
+        0x4FFF23: "e878e3f7ff",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected macro binding/editor-limit instruction")
+    bodies = [
+        (0x482B50, 0x482CB7, "a500c60fdadb7cd3597d3c340163afa59f717d453bb4ef9575b8dc2166b94fe3"),
+        (0x422750, 0x4227A2, "d5a8fc88c24cd429e7410ca9c8123942923348f892ad34841b5e0166b73aab57"),
+        (0x45E370, 0x45E389, "364eca2d7f007a6a7a24fde5637c6b38bb192aba1112b5e05c34db9df953a523"),
+        (0x4B4F90, 0x4B51F2, "d7720114989e85701cd580690be6a873803b6ff2d78ff3f3387983a2052a71ab"),
+    ]
+    for start, end, expected in bodies:
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != expected:
+            raise ValueError("Unexpected macro append, alias-check or UI callback body")
+    for address, value in [(0x73AB8C, "macro_action_list"), (0x74ACE4, "message_text_27")]:
+        raw = (value + "\0").encode("utf-16le")
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected macro list/error resource string")
+    return {"instructionChecks": len(checks),
+            "functionBodies": [{"method": hex(a), "endExclusive": hex(b), "SHA256": h} for a,b,h in bodies],
+            "bindingCollection": {"sender": "0x4ff710", "append": "0x482b50",
+                                  "value": "ActionLinkIndex", "deduplicatesEqualActionIndices": False,
+                                  "aliasCheck": "0x422750 compares source pointer to vector begin/end, not index values",
+                                  "serializationLookup": "0x4fff08 -> 0x4fff23",
+                                  "keyReference": "0x4fefb0 key sender uses a separate ordinal, increments once per macro binding",
+                                  "sameActionOnTwoKeys": "Two collected entries and two serialized records; unbound ActionInfo macros are not collected."},
+            "editorEventLimit": {"setup": "0x4f8399..0x4f83bc", "setter": "0x45e370",
+                                 "setupVirtualOffset": "0x260", "setupMethod": "0x4f7d20",
+                                 "member": "macroControl+0x9dc",
+                                 "formula": "trunc((byte(device+0x1dfa)*128 - 22) / 4)",
+                                 "knownCapacityByte": 24, "knownCapacityEventLimit": 762,
+                                 "oneRecorderCheck": "0x453c78 compares the configured limit to macro_action_list count",
+                                 "exhaustionMessage": "0x0c1b with wParam=0,lParam=0 -> 0x4b4f90 -> message_text_27"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Static named official paths. Editor per-macro limit is separate from total bound-record byte capacity. Does not establish firmware execution of 762 events or authorize expanded writes. CherryMac currently uses a shared library and 32/256 policy; migration of existing profiles requires explicit compatibility handling."}
+
+
 def inspect_macro_mouse_search_bounds(pe):
     """Check named mouse-table search bounds and separate toolbar forwarding."""
     checks = {
@@ -1924,7 +2012,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 39,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 40,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1949,6 +2037,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),
+        "macroBindingCollectionAndEditorLimit": inspect_macro_binding_collection_and_editor_limit(pe),
         "customLightingJSON": inspect_custom_lighting_json(pe),
         "modeRefreshMemoryPaths": inspect_refresh_mode_memory(pe),
         "targetParameterSelector": inspect_target_parameter_branch(pe),
