@@ -14,7 +14,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--ligh
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.10' if lighting_acceptance else '0.26.0'
+version = '0.1.11' if lighting_acceptance else '0.27.0'
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
@@ -96,9 +96,12 @@ if lighting_acceptance:
 此包与旧灯效版本不同，名字和端口独立，不替换旧包。它包含实际发送入口，请按统一验收安排使用；打包过程没有运行网页服务、申请权限或访问键盘。
 '''.encode()
 contents['README.md'] += '\n灯效页可使用“仅导入官方灯效”，单独载入本型号官方 JSON 的灯效和原始配色，保留已有键位、宏、文本及设备设置草稿。此前没有模板时，不载入该文件的设备设置。LightOpenFlag 已在导入、草稿和导出之间同步；尚未确定其物理开关含义，没有新增开／关控件。此版本只编译与打包，未运行测试或访问键盘。\n'.encode()
+contents['README.md'] += '\n按键页增加官方默认可见的 11 项多媒体功能，以及 Finder、邮件、音乐启动组合键。启动组合键需要先在 Mac 客户端手动安装对应系统快捷操作；网页不能安装 macOS 服务。安装与实体触发尚待验收。\n'.encode()
+contents['README.md'] += ('\n独立灯效页成功写入或恢复后可“核对并返回原编辑器”：返回前再读回、关闭 USB，会按原计划核对完整记录。原编辑器保留全部草稿，重新连接要求读回一致。返回失败可重新读取后重试，不需重复写入。回传不证明外观、物理身份或断电保留。\n' if lighting_acceptance else '\n灯效主按钮仅核对并导出计划，不发送灯效；计划导出不停止文本服务或关闭 USB。\n').encode()
+
 manifest = {'format': 'CherryMacWebLightingAcceptance' if lighting_acceptance else 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True, 'awaitedUSBClose': True},
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': False, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True, 'awaitedUSBClose': True},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 if lighting_acceptance:
