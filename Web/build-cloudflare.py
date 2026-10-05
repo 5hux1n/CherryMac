@@ -7,13 +7,20 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from package_runtime import runtime_files
+from package_runtime import runtime_files, preview_versions
 
 root = Path(__file__).resolve().parent
 out = root / 'cloudflare-dist'
-version = '0.29.0'
-source = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text()).group(1)
+subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', 'Web'], cwd=root.parent, check=True)
+version = preview_versions(root)['product']
+match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
+if not match:
+    raise SystemExit('Cannot determine source version')
+source = match.group(1)
 files = runtime_files(root, source)
+for path in files + [root / 'preview-versions.json', root / 'build-cloudflare.py', root / 'package_runtime.py']:
+    subprocess.run(['git', 'ls-files', '--error-unmatch', str(path.relative_to(root.parent))],
+                   cwd=root.parent, check=True, stdout=subprocess.DEVNULL)
 environment = dict(os.environ, CHERRY_MACRO_PRODUCT='1', CHERRY_TEXT_PRODUCT='1',
                    CHERRY_LIGHTING_TEST='0', CHERRY_MACRO_TEST='0')
 page = subprocess.check_output(['php', str(root / 'index.php')], env=environment, text=True)

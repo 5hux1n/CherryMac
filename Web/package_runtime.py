@@ -1,6 +1,22 @@
 """Allowlisted PHP deployment files, shared by release and preview packaging."""
 import pathlib
 import re
+import json
+
+
+def preview_versions(root: pathlib.Path):
+    path = root / 'preview-versions.json'
+    if path.stat().st_size > 1024:
+        raise ValueError('Preview version file exceeds bounds')
+    value = json.loads(path.read_text())
+    if (set(value) != {'format', 'version', 'product', 'lightingAcceptance'} or
+            value['format'] != 'CherryMacWebPreviewVersions' or
+            type(value['version']) is not int or value['version'] != 1):
+        raise ValueError('Invalid preview version file')
+    for key in ('product', 'lightingAcceptance'):
+        if not isinstance(value[key], str) or not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', value[key]):
+            raise ValueError('Invalid preview release version')
+    return value
 
 RUNTIME_NAMES = ['index.php', 'README.md', 'start.command'] + [
     'assets/' + name for name in [

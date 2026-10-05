@@ -7,14 +7,14 @@ import re
 import subprocess
 import sys
 import zipfile
-from package_runtime import runtime_files
+from package_runtime import runtime_files, preview_versions
 
 root = pathlib.Path(__file__).resolve().parent
 if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--lighting-acceptance'):
     raise SystemExit('Usage: python3 Web/package-macro-preview.py OUTPUT_DIRECTORY [--lighting-acceptance]')
 lighting_acceptance = len(sys.argv) == 3
 output_dir = pathlib.Path(sys.argv[1]).resolve()
-version = '0.1.13' if lighting_acceptance else '0.29.0'
+version = preview_versions(root)['lightingAcceptance' if lighting_acceptance else 'product']
 package_name = 'CherryMac-Web-LightingAcceptance' if lighting_acceptance else 'CherryMac-Web-MacroPreview'
 source_version_match = re.search(r'CherryMac Web (\d+\.\d+\.\d+)', (root / 'index.php').read_text())
 if not source_version_match:
