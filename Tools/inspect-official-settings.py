@@ -442,6 +442,55 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
+def inspect_settings_child_polling_message(pe):
+    if pe.class_name(0x77813C) != ".?AVCBasicSetWnd@@" or pe.pointer(0x77813C + 0x80) != 0x426A70:
+        raise ValueError("Unexpected basic settings child message dispatch")
+    checks = {
+        0x426AD4: "81ea170c0000", 0x426ADD: "837dd823",
+        0x426AEA: "0fb68848744200", 0x426AF1: "ff248df0734200",
+        0x42707A: "8b450c", 0x427083: "668b4d10", 0x42708F: "52",
+        0x427096: "50", 0x42709A: "e851260000", 0x42709F: "e92d030000",
+        0x429727: "0fb788b2090000", 0x42972E: "0fb7550c",
+        0x429734: "0f85dd000000", 0x429740: "8b4d08", 0x429743: "89886c0a0000",
+        0x429749: "68449e7200", 0x429757: "ff157cb16e00",
+        0x42977F: "ff15ecb06e00", 0x4297A5: "6810b97200",
+        0x4297AA: "68609e7200", 0x4297B6: "ff15c0b16e00",
+        0x4297EA: "6a00", 0x4297EC: "6a01", 0x4297FC: "8b82c0010000",
+        0x429802: "ffd0", 0x42982F: "c20800",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected child polling message instruction")
+    # Decode the compact switch, including its byte-index table. Searching for
+    # the literal 0xc19 alone misses this normalized dispatch.
+    index = pe.at(0x427448 + 0xC19 - 0xC17, 1)[0]
+    if index != 2 or pe.pointer(0x4273F0 + index * 4) != 0x42707A:
+        raise ValueError("Unexpected child polling message switch target")
+    names = {0x729E44: "report_slider", 0x729E60: "%s%d", 0x72B910: "polling_rate_option_"}
+    for address, name in names.items():
+        expected = (name + "\0").encode("utf-16-le")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected polling update control name")
+    imports = {0x6EB17C: "?FindControl@CPaintManagerUI@DuiLib@@QBEPAVCControlUI@2@PB_W@Z",
+               0x6EB0EC: "?SetValue@CSliderUI@DuiLib@@QAEXH@Z",
+               0x6EB1C0: "?Format@CDuiString@DuiLib@@QAAHPB_WZZ"}
+    for address, name in imports.items():
+        expected = (name + "\0").encode("ascii")
+        if pe.at(pe.base + pe.pointer(address) + 2, len(expected)) != expected:
+            raise ValueError("Unexpected child polling UI import")
+    return {"instructionChecks": len(checks), "childClass": "CBasicSetWnd",
+            "vtable": "0x77813c", "messageMethodOffset": "0x80", "messageMethod": "0x426a70",
+            "switch": {"subtract": "0xc17", "maximumIndex": 35, "byteIndexTable": "0x427448",
+                       "targetTable": "0x4273f0", "message": "0xc19", "targetIndex": index, "target": "0x42707a"},
+            "updateMethod": "0x4296f0", "guard": "low16(lParam) equals child member +0x9b2",
+            "selectedIndexStore": {"source": "wParam", "childMember": "0xa6c"},
+            "uiOperations": ["FindControl(report_slider) then CSliderUI.SetValue(selectedIndex)",
+                             "Format(polling_rate_option_%d, selectedIndex) then control virtual +0x1c0 with arguments 1, 0"],
+            "hardwareWriteAuthorized": False,
+            "limits": "Named child dispatch and UI update only; indirect UI callbacks and other module paths remain unclassified. This is not a firmware settings write command or proof that no such command exists."}
+
+
 def inspect_settings_window_messages(pe):
     for address, encoded in SETTINGS_WINDOW_MESSAGE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -459,7 +508,7 @@ def inspect_settings_window_messages(pe):
             "message": "0xc19", "firstWindowMember": "0x1f64",
             "relay": {"comparison": "0x493b81", "childWindowMember": "0x146c",
                       "forwardCall": "0x493bb3", "argumentsPreserved": ["wParam", "lParam"]},
-            "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; downstream child-window handling remains unclassified. This does not establish or exclude a separate firmware settings command."}
+            "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
 def inspect_system_device_paths(pe):
@@ -718,13 +767,14 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 11,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 12,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
+        "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
