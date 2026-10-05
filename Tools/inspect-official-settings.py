@@ -927,6 +927,41 @@ def inspect_settings_window_messages(pe):
             "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
+def inspect_parameter_sender_lengths(pe):
+    checks = {
+        0x500A77: "e88426f8ff", 0x500A82: "889525ffffff",
+        0x500A8E: "888526ffffff", 0x500ACB: "b910000000",
+        0x500AD0: "8db5f0feffff", 0x500AD6: "f3a5",
+        0x5010DB: "c1e206", 0x5010DF: "6a09",
+        0x5010FA: "e841c5fdff", 0x5010FF: "8b4508",
+        0x501105: "83c015", 0x501109: "6a01",
+        0x501124: "e817c5fdff", 0x501129: "b901000000",
+        0x50113C: "83c018", 0x501140: "6a01",
+        0x50115B: "e8e0c4fdff", 0x501160: "6a01",
+        0x50116E: "e86d8ffdff", 0x501173: "b801000000",
+        0x4DD659: "c645bc00", 0x4DD65D: "6a3f",
+        0x4DD682: "c6440dbc06", 0x4DD6F9: "3b550c",
+        0x4DD715: "3b4d0c", 0x4DD72F: "8b4d0c",
+        0x4DD78D: "8b4508", 0x4DD7A4: "e877951a00",
+        0x4DD846: "e835bbffff", 0x4DD877: "8b8560ffffff",
+        0x4DD897: "b89affffff", 0x4DD8B6: "b899ffffff",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected parameter sender length instruction")
+    return {"instructionChecks": len(checks), "helper": "0x4dd640",
+            "helperLengthSource": "second stack argument [ebp+0x0c]",
+            "helperSourcePointer": "first stack argument [ebp+0x08]",
+            "helperCommand": 6, "reportBytes": 64,
+            "helperSHA256": hashlib.sha256(pe.at(0x4DD640, 0x4DD8D7-0x4DD640)).hexdigest(),
+            "workBufferPollingOffsets": {"ReportSelectItem": 53, "RFReportSelectItem": 54},
+            "fallbackWrites": [{"offset": 0, "length": 9}, {"offset": 21, "length": 1},
+                               {"offset": 24, "length": 1}],
+            "bankOffset": "profile index << 6", "fallbackIncludesPollingOffsets": False,
+            "outerChecksEachSendReturn": False, "outerReturn": 1,
+            "limits": "Named fallback and helper only. Helper honors the passed length, unlike the separately analyzed key sender. Outer function ignores these send/finish return values; its success does not prove firmware application. Other model branches and independent send paths are not excluded."}
+
+
 def inspect_settings_post_apply(pe):
     checks = {
         0x4B0099: "e988020000", 0x4B0336: "83b90026000000",
@@ -1219,7 +1254,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 26,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 27,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1233,6 +1268,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
+        "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
