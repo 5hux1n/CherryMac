@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -259,6 +259,18 @@ $('file').onchange=()=>operation(async()=>{
   else if(textProduct){textRoot=null;$('text-summary').textContent='本配置未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
   profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
+});
+$('import-default').onclick=()=>$('default-file').click();
+$('default-file').onchange=()=>operation(async()=>{
+  const file=$('default-file').files[0];$('default-file').value='';if(!file)return;
+  requireThat(baseline,'请先读取键盘，再载入官方默认草稿。');
+  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
+  const root=extractOfficialDefaultTemplate(await file.text());
+  const next=parseProfile(JSON.stringify(root),baseline,{deferHostText:textProduct,lightingMapping:profile.lightingMapping});
+  if(!confirm('载入官方默认草稿会替换当前编辑区。请先导出需要保留的配置。默认键位、灯效与文件设置只载入草稿，原始宏存储保留；不会写入键盘，完整恢复默认尚未开放。')){status('已取消载入，编辑区保留。');return;}
+  if(textProduct){textRoot=null;$('text-summary').textContent='默认草稿未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
+  profile=next;refreshMacros();loadMacro();loadPlayback();syncLights();
+  status('官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。');
 });
 $('export').onclick=()=>act(()=>{const output=clone(profile);if(textProduct){delete output.hostTextJSON;if(textRoot!==null)output.hostTextJSON=JSON.stringify(textRoot);}validateProfile(output);requireThat(new TextEncoder().encode(JSON.stringify(output,null,2)).length<=3_000_000,'配置文件超过 3 MB，请精简文本或分别导出。');download(output,'CherryMac-profile.json');status('配置已导出，包含选中的文本定义；文本恢复记录需在文本页另行导出。');});
 $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const template=JSON.parse(profile.windowsTemplateJSON),mixed=textProduct&&textRoot!==null;const output=mixed?exportWindowsKeysMacrosAndText(profile,template,textRoot,baseline):exportWindowsKeysAndMacros(profile,template);download(exportProfileWindowsLightingDraft(profile,output),'CHERRY-configuration.json');const lightingNote=profile.lightingColorEncoding==='officialRGB'?'包含当前灯效草稿':'包含当前内置灯效；逐键配色沿用导入模板';status(`${mixed?'已合并导出 Windows 格式键位、宏与文本':'已导出 Windows 格式键位与宏'}；${lightingNote}；设备设置沿用导入模板。`);});

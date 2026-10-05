@@ -344,6 +344,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #else
         place(label("支持 CherryMac 配置与本型号 Windows JSON。Windows 导出先导入官方模板，包含键位、宏与当前灯效草稿；设备设置沿用模板。导入和撤销不修改键盘。",12),8,261,850,62,in:files)
         #endif
+        place(label("官方默认配置",17,.semibold),8,354,850,28,in:files)
+        place(button("载入官方默认草稿…",#selector(importDefaultTemplate)),8,401,260,32,in:files)
+        place(label("选择 Windows 安装目录 DefaultData 中的 DefaultData0～4.json，载入本型号默认键位、灯效与文件设置。会替换编辑区；原始宏存储保留。这里只准备草稿，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -1210,6 +1213,23 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         panel.beginSheetModal(for:window!){[weak self] result in
             guard result == .OK,let url=panel.url,let self else{return}
             do{try self.loadImport(Data(contentsOf:url))}catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func importDefaultTemplate(){
+        guard !busy,baseline != nil,let parent=window else{message.stringValue="请先读取键盘，再载入官方默认草稿。";return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:parent){[weak self] response in
+            guard response == .OK,let url=panel.url,let self else{return}
+            do{
+                guard !self.busy else{throw HardwareError(message:"请等待键盘操作完成。")}
+                let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
+                guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
+                let template=try WindowsProfile.extractDefaultTemplate(Data(contentsOf:url))
+                let alert=NSAlert();alert.messageText="载入官方默认草稿？";alert.informativeText="这会替换当前编辑区，并关闭文本输入服务。请先导出需要保留的配置。默认键位、灯效与文件设置只载入草稿，原始宏存储保留；不会写入键盘，完整恢复默认尚未开放。";alert.addButton(withTitle:"取消，保留编辑区");alert.addButton(withTitle:"已保存，载入草稿")
+                guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
+                try self.loadImport(template)
+                self.message.stringValue="官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。"
+            }catch{self.message.stringValue=error.localizedDescription}
         }
     }
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
