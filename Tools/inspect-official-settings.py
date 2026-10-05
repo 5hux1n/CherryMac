@@ -1680,6 +1680,51 @@ def inspect_macro_resources(skin):
                                for path, data in zip([device_path, control_path, menu_path], [device_data, control_data, menu_data])}}
 
 
+def inspect_macro_mouse_search_bounds(pe):
+    """Check named mouse-table search bounds and separate toolbar forwarding."""
+    checks = {
+        0x457C3A: "83bd8cf7ffff06", 0x457C41: "0f8d13010000",
+        0x457C4E: "0fb78230df7b00",
+        0x459194: "83bd8cf7ffff06", 0x45919B: "0f8d13010000",
+        0x4591A8: "0fb78230df7b00",
+        0x45A774: "83bd8cf7ffff06", 0x45A77B: "0f8d13010000",
+        0x45A788: "0fb78230df7b00",
+        0x45BF86: "83bd9cf9ffff06", 0x45BF9A: "0fb79130df7b00",
+        0x45C902: "8b0d28df7b00", 0x45C908: "83e909",
+        0x45C90B: "398d04f8ffff", 0x45C911: "0f8dc5040000",
+        0x5C64CC: "817b040a020000", 0x5C64D3: "754a",
+        0x5C64EF: "ff15a0be6e00", 0x5C64FF: "ff730c",
+        0x5C6508: "ff7308", 0x5C650B: "ff7304",
+        0x5C6511: "ff15a0be6e00",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected macro mouse-table or toolbar instruction")
+    if pe.pointer(0x7BDF28) != 15 or pe.at(0x7BDF30 + 14 * 6, 6) != bytes.fromhex("0a0212000000"):
+        raise ValueError("Unexpected mouse-table count or wheel row")
+    table, target = 0x6FD11C, 0x5C64BF
+    if pe.class_name(table) != ".?AVCMFCToolBarComboBoxEdit@@" or pe.pointer(table + 0x10C) != target:
+        raise ValueError("Unexpected toolbar wheel-forwarding class")
+    digest = hashlib.sha256(pe.at(target, 0x5C6784 - target)).hexdigest()
+    if digest != "41f6151bc83fc259a3c20aea8c6fcbee3ee921f8bc4523da6572fc3cb8c6d0f3":
+        raise ValueError("Unexpected toolbar wheel-forwarding body")
+    name = b"SendMessageW\0"
+    if pe.at(pe.base + pe.pointer(0x6EBEA0) + 2, len(name)) != name:
+        raise ValueError("Unexpected toolbar forwarding import")
+    return {"instructionChecks": len(checks), "tableCount": 15,
+            "wheelRow": {"index": 14, "message": "0x020a", "type": 0, "button": 0},
+            "recorderSearchLimits": {hex(a): 6 for a in [0x457C3A, 0x459194, 0x45A774, 0x45BF86]},
+            "manualSearchLimit": {"method": "0x45c840", "comparison": "0x45c90b", "countExpression": "15 - 9", "count": 6},
+            "toolbarForwarding": {"class": "CMFCToolBarComboBoxEdit", "vtable": hex(table),
+                                  "virtualOffset": "0x10c", "method": hex(target),
+                                  "endExclusive": "0x5c6784", "functionSHA256": digest,
+                                  "message": "0x020a", "import": "SendMessageW",
+                                  "conclusion": "The named wheel handler forwards window messages; its class is a Windows toolbar edit control, not the target macro control or keyboard device."},
+            "hardwareWriteAuthorized": False,
+            "limits": "These named basic-button table loops do not select row 14; X-button and other branches remain separate. Classifies one wheel forwarding handler, not all indirect paths or firmware capability. No wheel event encoding or new write permission inferred."}
+
+
 def inspect_macro_ui(pe, skin):
     checks = {
         0x4893BF: "6814a57500",  # MacroSetControlUI class comparison
@@ -1834,7 +1879,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 37,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 38,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1857,6 +1902,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
+        "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "customLightingJSON": inspect_custom_lighting_json(pe),
         "modeRefreshMemoryPaths": inspect_refresh_mode_memory(pe),
         "targetParameterSelector": inspect_target_parameter_branch(pe),
