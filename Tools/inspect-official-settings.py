@@ -2,6 +2,7 @@
 """Read-only PE/RTTI audit for the analyzed Utility executable; never runs it."""
 import argparse
 import hashlib
+import html
 import json
 import re
 import struct
@@ -615,12 +616,21 @@ def inspect_default_lighting_control_updates(pe, skin=None):
         0x442F12: "6a00", 0x442F14: "6a00",
         0x442F24: "8b82c0010000", 0x442F2A: "ffd0",
         0x442F48: "e8830e0000",
+        0x44265B: "ff1560b86e00", 0x442733: "68a8177300", 0x442738: "68c8177300",
+        0x44274B: "8b825c010000", 0x442751: "ffd0",
+        0x4422A3: "c7001ca07700", 0x4422AC: "c781f0060000f49f7700",
     }
     for address, encoded in checks.items():
         raw = bytes.fromhex(encoded)
         if pe.at(address, len(raw)) != raw:
             raise ValueError(f"Unexpected default lighting-control update at {address:#x}")
+    if pe.class_name(0x77A01C) != ".?AVCLightControlUI@@":
+        raise ValueError("Unexpected lighting-control RTTI")
+    constructor_name = "??0COptionUI@DuiLib@@QAE@XZ"
+    if pe.at(pe.base + pe.pointer(0x6EB860) + 2, len(constructor_name) + 1) != (constructor_name + "\0").encode("ascii"):
+        raise ValueError("Unexpected mode-row constructor import")
     bodies = {
+        0x4424D0: (0x442B03, "526a3da37c1e7f4161c50e3e1362b86a2777a46fc5a2f46ec0b233053edb5cff"),
         0x442C00: (0x442D4F, "55c4d8f4887fcaae599a0a51b36920bf52080b7cb671701356672d04504fbe39"),
         0x442D60: (0x442F68, "dbeee1b1a54dd4cb2285c4cd27e7d56e7386034be9f3dd9e237a7e5f91a4e6af"),
         0x443AF0: (0x443B6A, "9517326bc9331c535900e9d44608d8de2634d93927c5f7250c9475f45cbc60da"),
@@ -630,6 +640,10 @@ def inspect_default_lighting_control_updates(pe, skin=None):
             raise ValueError("Unexpected default lighting-control function body")
     result = {"instructionChecks": len(checks), "functionSHA256": {hex(k): v[1] for k, v in bodies.items()},
               "receiver": "device+0x1eb8 UI control, not the device itself",
+              "modeRowCreation": {"method": "0x4424d0", "class": "COptionUI",
+                                  "constructorImport": constructor_name, "style": "lighttab_style",
+                                  "styleAttributeDispatch": "child virtual +0x15c",
+                                  "controlClass": "CLightControlUI"},
               "checkboxRefresh": {"method": "0x443af0", "name": "deng_7color_check",
                                   "virtualOffset": "0x1c0", "sendNotifyArgument": False},
               "modeRows": {"method": "0x442d60", "name": "light_mode_list_layout",
@@ -648,6 +662,22 @@ def inspect_default_lighting_control_updates(pe, skin=None):
             tags = [tag for tag in re.findall(r"<[^<>]+>", text) if f'name="{name}"' in tag]
             if len(tags) != 1 or not tags[0].startswith("<" + expected + " "):
                 raise ValueError("Unexpected lighting-control named element")
+        styles = (Path(skin) / "main.xml").read_bytes()
+        styles_digest = hashlib.sha256(styles).hexdigest()
+        if styles_digest != "53d2b64104a344bcde9ee1ada4cadf96ffb5b5a3cb3b41a74da21c22c48308ce":
+            raise ValueError("Unexpected main style resource hash")
+        tags = [tag for tag in re.findall(r"<Style\s[^<>]+>", styles.decode("utf-8-sig")) if 'name="lighttab_style"' in tag]
+        if len(tags) != 1:
+            raise ValueError("Unexpected mode-row style declaration")
+        value = re.search(r'value="([^"]*)"', tags[0])
+        if value is None:
+            raise ValueError("Missing mode-row style value")
+        attributes = re.findall(r'([A-Za-z0-9_]+)="[^"]*"', html.unescape(value.group(1)))
+        if "group" in attributes:
+            raise ValueError("Mode-row style unexpectedly assigns an option group")
+        result["modeRowCreation"]["styleResource"] = {"sha256": styles_digest,
+                            "attributes": attributes, "assignsGroup": False,
+                            "limits": "The named style does not set group; later attributes and live state are not classified."}
         result["resource"] = {"sha256": digest, "namedClasses": classes,
                               "method": "Exact-hash resource and bounded opening-tag matching; duplicate style attributes in the official file prevent strict XML parsing. Resource is not rewritten.",
                               "limits": "Declared classes only, not live control creation or group membership."}
@@ -1048,6 +1078,7 @@ def inspect_settings_ui_control_actions(path):
     exports = {"?Selected@COptionUI@DuiLib@@UAEX_N0@Z": 0x110A9400,
                "?Selected@CCheckBoxUI@DuiLib@@UAEX_N0@Z": 0x110A9290,
                "??0CCheckBoxUI@DuiLib@@QAE@XZ": 0x110A8540,
+               "??0COptionUI@DuiLib@@QAE@XZ": 0x110A8570,
                "?SetValue@CSliderUI@DuiLib@@QAEXH@Z": 0x110B6610,
                "?SendNotify@CPaintManagerUI@DuiLib@@QAEXPAVCControlUI@2@PB_WIJ_N@Z": 0x11068AD0}
     directory = pe.base + pe.u32(pe.u32(0x3C) + 24 + 96)
@@ -1072,7 +1103,20 @@ def inspect_settings_ui_control_actions(path):
         raise ValueError("Unexpected checkbox selection virtual target")
     if hashlib.sha256(pe.at(0x110A9290, 0x110A93FD - 0x110A9290)).hexdigest() != "cf73a3e50345835c37d433a6af4e41b47aeb5f006feea7c446f351ea08f183c6":
         raise ValueError("Unexpected checkbox selection function body")
+    group_bodies = {
+        0x110A8570: (0x110A8653, "57c7bd925f06f125de6cd7d927a75ad5d13306ce3ad75319806dc4bde6c03be6"),
+        0x1104DE80: (0x1104DEAB, "673939656768db6d3cf7aa68d91f289868f9520c0b20dbbf10462080595aabef"),
+        0x1104F530: (0x1104F565, "f21c86381271b6462859e5e0baebefe70866dbabdce72987113cfd6246daccd6"),
+        0x110A99B0: (0x110A9A16, "d272b57dce786db66e45d5acc3a0446f08e039bb1a2280343c820e07e659b065"),
+    }
+    for address, (end, expected) in group_bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
+            raise ValueError("Unexpected option-group initialization body")
     checks = {
+        0x110A85BB: "81c15c0b0000", 0x110A85C1: "e8ba58faff",
+        0x1104DE9F: "66894c0204", 0x1104F54C: "7509",
+        0x110A947C: "e8af60faff", 0x110A9486: "0f859f000000",
+        0x110A99DD: "e84e5bfaff", 0x110A99E7: "7527",
         0x110A8552: "c7005c3e1111", 0x110A929C: "0fb688580b0000",
         0x110A9397: "0fb64d0c", 0x110A939D: "7423", 0x110A93BD: "e80ef7fbff",
         0x110A93C4: "0fb6450c", 0x110A93CA: "7423", 0x110A93EA: "e8e1f6fbff",
@@ -1097,6 +1141,11 @@ def inspect_settings_ui_control_actions(path):
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected UI control action instruction")
     return {"dllSHA256": digest, "instructionChecks": len(checks), "exports": {k: hex(v) for k, v in exports.items()},
+            "optionGroupInitialization": {"groupMember": "0xb5c", "initialUTF16FirstUnit": 0,
+                                          "emptyCheck": "0x1104f530", "emptySkipsPeerLoop": True,
+                                          "managerRegistration": "Empty groups skip this method's explicit group-registration call; its base manager call is not classified here.",
+                                          "functionSHA256": {hex(k): v[1] for k, v in group_bodies.items()},
+                                          "limits": "Initial group state and named branch only, not live groups or all later setters."},
             "checkboxSelection": {"virtualTable": "0x11113e5c", "target": "0x110a9290",
                                   "functionSHA256": "cf73a3e50345835c37d433a6af4e41b47aeb5f006feea7c446f351ea08f183c6",
                                   "parameters": ["selected", "sendNotify"],
@@ -2139,7 +2188,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 43,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 44,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
