@@ -701,6 +701,16 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroCancellationButton?.isHidden=currentMacroOperation==nil
         macroCancellationButton?.isEnabled=busy && currentMacroOperation?.isCancelled==false
         writeButtons.forEach{$0.isEnabled=false}
+        if let lightingButton=writeButtons.first(where:{$0.tag==1}){
+            #if CHERRY_LIGHTING_TEST
+            lightingButton.title="准备灯效写入…"
+            lightingButton.toolTip="进入独立流程，先重新读取并备份；不会直接发送。"
+            #else
+            lightingButton.title="核对灯效计划…"
+            lightingButton.toolTip="仅核对并导出计划；普通版尚未开放灯效发送。"
+            #endif
+            lightingButton.isEnabled = !busy && baselineWasRead && baseline != nil && profile != nil
+        }
         if !busy,let baseline,let profile,profile.snapshot.deviceInfo==baseline.deviceInfo,let plan=try? KeymapWriteAuthorization(baseline:baseline,keymap:profile.snapshot.keymap){writeButtons.first?.isEnabled = !plan.changedSlots.isEmpty;writeButtons.first?.toolTip="仅写键位表；灯效与宏区保留。"}
         #if CHERRY_MACRO_PRODUCT
         if !busy,let target=try? macroWriteTarget(),let baseline{
@@ -925,21 +935,14 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     #endif
     @objc func writeLighting(){
-        suspendHostTextForConfiguration()
-        guard !busy, let draft=profile,let baseline else{message.stringValue="请先读取键盘，再编辑灯效。";return}
-        do{try HardwareWritePolicy.requireWrites()}catch{message.stringValue=error.localizedDescription;return}
-        busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在备份并写入灯效…"
-        queue.async{[weak self] in
-            let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().writeLighting(draft.snapshot,baseline:baseline)}
-            DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
-                switch result{
-                case .success(let snapshot):
-                    self.baseline=snapshot;var remaining=draft;remaining.snapshot.parameters=snapshot.parameters;remaining.snapshot.colors=snapshot.colors;remaining.lightingColorEncoding = .hardwareRGB;self.profile=remaining
-                    self.message.stringValue="灯效已写入，读回校验通过。断电保存仍待验证。";self.update()
-                case .failure(let error):self.message.stringValue=error.localizedDescription
-                }
-            }
+        guard !busy,baselineWasRead,baseline != nil,profile != nil else{
+            message.stringValue="请先读取键盘，再保存灯效到编辑区。";return
         }
+        #if CHERRY_LIGHTING_TEST
+        openLightingAcceptance()
+        #else
+        reviewLightingDraft()
+        #endif
     }
     @objc func actionChanged(){keyPicker.isEnabled = !busy && actionPicker.indexOfSelectedItem==1;modifiers.forEach{$0.isEnabled = !busy && actionPicker.indexOfSelectedItem==1};mediaPicker.isEnabled = !busy && actionPicker.indexOfSelectedItem==9}
     @objc func stageKey(){

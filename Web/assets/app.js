@@ -43,7 +43,7 @@ function render(){
   $('change-title').textContent=tab==='keys'?'待写入按键':tab==='macros'&&macroProduct?'待写入宏':'编辑预览';$('changes').replaceChildren();
   for(const [name,value] of [['按键功能',`${c.keys} 键`],['逐键颜色',`${c.colors} 键`],['灯效参数',c.params?'已修改':'未修改'],['宏存储',c.macros?'已修改':'未修改']]){const line=document.createElement('div');line.className='change-line';const text=document.createElement('span'),v=document.createElement('b');text.textContent=name;v.textContent=value;line.append(text,v);$('changes').append(line);}
   let keyPlan=null,keyError=null;if(baseline)try{keyPlan=tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(s,baseline);}catch(error){keyError=error.message;}
-  $('draft-note').textContent=tab==='macros'&&macroProduct?(keyError??'只更新宏库与宏绑定键；灯效和设备参数保留。普通键草稿保留，可在按键页面另行写入。'):tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
+  $('draft-note').textContent=tab==='lights'?($('open-lighting-acceptance')?'先准备灯效计划，再进入独立页面重新读取、备份和确认；本页不会直接发送。':'仅核对并导出灯效计划；普通版尚未开放灯效发送。'):tab==='macros'&&macroProduct?(keyError??'只更新宏库与宏绑定键；灯效和设备参数保留。普通键草稿保留，可在按键页面另行写入。'):tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
   let pollingWords=null;try{if(profile.windowsTemplateJSON)pollingWords=officialSystemStageWords(JSON.parse(profile.windowsTemplateJSON));}catch{}
   $('polling-draft-summary').textContent=pollingWords?`当前官方草稿：${[125,250,500,1000][pollingWords[3]]?`${[125,250,500,1000][pollingWords[3]]} Hz`:`原始索引 ${pollingWords[3]}（尚未核对）`}；尚未写入键盘。`:'请先导入包含设备设置的官方配置。';
@@ -51,7 +51,7 @@ function render(){
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('review-lighting').disabled=busy||!baseline;
   if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
-  $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
+  $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
   for(const id of ['save-macro','assign-macro','unassign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot))||(id==='unassign-macro'&&!profile.macroBindings?.[key.slot]);
@@ -169,12 +169,12 @@ $('lighting-draft-file').onchange=()=>{
     status('已仅载入官方灯效与配色到编辑区。键位、宏、文本及设备设置保留，尚未写入。');
   },{localOnly:true});
 };
-$('review-lighting').onclick=()=>act(()=>{
+$('review-lighting').onclick=()=>operation(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
   const review=reviewLightingDraft(profile,baseline),mode=modes.find(([code])=>code===review.target.parameters[1])?.[1]??'未知模式';
   const summary=`模式：${mode}；亮度：${review.target.parameters[2]}/4；逐键颜色将改变 ${review.changedColorSlots.length} 个位置；灯效参数${review.changedParameterOffsets.length?'将更新':'保持不变'}。尚未写入键盘，按键与宏保持读回配置。`;
   $('lighting-review-summary').textContent=summary;download(review,'CherryMac-灯效写入核对.json');status(summary);
-});
+},{localOnly:true});
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
 $('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已设置内置灯效单色，尚未写入。');});
 $('macro-name').oninput=renderMacroSummary;$('macro-repeat').oninput=renderMacroSummary;$('macro-playback').onchange=()=>{$('macro-repeat').disabled=$('macro-playback').value!=='count';renderMacroSummary();};$('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>act(()=>{requireThat(steps.length<=254,'最多 256 个事件，请先删除部分步骤。');const event={};setMacroUsage(event,$('macro-key').value);const [where,raw]=$('macro-insert').value.split(':');let index=steps.length;if(where){index=Number(raw);requireThat(Number.isInteger(index)&&index>=0&&index<steps.length,'请选择有效插入位置。');if(where==='after')index++;}steps.splice(index,0,{...event,pressed:true,delayMilliseconds:30},{...event,pressed:false,delayMilliseconds:0});$('macro-insert').value='';renderSteps();});
@@ -220,7 +220,14 @@ $('diagnostics').onclick=()=>operation(async()=>{
   download(evidence,'CherryMac-diagnostics.json');status(Object.keys(storageErrors).length?'排查资料已下载；部分本地记录无法读取，错误已写入文件，其余日志保留。':'排查资料已下载到本地，未上传。',Object.keys(storageErrors).length>0);
 },{localOnly:true});
 function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(profile.snapshot,baseline);}
-$('write').onclick=()=>act(()=>{const wanted=plan();pending={wanted,kind:tab==='macros'&&macroProduct?'macro':'key',before:clone(baseline),draft:clone(profile)};requireThat(!sameSnapshot(wanted,baseline),'选中的写入类别没有变化。');const c=counts(wanted,baseline);$('confirm-summary').textContent=pending.kind==='macro'?macroWriteReview(profile,baseline,wanted,Object.fromEntries(keys.map(key=>[key.slot,key.label.replaceAll('\n',' / ')])),Object.fromEntries(keys.map(key=>[key.slot,describe(wanted.keymap.slice(key.slot*3,key.slot*3+3))])))+'\n\n灯效和设备参数保留；普通键草稿保留，写入前保存完整备份。':`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
+$('write').onclick=()=>{
+  if(tab==='lights'){
+    if(busy||recorder||!baseline)return;
+    // Delegate synchronously so the research handoff retains the user gesture.
+    ($('open-lighting-acceptance')??$('review-lighting')).click();return;
+  }
+  return act(()=>{const wanted=plan();pending={wanted,kind:tab==='macros'&&macroProduct?'macro':'key',before:clone(baseline),draft:clone(profile)};requireThat(!sameSnapshot(wanted,baseline),'选中的写入类别没有变化。');const c=counts(wanted,baseline);$('confirm-summary').textContent=pending.kind==='macro'?macroWriteReview(profile,baseline,wanted,Object.fromEntries(keys.map(key=>[key.slot,key.label.replaceAll('\n',' / ')])),Object.fromEntries(keys.map(key=>[key.slot,describe(wanted.keymap.slice(key.slot*3,key.slot*3+3))])))+'\n\n灯效和设备参数保留；普通键草稿保留，写入前保存完整备份。':`将修改 ${c.keys} 个按键。灯效、颜色与宏区保留原配置。`;$('confirm').showModal();});
+};
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
 $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending;requireThat(wanted,'没有待写入配置。');requireThat(equal(profile,wanted.draft)&&sameSnapshot(baseline,wanted.before),'编辑区或读取基线已变化，请重新确认。');}catch(error){status(error.message,true);return;}$('confirm').close();pending=null;void operation(async()=>{
   let after;
