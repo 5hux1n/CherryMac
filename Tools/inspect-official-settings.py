@@ -489,7 +489,7 @@ def inspect_default_macro_semantics(pe):
                 "copyMember": "0x2584", "copyHelper": "0x45ee60", "nullBranches": ["0x4ebcf8", "0x53b0f8"],
                 "model47DefaultAssociationProven": False},
             "pendingMacroStorageSemantics": True,
-            "limits": "A null MacroInfo in a default JSON is not proof of hardware erasure. Other macro JSON consumers are separate paths whose model47/default association is unresolved. No execution, HID observation or persistence claim."}
+            "limits": "A null MacroInfo in a default JSON is not proof of hardware erasure. The three named macro consumers belong to other device classes, as resolved in defaultFinalRefresh; untraced cross-class calls remain outside that result. No execution, HID observation or persistence claim."}
 
 
 
@@ -550,6 +550,79 @@ def inspect_default_final_refresh(pe):
             "macroConsumerClassAssociation":"The three previously found MacroInfo consumers are +0x2cc methods of HS6533, mouse and mouse-pad classes. Target keyboard +0x2cc is a different method.",
             "pendingMacroStorageSemantics":True,
             "limits":"Class-specific virtual dispatch and named JSON/UI inputs only. Do not treat common member +0x2584 as one data type across classes. Nested callbacks, key sender branches, implicit firmware side effects and the full program remain outside this conclusion; no macro-bank erase/retention, runtime or persistence proof."}
+
+
+def inspect_default_key_action_branch(pe):
+    """Distinguish factory-record copying from action binding serialization."""
+    virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
+    for offset, target in virtuals.items():
+        if pe.pointer(0x77F604 + offset) != target:
+            raise ValueError("Unexpected default key/action dispatch")
+    checks = {
+        0x47E9E0: "b914000000", 0x47EA6C: "83c214",
+        0x47D544: "c745dc00000000",  # record starts with action link = 0
+        0x47D54D: "8945e0", 0x47D550: "8945e4",
+        0x47D553: "8945e8", 0x47D556: "8945ec",
+        0x47D601: "68d05f7400", 0x47D62D: "e86ea90c00",
+        0x47D637: "7536", 0x47D66A: "8945dc",
+        0x47D66F: "c745dc00000000",  # missing/null ActionLink
+        0x47D676: "68f85f7400", 0x47D6AC: "7536",
+        0x47D6E4: "c745e0ffffffff",  # missing/null action index = -1
+        0x47D6F2: "e899120000", 0x47D71B: "e810170000",
+        0x4FF04C: "0fb688f91d0000", 0x4FF053: "6bd103",
+        0x4FF065: "8d840a30270000", 0x4FF07D: "e89e7c1800",
+        0x4FF0DD: "81bd38fdffffff000000", 0x4FF0E7: "7502",
+        0x4FF0FA: "833800", 0x4FF0FD: "0f8412040000",
+        0x4FF136: "8b4804", 0x4FF14D: "e84ef1f7ff",
+        0x4FF156: "685ce07600", 0x4FF17F: "83bd30fdffff04",
+        0x4FF192: "ff248df4f64f00",
+        0x4FF486: "8a4810", 0x4FF49E: "8a4011", 0x4FF4B6: "8a5012",
+        0x4FF66B: "c1e209", 0x4FF693: "e878affdff",
+        0x4FF6B5: "e826aafdff",
+        0x4FB008: "81f9ce010000", 0x4FB00E: "7519",
+        0x4FB018: "8b90ec020000", 0x4FB01E: "ffd2",
+        0x540C6A: "8b8014210000", 0x540C73: "c3",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected default key/action instruction")
+    strings = {0x745F78: "KeyList", 0x745FA0: "Assignment",
+               0x745FB4: "DefaultAssignment", 0x745FD0: "ActionLink",
+               0x745FF8: "ActionLinkIndex", 0x76E05C: "ActionType"}
+    for address, name in strings.items():
+        raw = (name + "\0").encode("ascii")
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected default key/action JSON field")
+    targets = [0x4FF477, 0x4FF199, 0x4FF1FA, 0x4FF341, 0x4FF413]
+    if [pe.pointer(0x4FF6F4 + i * 4) for i in range(5)] != targets:
+        raise ValueError("Unexpected action type dispatch table")
+    bodies = {
+        0x47D490: (0x47D756, "777129680f69b019811a53cc854c090cd4000e680f9ae7492fb915221efe069d"),
+        0x4FEFB0: (0x4FF6F4, "712d34313c3ad2464b3c10a557f9a09bab16a197727bd78f8f00482ae4e6240f"),
+        0x540C60: (0x540C74, "4d0fc410e63150863f20be276a07066074886f21004b44d9cf5013611c204e95"),
+    }
+    for start, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(start, end - start)).hexdigest() != digest:
+            raise ValueError("Unexpected default key/action function body")
+    return {
+        "instructionChecks": len(checks), "fieldNameChecks": len(strings),
+        "virtualTargets": {hex(k): hex(v) for k, v in virtuals.items()},
+        "recordLayout": {"bytes": 20, "actionLinkOffset": 0, "actionIndexOffset": 4,
+                         "assignmentBytes": [10, 11, 12], "defaultAssignmentBytes": [16, 17, 18]},
+        "missingActionFields": {"ActionLink": 0, "ActionLinkIndex": -1},
+        "factoryCopy": {"member": "0x2730", "length": "3 * byte(device+0x1df9)",
+                        "copyCall": "0x4ff07d", "actionlessBranch": "0x4ff0fd -> 0x4ff515",
+                        "conclusion": "Zero ActionLink skips action lookup/encoding and retains the copied factory record; JSON Assignment is not used to override it in this branch."},
+        "actionDispatch": {"table": "0x4ff6f4", "targets": [hex(a) for a in targets],
+                           "limits": "Only reached for a nonzero ActionLink and a mapped physical slot; macro binding encoding does not itself prove macro-bank writes."},
+        "targetFinalPredicate": {"call": "0x4fb01e", "virtualOffset": "0x2ec",
+                                 "target": "0x540c60", "readsMember": "0x2114",
+                                 "conclusion": "The resolved method only returns a host member; no nested call or device exchange."},
+        "functionBodies": {hex(a): {"endExclusive": hex(b), "sha256": h} for a, (b, h) in bodies.items()},
+        "pendingMacroStorageSemantics": True, "hardwareWriteAuthorized": False,
+        "limits": "Named getter, key sender and one final predicate only. Begin/end exchanges, other callbacks and implicit firmware effects can still affect storage. No whole-program macro erase/retention or persistence claim.",
+    }
 
 
 def inspect_default_configuration_path(pe, defaults_dir=None):
@@ -738,13 +811,19 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
             keys = row.get("KeyList")
             if not isinstance(keys, list) or len(keys) != 126:
                 raise ValueError("Unexpected default key count")
+            if any(not isinstance(key, dict) or set(key) != {"Assignment", "DefaultAssignment"}
+                   or any(type(key[field]) is not int or not 0 <= key[field] <= 0xFFFFFF
+                          for field in ("Assignment", "DefaultAssignment")) for key in keys):
+                raise ValueError("Unexpected model47 default key/action fields")
             selected = row.get("LightInfo", {}).get("SelectItem")
             if type(selected) is not int or not 0 <= selected < len(modes):
                 raise ValueError("Invalid default lighting index")
             canonical = json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
             rows.append({"file": path.name, "fileSHA256": hashlib.sha256(data).hexdigest(),
                          "modelArrayIndex": position, "modelRowSHA256": hashlib.sha256(canonical).hexdigest(),
-                         "keyCount": len(keys), "templateIdentity": row.get("DeviceBasicInfo"),
+                         "keyCount": len(keys), "keyFields": ["Assignment", "DefaultAssignment"],
+                         "actionlessKeyCount": len(keys),
+                         "templateIdentity": row.get("DeviceBasicInfo"),
                          "lightingModeIndex": selected, "mappedModeCode": modes[selected]["value"],
                          "mappedModeVisible": modes[selected]["visible"]})
         result["defaultFiles"] = {"rows": rows, "sameModelRowAcrossFiveFiles": len({r["modelRowSHA256"] for r in rows}) == 1,
@@ -1689,7 +1768,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 35,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 36,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1698,6 +1777,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
+        "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
