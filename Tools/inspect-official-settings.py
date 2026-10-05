@@ -602,6 +602,57 @@ def inspect_default_control_refresh(pe):
             "pendingMacroStorageSemantics": True,
             "limits": "The containing refresh method has additional UI callbacks not all classified here. No claim about the full program, implicit firmware effects, macro erase or persistence; no execution or device access."}
 
+
+def inspect_default_lighting_control_updates(pe, skin=None):
+    """Resolve refresh argument sites without conflating UI and device vtables."""
+    checks = {
+        0x4FAA9A: "8b8ab81e0000", 0x4FAAA0: "e85b81f4ff",
+        0x442C3C: "e8af0e0000", 0x442C5C: "e8ff000000",
+        0x443B05: "68d01f7300", 0x443B41: "6a00",
+        0x443B5C: "8b82c0010000", 0x443B62: "ffd0",
+        0x442DA0: "6870217300", 0x442E6F: "6a00", 0x442E71: "6a01",
+        0x442E81: "8b90c0010000", 0x442E87: "ffd2",
+        0x442F12: "6a00", 0x442F14: "6a00",
+        0x442F24: "8b82c0010000", 0x442F2A: "ffd0",
+        0x442F48: "e8830e0000",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError(f"Unexpected default lighting-control update at {address:#x}")
+    bodies = {
+        0x442C00: (0x442D4F, "55c4d8f4887fcaae599a0a51b36920bf52080b7cb671701356672d04504fbe39"),
+        0x442D60: (0x442F68, "dbeee1b1a54dd4cb2285c4cd27e7d56e7386034be9f3dd9e237a7e5f91a4e6af"),
+        0x443AF0: (0x443B6A, "9517326bc9331c535900e9d44608d8de2634d93927c5f7250c9475f45cbc60da"),
+    }
+    for address, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != digest:
+            raise ValueError("Unexpected default lighting-control function body")
+    result = {"instructionChecks": len(checks), "functionSHA256": {hex(k): v[1] for k, v in bodies.items()},
+              "receiver": "device+0x1eb8 UI control, not the device itself",
+              "checkboxRefresh": {"method": "0x443af0", "name": "deng_7color_check",
+                                  "virtualOffset": "0x1c0", "sendNotifyArgument": False},
+              "modeRows": {"method": "0x442d60", "name": "light_mode_list_layout",
+                           "selectedArguments": [True, False], "otherArguments": [False, False],
+                           "followingMethod": "0x443dd0"},
+              "limits": "The +0x1c0 calls here use child controls, not the device vtable. Direct notification arguments are false; group peers, later mode visibility helpers and callbacks are not fully classified. No whole-chain no-write, macro-storage or firmware persistence assertion."}
+    if skin is not None:
+        raw = (Path(skin) / "XML/CustomControlXML/LightControl.xml").read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != "fade3d80be473a8b0b21d552d902527e7e1618db3c9db80552bbf75d6d66af77":
+            raise ValueError("Unexpected lighting-control resource hash")
+        text = raw.decode("utf-8-sig")
+        classes = {"deng_7color_check": "CheckBox", "light_mode_list_layout": "TileLayout",
+                   "light_mode_text": "Label", "speed_edit": "Edit"}
+        for name, expected in classes.items():
+            tags = [tag for tag in re.findall(r"<[^<>]+>", text) if f'name="{name}"' in tag]
+            if len(tags) != 1 or not tags[0].startswith("<" + expected + " "):
+                raise ValueError("Unexpected lighting-control named element")
+        result["resource"] = {"sha256": digest, "namedClasses": classes,
+                              "method": "Exact-hash resource and bounded opening-tag matching; duplicate style attributes in the official file prevent strict XML parsing. Resource is not rewritten.",
+                              "limits": "Declared classes only, not live control creation or group membership."}
+    return result
+
 def inspect_default_key_action_branch(pe):
     """Distinguish factory-record copying from action binding serialization."""
     virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
@@ -995,6 +1046,8 @@ def inspect_settings_ui_control_actions(path):
         raise ValueError("DuiLib hash differs from the analyzed version")
     pe = PE32(data)
     exports = {"?Selected@COptionUI@DuiLib@@UAEX_N0@Z": 0x110A9400,
+               "?Selected@CCheckBoxUI@DuiLib@@UAEX_N0@Z": 0x110A9290,
+               "??0CCheckBoxUI@DuiLib@@QAE@XZ": 0x110A8540,
                "?SetValue@CSliderUI@DuiLib@@QAEXH@Z": 0x110B6610,
                "?SendNotify@CPaintManagerUI@DuiLib@@QAEXPAVCControlUI@2@PB_WIJ_N@Z": 0x11068AD0}
     directory = pe.base + pe.u32(pe.u32(0x3C) + 24 + 96)
@@ -1015,7 +1068,15 @@ def inspect_settings_ui_control_actions(path):
         raise ValueError("Unexpected option selection export or virtual table")
     if pe.class_name(0x111141BC) != ".?AVCSliderUI@DuiLib@@" or pe.pointer(0x111141BC + 0x190) != 0x110AA520:
         raise ValueError("Unexpected slider value callback virtual table")
+    if pe.class_name(0x11113E5C) != ".?AVCCheckBoxUI@DuiLib@@" or pe.pointer(0x11113E5C + 0x1C0) != 0x110A9290:
+        raise ValueError("Unexpected checkbox selection virtual target")
+    if hashlib.sha256(pe.at(0x110A9290, 0x110A93FD - 0x110A9290)).hexdigest() != "cf73a3e50345835c37d433a6af4e41b47aeb5f006feea7c446f351ea08f183c6":
+        raise ValueError("Unexpected checkbox selection function body")
     checks = {
+        0x110A8552: "c7005c3e1111", 0x110A929C: "0fb688580b0000",
+        0x110A9397: "0fb64d0c", 0x110A939D: "7423", 0x110A93BD: "e80ef7fbff",
+        0x110A93C4: "0fb6450c", 0x110A93CA: "7423", 0x110A93EA: "e8e1f6fbff",
+        0x110A9381: "6a01", 0x110A9383: "6a00", 0x110A9393: "ffd0",
         0x110AA557: "0fb68818070000", 0x110AA560: "0f84a7000000",
         0x110AA584: "8b8a24070000", 0x110AA5A8: "8b8a1c070000",
         0x110AA5C8: "6870c41111", 0x110AA5F6: "8b422c", 0x110AA5F9: "ffd0",
@@ -1036,6 +1097,12 @@ def inspect_settings_ui_control_actions(path):
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected UI control action instruction")
     return {"dllSHA256": digest, "instructionChecks": len(checks), "exports": {k: hex(v) for k, v in exports.items()},
+            "checkboxSelection": {"virtualTable": "0x11113e5c", "target": "0x110a9290",
+                                  "functionSHA256": "cf73a3e50345835c37d433a6af4e41b47aeb5f006feea7c446f351ea08f183c6",
+                                  "parameters": ["selected", "sendNotify"],
+                                  "directNotifyCalls": ["0x110a93bd", "0x110a93ea"],
+                                  "directNotifyGuard": "second argument must be nonzero",
+                                  "peerArguments": [False, True]},
             "optionVirtualTable": "0x11113c94", "selectedMethodOffset": "0x1c0",
             "selectedParameters": ["selected", "sendNotify"],
             "messageUpdateArguments": [True, False],
@@ -2072,7 +2139,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 42,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 43,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2082,6 +2149,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
         "defaultControlRefresh": inspect_default_control_refresh(pe),
+        "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
