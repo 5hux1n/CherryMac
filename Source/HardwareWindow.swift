@@ -268,6 +268,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #if CHERRY_MACRO_PRODUCT
         titles.append("文本")
         #endif
+        titles.append("设备设置")
         for title in titles{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in titles.enumerated(){
             let tab=HardwareNavigationButton(title:title,target:self,action:#selector(chooseTab(_:)));tab.tag=index;tab.isBordered=false;tab.setButtonType(.toggle)
@@ -352,10 +353,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let scopeDescription="仅开放按键写入，自动备份、逐包检查释放并完整读回。灯效与宏写入暂缓。\nWin 锁、6 键／全键模式、回报率等设置会在协议确认后加入。"
         #endif
         place(label(scopeDescription,13),8,148,850,70,in:device)
-        place(button("编辑官方回报率草稿…",#selector(editPollingDraft)),465,253,230,32,in:device)
-        place(button("打开操作日志",#selector(openLogs)),261,253,180,32,in:device)
-        place(button("Mac 端按键适配设置",#selector(openMacSettings)),8,253,230,32,in:device)
-        place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。",12),8,299,850,36,in:device)
+        place(button("打开操作日志",#selector(openLogs)),8,253,180,32,in:device)
+        let settings=tabs.tabViewItems.last!.view!
+        place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
+        place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
+        place(label("先导入 Windows 官方 JSON，再编辑 USB 回报率。修改会保存在配置与备份文件中；目前尚未写入键盘。无线回报率、Win 锁、键模式与重复设置保留原模板值，发送接口仍在核对。",13),8,109,850,70,in:settings)
+        place(button("编辑官方回报率草稿…",#selector(editPollingDraft)),8,198,260,32,in:settings)
+        place(label("Mac 端适配",17,.semibold),8,272,850,28,in:settings)
+        place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。它们不会保存到键盘；需要实体 F5 输出 ⌘R 时，可在按键页设置并写入。",13),8,312,850,60,in:settings)
+        place(button("打开 Mac 端适配设置",#selector(openMacSettings)),8,397,260,32,in:settings)
         #if CHERRY_MACRO_PRODUCT
         let text=tabs.tabViewItems[5].view!
         place(label("文本快捷输入",20,.semibold),8,12,850,30,in:text)
@@ -659,10 +665,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         tabs.selectTabViewItem(at:sender.tag)
         for tab in tabButtons{tab.state=tab.tag==sender.tag ? .on:.off;tab.needsDisplay=true}
         var titles=["按键功能","灯效","宏","配置与备份","设备与诊断"]
-        var descriptions=["点选一个按键，设置你习惯的功能。","选择内置模式，或为每个按键配色。","把连续的按键操作保存为一个动作。","保存配置，管理备份，迁移你的设置。","查看设备状态和 Mac 端适配选项。"]
+        var descriptions=["点选一个按键，设置你习惯的功能。","选择内置模式，或为每个按键配色。","把连续的按键操作保存为一个动作。","保存配置，管理备份，迁移你的设置。","查看连接状态与操作日志。"]
         #if CHERRY_MACRO_PRODUCT
         titles.append("文本快捷输入");descriptions.append("管理需要 Mac 端服务执行的文本动作。")
         #endif
+        titles.append("设备设置");descriptions.append("管理官方配置草稿与 Mac 端适配。")
         pageTitle.stringValue=titles[sender.tag];pageDescription.stringValue=descriptions[sender.tag]
         board.isHidden=sender.tag>=3;tabs.frame=NSRect(x:192,y:sender.tag>=3 ? 188:462,width:936,height:sender.tag>=3 ? 566:294)
         writeButtons.forEach{$0.isHidden=$0.tag != sender.tag}
