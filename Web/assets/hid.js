@@ -126,7 +126,18 @@ export class CherryHID{
     try{return await executeStoredDefaultTransaction(review,{recovery,source:'usbTrace',operationID:options.operationID,cancelled:options.cancelled,assertCurrent:check,
       read:async()=>{
         await check();const snapshot=await this.snapshot();await check();
-        if(!this.#defaultAuthorization){const mapping=await this.readLightingMapping(snapshot);await check();requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(mapping[field],review.lightingMapping[field])),'默认恢复的实际映射与计划不一致。');await options.confirmStopped(structuredClone(snapshot));await check();this.#defaultAuthorization=recovery?DefaultCandidateAuthorization.recovery(recovery,snapshot):new DefaultCandidateAuthorization(review,snapshot);}
+        if(!this.#defaultAuthorization){
+          const mapping=await this.readLightingMapping(snapshot);await check();
+          requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(mapping[field],review.lightingMapping[field])),'默认恢复的实际映射与计划不一致。');
+          const preparedScope=recovery?DefaultCandidateAuthorization.recovery(recovery,snapshot):new DefaultCandidateAuthorization(review,snapshot);
+          await options.confirmStopped(structuredClone(snapshot));await check();
+          this.#defaultAuthorization=preparedScope;
+        }else{
+          // Reuse the transaction's post-backup and final full reads rather
+          // than adding another snapshot around the stop confirmation.
+          const verifiedMapping=await this.readLightingMapping(snapshot);await check();
+          requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(verifiedMapping[field],review.lightingMapping[field])),'备份后默认键位或 LED 映射发生变化，默认恢复停止发送。');
+        }
         return snapshot;
       },clock:()=>Math.floor(performance.now()),wait:sleep,exchange:async request=>{
         const scope=this.#defaultAuthorization;requireThat(scope,'默认恢复授权尚未准备。');

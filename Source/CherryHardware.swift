@@ -299,9 +299,18 @@ final class CherryUSB: CherryHardwareAccess {
             if self.defaultAuthorization==nil {
                 let mapping=try self.readLightingMapping(snapshot);try check()
                 guard mapping==review.lightingMapping else{throw HardwareError(message:"默认恢复的实际映射与计划不一致。")}
+                // Validate the retained starting state before asking the user
+                // to stop macros; install it only after stop confirmation.
+                let preparedScope:WindowsProfile.DefaultCandidateAuthorization
+                if let recovery{preparedScope=try .init(recovery:recovery,started:snapshot)}
+                else{preparedScope=try .init(review:review,started:snapshot)}
                 try confirmStopped(snapshot);try check()
-                if let recovery{self.defaultAuthorization=try WindowsProfile.DefaultCandidateAuthorization(recovery:recovery,started:snapshot)}
-                else{self.defaultAuthorization=try WindowsProfile.DefaultCandidateAuthorization(review:review,started:snapshot)}
+                self.defaultAuthorization=preparedScope
+            }else{
+                // The transaction already re-reads all configuration after
+                // backup. Bind that same fresh read to the retained mapping.
+                let verifiedMapping=try self.readLightingMapping(snapshot);try check()
+                guard verifiedMapping==review.lightingMapping else{throw HardwareError(message:"备份后默认键位或 LED 映射发生变化，默认恢复停止发送。")}
             }
             return snapshot
         },clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
