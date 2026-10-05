@@ -1,4 +1,4 @@
-import {clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
+import {executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 let database;
 function db(){if(!database)database=new Promise((resolve,reject)=>{const r=indexedDB.open('CherryMacWeb',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('备份数据库被其他页面占用。'));});return database;}
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
@@ -44,4 +44,66 @@ export function reviewLightingEditorResult(record,review){
     requireThat(['readbackMatched','alreadyMatched'].includes(assessment.status)&&equal(source.original,review.original)&&equal(source.plan,review.plan)&&equal(record.current,review.original),'恢复结果与原编辑基线不一致。');
   }else throw new Error('灯效结果类型无效。');
   return clone(record.current);
+}
+
+// Separate append-only records: retain pending entries even after later replies.
+let defaultDatabase;
+function defaultDB(){
+  if(!defaultDatabase)defaultDatabase=new Promise((resolve,reject)=>{
+    const request=indexedDB.open('CherryMacDefaultTransactions',1);let abandoned=false;
+    const fail=error=>{abandoned=true;defaultDatabase=null;reject(error);};
+    request.onupgradeneeded=()=>{request.result.createObjectStore('backups',{keyPath:'operationID'});request.result.createObjectStore('records',{keyPath:'sequence',autoIncrement:true});};
+    request.onsuccess=()=>{const value=request.result;if(abandoned){value.close();return;}value.onversionchange=()=>{value.close();defaultDatabase=null;};resolve(value);};
+    request.onerror=()=>fail(request.error);request.onblocked=()=>fail(new Error('默认恢复数据库被其他页面占用。'));
+  });
+  return defaultDatabase;
+}
+export async function saveDefaultBackup(operationID,snapshot){
+  requireThat(typeof operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(operationID),'默认恢复存储标识无效。');validateSnapshot(snapshot,true);
+  const value={operationID,snapshot:clone(snapshot)},database=await defaultDB();
+  return new Promise((resolve,reject)=>{
+    const transaction=database.transaction('backups','readwrite'),store=transaction.objectStore('backups');let failure=null;
+    const fail=error=>{failure=error;transaction.abort();};
+    const check=request=>{request.onsuccess=()=>{if(!equal(request.result,value))fail(new Error('默认恢复备份读回校验失败。'));};};
+    const existing=store.get(operationID);existing.onsuccess=()=>{
+      if(existing.result!=null){if(existing.result.operationID!==operationID||!equal(existing.result.snapshot,value.snapshot))fail(new Error('此事务已有不同备份，不覆盖。'));return;}
+      const added=store.add(value);added.onsuccess=()=>check(store.get(operationID));
+    };
+    transaction.oncomplete=()=>resolve(clone(value));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复备份保存失败。'));
+  });
+}
+export async function saveDefaultTransaction(input){
+  const record=clone(input);assessDefaultTransactionRecord(record);
+  requireThat(new TextEncoder().encode(JSON.stringify(record)).length<=16_000_000,'默认恢复记录超过 16 MB。');
+  const database=await defaultDB();
+  return new Promise((resolve,reject)=>{
+    const transaction=database.transaction(['backups','records'],'readwrite');let failure=null,saved=null;
+    const fail=error=>{failure=error;transaction.abort();};
+    const backup=transaction.objectStore('backups').get(record.operationID);backup.onsuccess=()=>{
+      if(!backup.result||!equal(backup.result.snapshot,record.started)){fail(new Error('默认恢复事务与写前备份不一致。'));return;}
+      const binding={direction:record.direction,sourceReview:record.sourceReview,recovery:record.recovery??null,started:record.started,source:record.trace.source};
+      if(backup.result.binding!=null&&!equal(backup.result.binding,binding)){fail(new Error('默认恢复事务来源已改变，不混用记录。'));return;}
+      if(backup.result.binding==null)transaction.objectStore('backups').put({...backup.result,binding});
+
+      const store=transaction.objectStore('records'),value={operationID:record.operationID,date:new Date().toISOString(),record},added=store.add(value);
+      added.onsuccess=()=>{saved={...value,sequence:added.result};const check=store.get(added.result);check.onsuccess=()=>{if(!equal(check.result,saved))fail(new Error('默认恢复日志读回校验失败。'));};};
+    };
+    transaction.oncomplete=()=>resolve(clone(saved));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复日志保存失败。'));
+  });
+}
+export async function listDefaultTransactions(){
+  const database=await defaultDB();
+  return new Promise((resolve,reject)=>{
+    const transaction=database.transaction('records','readonly'),request=transaction.objectStore('records').getAll();let rows=[];
+    request.onsuccess=()=>{rows=request.result;};transaction.oncomplete=()=>{
+      try{for(const row of rows){assessDefaultTransactionRecord(row.record);requireThat(row.operationID===row.record.operationID,'默认恢复日志归属无效。');}resolve(rows.sort((a,b)=>a.sequence-b.sequence));}catch(error){reject(error);}
+    };
+    transaction.onerror=()=>reject(transaction.error);transaction.onabort=()=>reject(transaction.error??new Error('默认恢复日志读取失败。'));
+  });
+}
+
+// Storage callbacks are fixed here; callers supply only device/session actions.
+export function executeStoredDefaultTransaction(review,options){
+  const operationID=options.operationID??globalThis.crypto.randomUUID();
+  return executeDefaultTransaction(review,{...options,operationID,backup:snapshot=>saveDefaultBackup(operationID,snapshot),persist:record=>saveDefaultTransaction(record)});
 }
