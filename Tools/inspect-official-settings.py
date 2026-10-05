@@ -494,6 +494,11 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x541410: "81c150210000", 0x54141E: "8910",
         0x4F4B72: "e899d9f2ff", 0x4F4B77: "394508",
         0x4F4B8B: "e8e088fcff", 0x4F4BB7: "e834dbf2ff",
+        0x50320F: "0fb691f91d0000", 0x503216: "3955ec",
+        0x503219: "7d32", 0x503240: "e8ab86fbff",
+        0x503245: "c700ff000000", 0x50325F: "837df87e",
+        0x4BC0DA: "e811fdffff", 0x4BC0DF: "8b00",
+        0x4BBDFA: "e831000000", 0x4BBDFF: "83c004",
 
 
 
@@ -552,9 +557,10 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         "guards": "signed mapping < 255 and mapping*3 <= 512; no lower bound added by this official method",
         "callOrder": ["0x4f93b3 virtual+0x230 refresh", "0x4f93b8 palette initialization", "0x4f93da virtual+0x2c4 color processing"],
         "colorConversion": "(component * 255) >> 8 => 254 for a 255 component; palette overwrites alpha, unlike ordinary brightness loading",
+        "mappingLength": {"initializationMethod": "0x5031f0", "initialKeys": "all integers in [0, deviceInfo[5]) are inserted into +0x2138 with FF values", "logicalLoopBound": 126, "sizeGetter": "0x4bc0d0 -> 0x4bbdf0 -> count member", "offlineRequiredKeyCount": 126, "offlineColorBytes": 378, "limits": "Mapping initialization and bounded matching path only; this does not prove that no other runtime path inserts additional keys"},
         "model01CE": {"skipsPID00C7Overrides": True, "bankOffset": "profile index * 512", "sendLength": "mapping container size * 3", "sender": "0x4dcde0"},
         "hardwareWriteAuthorized": False,
-        "limits": "Static model47 color count, setter and resize are confirmed. The current offline color stage uses 126 logical entries and requires deviceInfo[5]==126; it is included in the candidate but remains separate from the parameter-only plan and cannot authorize writing. Mapping container size, live object selection, complete reset transaction and physical effects still require verification. Not blackout root cause evidence."}
+        "limits": "Static model47 color count, setter and resize are confirmed. The current offline color stage uses 126 logical entries and requires deviceInfo[5]==126; it is included in the candidate but remains separate from the parameter-only plan and cannot authorize writing. The traced mapping initializer inserts 126 keys under the product key-count guard. Other runtime insertions, live object selection, complete reset transaction and physical effects still require verification. Not blackout root cause evidence."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1098,7 +1104,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 21,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 22,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

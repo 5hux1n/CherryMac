@@ -814,13 +814,30 @@ enum WindowsProfile {
         var redLogicalIndices=[44,64,65,66,96,113,114,115]
         var coefficient=255;var targetColors:[UInt8]
         var mappedColorSlots:[Int];var changedColorSlots:[Int]
+        var bank=0;var transportSelector=0;var chunkCapacity=56
+        var beginRequired=true
+        var reports:[OfficialLightingPlan.Report]
+        var restoreReports:[OfficialLightingPlan.Report]
+        // Offline packets only, never accepted by the ordinary lamp writer.
+        static func renderReports(_ colors:[UInt8])throws->[OfficialLightingPlan.Report]{
+            guard colors.count==378 else{throw HardwareError(message:"默认颜色步骤需要完整 378 字节原始颜色。")}
+            var result=[OfficialLightingPlan.Report(stage:0,kind:"begin",delayMilliseconds:0,request:try CherryPacket.make(1))]
+            for offset in stride(from:0,to:378,by:56){
+                let data=Array(colors[offset..<min(378,offset+56)])
+                let payload=[UInt8(data.count),UInt8(offset&255),UInt8(offset>>8),0]+data
+                result.append(.init(stage:0,kind:"data",delayMilliseconds:0,request:try CherryPacket.make(0x0B,payload:payload)))
+            }
+            result.append(.init(stage:0,kind:"finish",delayMilliseconds:10,request:try CherryPacket.make(2)))
+            return result
+        }
     }
     struct DefaultConfigurationReview:Codable {
-        var format="CherryMacDefaultConfigurationReview";var version=4;var hardwareReady=false
+        var format="CherryMacDefaultConfigurationReview";var version=5;var hardwareReady=false
         var original:HardwareSnapshot;var candidate:HardwareSnapshot
         var officialTemplateJSON:String;var factoryKeymap:[UInt8]
         var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
         var defaultColorPlan:DefaultColorPlan
+        var officialStageOrder=["defaultColors","factoryKeys","parameters"]
         var changedParameterOffsets:[Int];var protectedChangedSlots:[Int]
         var macroBindingSlots:[Int];var unsupportedFactorySlots:[Int]
         var pendingSystemFields:[String];var retainedMacroStorage=true
@@ -846,7 +863,7 @@ enum WindowsProfile {
             proposedColors[slot*3+1]=red.contains(logical) ? 0:254
             proposedColors[slot*3+2]=red.contains(logical) ? 0:254
         }
-        let colorPlan=DefaultColorPlan(targetColors:proposedColors,mappedColorSlots:mapped.sorted(),changedColorSlots:(0..<126).filter{proposedColors[$0*3..<$0*3+3] != originalColors[$0*3..<$0*3+3]})
+        let colorPlan=DefaultColorPlan(targetColors:proposedColors,mappedColorSlots:mapped.sorted(),changedColorSlots:(0..<126).filter{proposedColors[$0*3..<$0*3+3] != originalColors[$0*3..<$0*3+3]},reports:try DefaultColorPlan.renderReports(proposedColors),restoreReports:try DefaultColorPlan.renderReports(originalColors))
         candidate.colors=proposedColors;try candidate.validate()
         let changed=(0..<126).filter{slot in candidate.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
         let protected=changed.filter{!KeymapWriteAuthorization.editableSlots.contains($0)}
