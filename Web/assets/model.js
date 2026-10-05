@@ -265,6 +265,22 @@ export function officialSystemStageWords(root){
   // JSON struct order only; these are not USB offsets or UI value ranges.
   return ['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'].map(k=>winInt(stages[k],k,0,65535));
 }
+// Pure extraction of an official all-model default file; no USB identity or IO.
+export function extractOfficialDefaultTemplate(text){
+  requireThat(typeof text==='string'&&new TextEncoder().encode(text).length<=16_000_000,'需要官方 DefaultData 配置文件（不超过 16 MB）。');
+  const document=JSON.parse(text.replace(/^\uFEFF/,''));
+  requireThat(document&&typeof document==='object'&&!Array.isArray(document)&&Array.isArray(document.Device)&&document.Device.length<=128&&document.Device.every(row=>row&&typeof row==='object'&&!Array.isArray(row)),'默认文件缺少设备列表。');
+  const matches=document.Device.filter(row=>row&&typeof row==='object'&&!Array.isArray(row)&&row['//']==='47');
+  requireThat(matches.length===1,'默认文件必须包含唯一的型号 47。');
+  const root=clone(matches[0]);
+  requireThat(root.MacroInfo==null&&(root.ActionInfo==null||Array.isArray(root.ActionInfo)&&root.ActionInfo.length===0)&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'默认文件包含宏或动作，不能作为原始默认配置。');
+  for(const key of root.KeyList)requireThat(winInt(key?.Assignment,'Assignment',0,0xffffff)===winInt(key?.DefaultAssignment,'DefaultAssignment',0,0xffffff)&&winInt(key?.ActionLink??0,'ActionLink',0,1)===0,'默认文件包含修改后的键位。');
+  root.ActionInfo=[];
+  validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
+  const parameters=prepareOfficialLightingParameters(root,0);
+  requireThat(modes.some(([code])=>code===parameters.head[1]),'默认灯效不在本型号已核对范围。');
+  return root;
+}
 function validateWindowsTemplate(root,size){
   requireThat(size<=1_000_000&&root?.['//']==='47'&&Array.isArray(root.KeyList)&&root.KeyList.length===126,'需要本型号的官方配置模板（不超过 1 MB）。');
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));

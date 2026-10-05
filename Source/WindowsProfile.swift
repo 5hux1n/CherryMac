@@ -273,6 +273,28 @@ enum WindowsProfile {
         guard let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]else{return false}
         return root["KeyList"] != nil || root["DeviceBasicInfo"] != nil
     }
+    // Official bundled defaults contain all models. Extract only an unmodified
+    // model47 template; template DeviceBasicInfo is never a USB identity source.
+    static func extractDefaultTemplate(_ data:Data)throws->Data {
+        guard data.count<=16_000_000,let document=try JSONSerialization.jsonObject(with:data) as? [String:Any],
+              let devices=document["Device"] as? [[String:Any]],devices.count<=128 else{throw HardwareError(message:"需要官方 DefaultData 配置文件（不超过 16 MB）。")}
+        let matches=devices.filter{$0["//"] as? String=="47"}
+        guard matches.count==1 else{throw HardwareError(message:"默认文件必须包含唯一的型号 47。")}
+        var root=matches[0]
+        guard root["MacroInfo"]==nil || root["MacroInfo"] is NSNull,
+              root["ActionInfo"]==nil || root["ActionInfo"] is NSNull || (root["ActionInfo"] as? [[String:Any]])?.isEmpty==true,
+              let keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"默认文件包含宏或动作，不能作为原始默认配置。")}
+        for key in keys {
+            guard try integer(key["Assignment"],"Assignment",range:0...0xFFFFFF)==integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF),
+                  try integer(key["ActionLink"] ?? 0,"ActionLink",range:0...1)==0 else{throw HardwareError(message:"默认文件包含修改后的键位。")}
+        }
+        root["ActionInfo"]=[[String:Any]]()
+        let output=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys,.withoutEscapingSlashes])
+        _ = try templateRoot(output)
+        let parameters=try prepareOfficialLightingParameters(output,bank:0)
+        guard CherryLighting.modes.contains(where:{$0.1==parameters.head[1]}) else{throw HardwareError(message:"默认灯效不在本型号已核对范围。")}
+        return output
+    }
     static func templateRoot(_ data:Data)throws->[String:Any] {
         guard data.count<=1_000_000,let root=try JSONSerialization.jsonObject(with:data) as? [String:Any],
               root["//"] as? String=="47",let keys=root["KeyList"] as? [[String:Any]],keys.count==126 else{throw HardwareError(message:"需要本型号的官方配置模板（不超过 1 MB）。")}
