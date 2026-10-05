@@ -939,6 +939,65 @@ enum WindowsProfile {
         guard !matched.isEmpty else{throw HardwareError(message:"当前配置不属于此次默认恢复的原始、目标或分包前缀，停止覆盖。")}
         return .init(matchedDataPrefixes:matched,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.original),configurationMatchesCandidate:same(current,rebuilt.candidate))
     }
+    struct DefaultRecoveryPlan:Codable {
+        var format="CherryMacDefaultRecoveryPlan";var version=1
+        var hardwareReady=false;var completeRestoreImplemented=false
+        var sourceReview:DefaultConfigurationReview;var before:HardwareSnapshot
+        var expected:HardwareSnapshot;var reports:[OfficialLightingPlan.Report]
+        var stageOrder=["parameters","originalKeys","originalColors"]
+    }
+    struct DefaultRecoveryProgress:Codable {
+        var format="CherryMacDefaultRecoveryProgress";var version=1
+        var hardwareReady=false;var completeRestoreImplemented=false
+        var matchedDataPrefixes:[Int];var totalDataReports:Int
+        var configurationMatchesOriginal:Bool
+    }
+    // Roll back known fields in reverse stage order, using retained raw bytes.
+    // This is our recovery order, not a claim about the official reset order.
+    static func defaultRecoveryPlan(_ review:DefaultConfigurationReview,current:HardwareSnapshot)throws->DefaultRecoveryPlan {
+        let progress=try reviewDefaultRestoreProgress(review,current:current)
+        var reports:[OfficialLightingPlan.Report]=[]
+        if !progress.configurationMatchesOriginal {
+            for var packet in try review.lightingPlan.reports() {
+                packet.stage=0
+                if packet.kind=="data" {
+                    let offset=Int(packet.request[5]) | Int(packet.request[6])<<8,length=Int(packet.request[4])
+                    packet.request=try CherryPacket.make(6,payload:[UInt8(length),UInt8(offset&255),UInt8(offset>>8),packet.request[7]]+Array(review.original.parameters[offset..<offset+length]))
+                }
+                reports.append(packet)
+            }
+            for var packet in review.defaultKeyPlan.restoreReports{packet.stage=1;reports.append(packet)}
+            for var packet in review.defaultColorPlan.restoreReports{packet.stage=2;reports.append(packet)}
+        }
+        return .init(sourceReview:review,before:current,expected:review.original,reports:reports)
+    }
+    // Interrupted recovery may differ from any forward-write prefix. Match it
+    // against this recovery's own retained starting state and exact reports.
+    static func reviewDefaultRecoveryProgress(_ plan:DefaultRecoveryPlan,current:HardwareSnapshot)throws->DefaultRecoveryProgress {
+        guard plan.format=="CherryMacDefaultRecoveryPlan",plan.version==1,!plan.hardwareReady,!plan.completeRestoreImplemented else{throw HardwareError(message:"默认恢复撤回记录格式无效。")}
+        let rebuilt=try defaultRecoveryPlan(plan.sourceReview,current:plan.before)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        guard try encoder.encode(plan)==encoder.encode(rebuilt) else{throw HardwareError(message:"默认恢复撤回记录与原始资料不一致，停止核对。")}
+        try current.validate();guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"撤回核对需要完整当前配置。")}
+        func same(_ a:HardwareSnapshot,_ b:HardwareSnapshot)->Bool{a.deviceInfo==b.deviceInfo && a.keymap==b.keymap && a.parameters==b.parameters && a.colors==b.colors && a.macroData==b.macroData}
+        var state=rebuilt.before,count=0,matched:[Int]=[]
+        if same(state,current){matched.append(0)}
+        for packet in rebuilt.reports where packet.kind=="data" {
+            let bytes=packet.request,length=Int(bytes[4]),offset=Int(bytes[5]) | Int(bytes[6])<<8
+            let limit=bytes[3]==6 ? 56:378
+            guard bytes.count==64,[UInt8(6),9,0x0B].contains(bytes[3]),length>0,length<=56,offset+length<=limit else{throw HardwareError(message:"撤回分包超出已知范围。")}
+            let data=Array(bytes[8..<8+length])
+            switch bytes[3] {
+            case 6:state.parameters.replaceSubrange(offset..<offset+length,with:data)
+            case 9:state.keymap.replaceSubrange(offset..<offset+length,with:data)
+            default:state.colors!.replaceSubrange(offset..<offset+length,with:data)
+            }
+            count+=1;if same(state,current){matched.append(count)}
+        }
+        guard same(state,rebuilt.expected) else{throw HardwareError(message:"撤回分包不能重建原始配置。")}
+        guard !matched.isEmpty else{throw HardwareError(message:"当前配置不属于此次撤回的分包前缀，停止覆盖。")}
+        return .init(matchedDataPrefixes:matched,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.expected))
+    }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot

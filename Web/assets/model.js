@@ -549,6 +549,43 @@ export function reviewDefaultRestoreProgress(review,current){
   requireThat(matchedDataPrefixes.length>0,'当前配置不属于此次默认恢复的原始、目标或分包前缀，停止覆盖。');
   return {format:'CherryMacDefaultRestoreProgress',version:1,hardwareReady:false,completeRestoreImplemented:false,matchedDataPrefixes,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.original),configurationMatchesCandidate:same(current,rebuilt.candidate)};
 }
+// Our bounded rollback order, separate from the official forward reset order.
+export function defaultRecoveryPlan(review,current){
+  const progress=reviewDefaultRestoreProgress(review,current),reports=[];
+  if(!progress.configurationMatchesOriginal){
+    for(const packet of officialLightingReports(review.lightingPlan)){
+      packet.stage=0;
+      if(packet.kind==='data'){
+        const offset=packet.request[5]|packet.request[6]<<8,length=packet.request[4];
+        packet.request.splice(8,length,...review.original.parameters.slice(offset,offset+length));
+        const sum=packet.request.slice(3).reduce((n,v)=>n+v,0);packet.request[1]=sum&255;packet.request[2]=sum>>8;
+      }
+      reports.push(packet);
+    }
+    reports.push(...clone(review.defaultKeyPlan.restoreReports).map(packet=>({...packet,stage:1})),...clone(review.defaultColorPlan.restoreReports).map(packet=>({...packet,stage:2})));
+  }
+  return {format:'CherryMacDefaultRecoveryPlan',version:1,hardwareReady:false,completeRestoreImplemented:false,sourceReview:clone(review),before:clone(current),expected:clone(review.original),reports,stageOrder:['parameters','originalKeys','originalColors']};
+}
+export function reviewDefaultRecoveryProgress(plan,current){
+  requireThat(plan?.format==='CherryMacDefaultRecoveryPlan'&&plan.version===1&&plan.hardwareReady===false&&plan.completeRestoreImplemented===false,'默认恢复撤回记录格式无效。');
+  const rebuilt=defaultRecoveryPlan(plan.sourceReview,plan.before);
+  const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+  requireThat(JSON.stringify(canonical(plan))===JSON.stringify(canonical(rebuilt)),'默认恢复撤回记录与原始资料不一致，停止核对。');
+  validateSnapshot(current,true);
+  const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+  const state=clone(rebuilt.before),matchedDataPrefixes=[];let count=0;
+  if(same(state,current))matchedDataPrefixes.push(0);
+  for(const packet of rebuilt.reports.filter(p=>p.kind==='data')){
+    const bytes=packet.request,length=bytes[4],offset=bytes[5]|bytes[6]<<8,field=bytes[3]===6?'parameters':bytes[3]===9?'keymap':'colors';
+    const limit=field==='parameters'?56:378;
+    requireThat(bytes.length===64&&[6,9,0x0b].includes(bytes[3])&&length>0&&length<=56&&offset+length<=limit,'撤回分包超出已知范围。');
+    state[field].splice(offset,length,...bytes.slice(8,8+length));count++;
+    if(same(state,current))matchedDataPrefixes.push(count);
+  }
+  requireThat(same(state,rebuilt.expected),'撤回分包不能重建原始配置。');
+  requireThat(matchedDataPrefixes.length>0,'当前配置不属于此次撤回的分包前缀，停止覆盖。');
+  return {format:'CherryMacDefaultRecoveryProgress',version:1,hardwareReady:false,completeRestoreImplemented:false,matchedDataPrefixes,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.expected)};
+}
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');
