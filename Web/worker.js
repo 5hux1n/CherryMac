@@ -6,13 +6,23 @@ export default {
     if (!['GET', 'HEAD'].includes(request.method)) {
       return new Response('Method not allowed', {status: 405, headers: {Allow: 'GET, HEAD'}});
     }
-    if (['/', '/index.php', '/index.html', '/app/', '/app/index.php'].includes(url.pathname)) {
-      url.pathname = '/index.html';
-    } else if (url.pathname.startsWith('/app/assets/')) {
-      url.pathname = url.pathname.slice(4);
+    if (url.pathname === '/app') {
+      url.pathname = '/app/';
+      return new Response(null, {status: 308, headers: {Location: url.toString(), 'Cache-Control': 'no-store'}});
     }
-    if (!['/index.html', '/release.json'].includes(url.pathname) &&
-        !/^\/assets\/[a-z0-9-]+\.(js|css)$/.test(url.pathname)) {
+    if (url.pathname === '/') {
+      url.pathname = '/index.html';
+    } else if (['/index.php', '/app/', '/app/index.php'].includes(url.pathname)) {
+      url.pathname = '/app/index.html';
+    } else if (url.pathname.startsWith('/assets/')) {
+      // Compatibility with tabs opened before the /app/ deployment layout.
+      url.pathname = '/app' + url.pathname;
+    } else if (url.pathname === '/app/release.json') {
+      url.pathname = '/release.json';
+    }
+    if (!['/index.html', '/app/index.html', '/release.json',
+           '/site-assets/style.css', '/site-assets/keyboard.png'].includes(url.pathname) &&
+        !/^\/app\/assets\/[a-z0-9-]+\.(js|css)$/.test(url.pathname)) {
       return new Response('Not found', {status: 404});
     }
     const asset = await env.ASSETS.fetch(new Request(url, request));

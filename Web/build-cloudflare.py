@@ -18,7 +18,9 @@ if not match:
     raise SystemExit('Cannot determine source version')
 source = match.group(1)
 files = runtime_files(root, source)
-for path in files + [root / 'preview-versions.json', root / 'build-cloudflare.py', root / 'package_runtime.py']:
+homepage_files = [root / 'homepage' / name for name in
+                  ('index.html', 'site-assets/style.css', 'site-assets/keyboard.png')]
+for path in files + homepage_files + [root / 'preview-versions.json', root / 'build-cloudflare.py', root / 'package_runtime.py']:
     subprocess.run(['git', 'ls-files', '--error-unmatch', str(path.relative_to(root.parent))],
                    cwd=root.parent, check=True, stdout=subprocess.DEVNULL)
 environment = dict(os.environ, CHERRY_MACRO_PRODUCT='1', CHERRY_TEXT_PRODUCT='1',
@@ -30,17 +32,21 @@ if out.exists():
     if out.is_symlink():
         raise SystemExit('Refusing a symlink output directory')
     shutil.rmtree(out)
-(out / 'assets').mkdir(parents=True)
+(out / 'app' / 'assets').mkdir(parents=True)
+for path in homepage_files:
+    target = out / path.relative_to(root / 'homepage')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(path.read_bytes())
 page = page.replace('?v=' + source, '?v=' + version)
 page = page.replace('CherryMac Web ' + source, 'CherryMac Web ' + version + ' · 在线开发预览')
 page = page.replace('<p id="compatibility"', '<p class="notice">在线开发预览，尚待统一真机验收。备份保存在当前浏览器与当前网址；与本地网页分别保存。跨应用文本输入仍需 Mac 客户端联动。</p><p id="compatibility"', 1)
-(out / 'index.html').write_text(page)
+(out / 'app' / 'index.html').write_text(page)
 for path in files:
     if path.parent.name != 'assets':
         continue
     text = path.read_text().replace('?v=' + source, '?v=' + version)
     text = text.replace("webVersion:'" + source + "'", "webVersion:'" + version + "'")
-    (out / 'assets' / path.name).write_text(text)
+    (out / 'app' / 'assets' / path.name).write_text(text)
 commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
 manifest = {'format': 'CherryMacOnlineRelease', 'version': version, 'sourceCommit': commit,
             'hardwareAcceptance': 'pending',

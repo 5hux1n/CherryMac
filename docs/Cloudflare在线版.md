@@ -1,6 +1,8 @@
 # 在线配置与更新
 
-[打开 CherryMac 在线配置](https://cherrymac.11195666.workers.dev/)
+[打开 CherryMac 在线配置](https://cherrymac.goforit.si/app/)
+
+[项目官网](https://cherrymac.goforit.si/) 位于根路径，配置工具位于 `/app/`。两者由同一个 Cloudflare Worker 提供；原有 CNAME 保留，开启该子域名代理并绑定 `cherrymac.goforit.si/*` 路由。原 workers.dev 地址也采用相同目录布局。
 
 2026-10-05 已发布 0.29.0，页面与脚本来源提交 `a3594f54ca82d480801f595dd684a8e50d8bb5bb`，Worker 版本标识 `f35d0a15-af0e-4a60-b579-43f24f517fa5`。线上 17 个页面／脚本文件哈希与清单一致；首页、`/index.php`、`/app/` 返回 200，HID 权限和缓存响应头已核对。没有打开浏览器或访问键盘，不计作功能或真机验收。
 

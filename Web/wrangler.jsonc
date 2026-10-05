@@ -3,6 +3,7 @@
   "main": "worker.js",
   "compatibility_date": "2026-10-05",
   "workers_dev": true,
+  "routes": [{"pattern": "cherrymac.goforit.si/*", "zone_name": "goforit.si"}],
   "assets": {
     "directory": "./cloudflare-dist",
     "binding": "ASSETS",
