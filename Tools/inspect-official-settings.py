@@ -485,6 +485,15 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x5018F7: "8b5508", 0x5018FA: "c1e209",
         0x50190A: "e8c1a7fbff", 0x50190F: "6bc003",
         0x501926: "e8b5b4fdff",
+        0x408DDA: "c7053c4182007e000000",
+        0x4997CE: "699500fcffff1c010000", 0x4997D8: "8b82180d8200",
+        0x4997E5: "e8467b0a00", 0x49B77B: "e8b05b0a00",
+        0x49D20F: "e81c410a00", 0x49E4AE: "e87d2e0a00",
+        0x541359: "898208210000", 0x54137A: "8b8808210000",
+        0x541384: "81c150210000", 0x54138A: "e8b137fbff",
+        0x541410: "81c150210000", 0x54141E: "8910",
+        0x4F4B72: "e899d9f2ff", 0x4F4B77: "394508",
+        0x4F4B8B: "e8e088fcff", 0x4F4BB7: "e834dbf2ff",
 
 
 
@@ -537,13 +546,15 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         "logicalRedIndices": [44, 64, 65, 66, 96, 113, 114, 115],
         "redRGBA": [255, 0, 0, 255], "otherMappedRGBA": [255, 255, 255, 255],
         "vector": "object+0x2150; existing vector length from 0x422510",
+        "registeredColorCount": {"modelIndex": 47, "column": "0x820d18", "rowStride": "0x11c", "cell": "0x82413c", "value": 126, "initializationStore": "0x408dda"},
+        "colorCountSetter": {"method": "0x541330", "countMember": "0x2108", "vectorResize": "0x4f4b40", "resizeCall": "0x54138a", "initialRGBA": [0, 0, 0, 0], "callerSites": ["0x4997e5", "0x49b77b", "0x49d20f", "0x49e4ae"]},
         "mapping": "object+0x2138 via 0x4bb8f0",
         "guards": "signed mapping < 255 and mapping*3 <= 512; no lower bound added by this official method",
         "callOrder": ["0x4f93b3 virtual+0x230 refresh", "0x4f93b8 palette initialization", "0x4f93da virtual+0x2c4 color processing"],
         "colorConversion": "(component * 255) >> 8 => 254 for a 255 component; palette overwrites alpha, unlike ordinary brightness loading",
         "model01CE": {"skipsPID00C7Overrides": True, "bankOffset": "profile index * 512", "sendLength": "mapping container size * 3", "sender": "0x4dcde0"},
         "hardwareWriteAuthorized": False,
-        "limits": "Existing vector allocation/count and mapping container size initialization still require tracing. Offline proposal assumes 126 logical entries and the current 378-byte RGB bank, and remains separate from candidate/write plan. Not physical evidence or blackout root cause."}
+        "limits": "Static model47 color count, setter and resize are confirmed. The current offline color stage uses 126 logical entries and requires deviceInfo[5]==126; it is included in the candidate but remains separate from the parameter-only plan and cannot authorize writing. Mapping container size, live object selection, complete reset transaction and physical effects still require verification. Not blackout root cause evidence."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1087,7 +1098,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 20,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 21,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

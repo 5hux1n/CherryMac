@@ -498,21 +498,22 @@ export function importWindowsLightingDraft(profile,template){
 // Compute a full candidate and unresolved scopes without authorizing USB IO.
 export function reviewDefaultConfiguration(text,baseline,mapping){
   validateSnapshot(baseline,true);const colorSlots=lightingMappingSlots(mapping,baseline);
-  requireThat(baseline.deviceInfo[6]===24&&baseline.parameters[0]===0,'默认恢复核对需要本型号配置 0 的完整读取基线。');
+  requireThat(baseline.deviceInfo[6]===24&&baseline.deviceInfo[5]===126&&baseline.parameters[0]===0,'默认恢复核对需要本型号配置 0 的完整读取基线。');
   const template=extractOfficialDefaultTemplate(text);
   const lightingPlan=planOfficialLighting(template,baseline,mapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
   const candidate=officialLightingReadbackTarget(lightingPlan,baseline);
   candidate.keymap=clone(mapping.factoryKeymap);validateSnapshot(candidate,true);
-  // Conditional offline proposal: the official existing vector's initialized
-  // size is still pending. Do not apply this to candidate or lightingPlan.
+  // Model 47 registers 126 color entries, resized by 541330. This color
+  // stage remains separate from the parameter-only lightingPlan.
   const redLogicalIndices=[44,64,65,66,96,113,114,115],targetColors=Array(378).fill(0),mapped=new Set();
   colorSlots.forEach((slot,logical)=>{if(slot===null)return;mapped.add(slot);targetColors.splice(slot*3,3,254,redLogicalIndices.includes(logical)?0:254,redLogicalIndices.includes(logical)?0:254);});
-  const defaultColorProposal={hardwareReady:false,logicalEntryCountAssumption:126,pendingObjectInitialization:true,redLogicalIndices,coefficient:255,targetColors,mappedColorSlots:[...mapped].sort((a,b)=>a-b),changedColorSlots:Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(targetColors.slice(slot*3,slot*3+3),baseline.colors.slice(slot*3,slot*3+3)))};
+  const defaultColorPlan={hardwareReady:false,logicalEntryCount:126,pendingTransportIntegration:true,redLogicalIndices,coefficient:255,targetColors,mappedColorSlots:[...mapped].sort((a,b)=>a-b),changedColorSlots:Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(targetColors.slice(slot*3,slot*3+3),baseline.colors.slice(slot*3,slot*3+3)))};
+  candidate.colors=clone(targetColors);validateSnapshot(candidate,true);
   const changedKeySlots=Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(candidate.keymap.slice(slot*3,slot*3+3),baseline.keymap.slice(slot*3,slot*3+3)));
   const protectedChangedSlots=changedKeySlots.filter(slot=>!editableSlots.has(slot));
   const macroBindingSlots=changedKeySlots.filter(slot=>[0x70,0x71].includes(baseline.keymap[slot*3]));
   const unsupportedFactorySlots=changedKeySlots.filter(slot=>{const [type,,usage]=candidate.keymap.slice(slot*3,slot*3+3);return !(type===0x30||type===0x20&&(usage===0||usage>=4&&usage<224));});
-  return {format:'CherryMacDefaultConfigurationReview',version:3,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,defaultColorProposal,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
+  return {format:'CherryMacDefaultConfigurationReview',version:4,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,defaultColorPlan,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
 }
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
