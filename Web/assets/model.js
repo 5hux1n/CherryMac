@@ -511,6 +511,7 @@ export function reviewDefaultConfiguration(text,baseline,mapping){
   requireThat(baseline.deviceInfo[6]===24&&baseline.deviceInfo[5]===126&&baseline.parameters[0]===0,'默认恢复核对需要本型号配置 0 的完整读取基线。');
   const template=extractOfficialDefaultTemplate(text);
   const lightingPlan=planOfficialLighting(template,baseline,mapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
+  requireThat(lightingPlan.stages.length===1,'默认恢复核对目前需要内置灯效默认模板，逐键模式模板尚未接入此流程。');
   const candidate=officialLightingReadbackTarget(lightingPlan,baseline);
   candidate.keymap=clone(mapping.factoryKeymap);validateSnapshot(candidate,true);
   // Model 47 registers 126 color entries, resized by 541330. This color
@@ -518,13 +519,35 @@ export function reviewDefaultConfiguration(text,baseline,mapping){
   const redLogicalIndices=[44,64,65,66,96,113,114,115],targetColors=Array(378).fill(0),mapped=new Set();
   colorSlots.forEach((slot,logical)=>{if(slot===null)return;mapped.add(slot);targetColors.splice(slot*3,3,254,redLogicalIndices.includes(logical)?0:254,redLogicalIndices.includes(logical)?0:254);});
   const defaultColorPlan={hardwareReady:false,logicalEntryCount:126,pendingTransportIntegration:true,redLogicalIndices,coefficient:255,targetColors,mappedColorSlots:[...mapped].sort((a,b)=>a-b),changedColorSlots:Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(targetColors.slice(slot*3,slot*3+3),baseline.colors.slice(slot*3,slot*3+3))),bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true,reports:defaultBankReports(0x0b,targetColors),restoreReports:defaultBankReports(0x0b,baseline.colors)};
-  const defaultKeyPlan={hardwareReady:false,bank:0,transportSelector:0,chunkCapacity:56,pendingTransportIntegration:true,pendingSenderLengthState:true,targetKeymap:clone(mapping.factoryKeymap),reports:defaultBankReports(9,mapping.factoryKeymap,true),restoreReports:defaultBankReports(9,baseline.keymap,true)};
+  const defaultKeyPlan={hardwareReady:false,bank:0,transportSelector:0,chunkCapacity:56,pendingTransportIntegration:true,pendingSenderLengthState:false,senderLengthBytes:378,targetKeymap:clone(mapping.factoryKeymap),reports:defaultBankReports(9,mapping.factoryKeymap,true),restoreReports:defaultBankReports(9,baseline.keymap,true)};
   candidate.colors=clone(targetColors);validateSnapshot(candidate,true);
   const changedKeySlots=Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(candidate.keymap.slice(slot*3,slot*3+3),baseline.keymap.slice(slot*3,slot*3+3)));
   const protectedChangedSlots=changedKeySlots.filter(slot=>!editableSlots.has(slot));
   const macroBindingSlots=changedKeySlots.filter(slot=>[0x70,0x71].includes(baseline.keymap[slot*3]));
   const unsupportedFactorySlots=changedKeySlots.filter(slot=>{const [type,,usage]=candidate.keymap.slice(slot*3,slot*3+3);return !(type===0x30||type===0x20&&(usage===0||usage>=4&&usage<224));});
-  return {format:'CherryMacDefaultConfigurationReview',version:6,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,defaultColorPlan,defaultKeyPlan,officialStageOrder:['defaultColors','factoryKeys','parameters'],changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
+  return {format:'CherryMacDefaultConfigurationReview',version:7,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingMapping:clone(mapping),lightingPlan,changedKeySlots,defaultColorPlan,defaultKeyPlan,officialStageOrder:['defaultColors','factoryKeys','parameters'],changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
+}
+// Offline only: exact source reconstruction before matching known write prefixes.
+export function reviewDefaultRestoreProgress(review,current){
+  requireThat(review?.format==='CherryMacDefaultConfigurationReview'&&review.version===7&&review.hardwareReady===false,'默认恢复记录版本无效。');
+  const rebuilt=reviewDefaultConfiguration(JSON.stringify({Device:[JSON.parse(review.officialTemplateJSON)]}),review.original,review.lightingMapping);
+  const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+  requireThat(JSON.stringify(canonical(review))===JSON.stringify(canonical(rebuilt)),'默认恢复记录与保留的原始资料不一致，停止核对。');
+  validateSnapshot(current,true);
+  const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+  const state=clone(rebuilt.original),matchedDataPrefixes=[];let count=0;
+  if(same(state,current))matchedDataPrefixes.push(0);
+  const stages=[['colors',rebuilt.defaultColorPlan.reports],['keymap',rebuilt.defaultKeyPlan.reports],['parameters',officialLightingReports(rebuilt.lightingPlan)]];
+  for(const [field,reports] of stages)for(const report of reports.filter(r=>r.kind==='data')){
+    const bytes=report.request,length=bytes[4],offset=bytes[5]|bytes[6]<<8;
+    const limit=field==='parameters'?56:378,command=field==='parameters'?6:field==='keymap'?9:0x0b;
+    requireThat(bytes.length===64&&bytes[3]===command&&length>0&&length<=56&&offset+length<=limit,'默认恢复分包超出已知范围，停止核对。');
+    state[field].splice(offset,length,...bytes.slice(8,8+length));count++;
+    if(same(state,current))matchedDataPrefixes.push(count);
+  }
+  requireThat(same(state,rebuilt.candidate),'默认恢复分包不能重建候选，停止核对。');
+  requireThat(matchedDataPrefixes.length>0,'当前配置不属于此次默认恢复的原始、目标或分包前缀，停止覆盖。');
+  return {format:'CherryMacDefaultRestoreProgress',version:1,hardwareReady:false,completeRestoreImplemented:false,matchedDataPrefixes,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.original),configurationMatchesCandidate:same(current,rebuilt.candidate)};
 }
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);

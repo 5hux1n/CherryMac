@@ -506,6 +506,14 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x4DA6DC: "398d74ffffff", 0x4DA798: "e883c51a00",
         0x4DA7C5: "83bd70ffffff40", 0x4DA83A: "e841ebffff",
         0x4DCF54: "e8c79d1a00",
+        0x4D925B: "b900020000", 0x4D9263: "66890a",
+        0x4D929B: "c6829006000038",
+        0x4FC1CC: "e84fe1fdff", 0x4FC1D7: "0fb691f91d0000",
+        0x4FC1DE: "6bc203", 0x4FC1E8: "81c1380a0000",
+        0x4FC1EE: "e81d24feff", 0x4FC1F3: "85c0", 0x4FC1F5: "7505",
+        0x4DE617: "0fb74508", 0x4DE61B: "3d00020000",
+        0x4DE620: "7e04", 0x4DE62D: "668911",
+        0x4F8300: "e83b3e0000",
 
 
 
@@ -575,12 +583,13 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         "preflight": {"caller": "0x4ff041", "helper": "0x4da320", "command": "03; 83 only for selector 1", "bytes": 34, "purpose": "deviceInfo query, not the color begin command"},
         "command": "09; 89 only for selector 1", "reportID": 4,
         "lengthSource": "first word of communication object; not helper length argument at EBP+0x0c",
+        "lengthInitialization": {"constructorValue": 512, "initializer": "0x4fc140", "caller": "0x4f8300", "readDeviceInfo": "0x4fc1cc -> 0x4da320", "value": "deviceInfo[5] * 3", "setter": "0x4de610", "setterCall": "0x4fc1ee", "setterLimit": 512, "setterStore": "0x4de62d", "fixedProductValue": 378, "capacityConstructorValue": 56},
         "capacitySource": "communication+0x690", "offsetSource": "third helper argument + chunk start",
         "payloadStart": 8, "flag": 0, "checksumRange": [3, 63],
         "shortFinalPacket": "Only valid payload bytes overwritten; previous payload tail retained in checksum-covered report buffer",
         "colorHelperSamePaddingRule": {"method": "0x4dcde0", "functionSHA256": "357ca182786e495806b961a3ab3e16d9b30b5bb4588325fbaa4991c2ce608258", "lengthSource": "second helper argument at EBP+0x0c"},
-        "offlineScope": {"bank": 0, "capacity": 56, "keyBytes": 378, "hardwareReady": False, "pendingSenderLengthState": True},
-        "limits": "Official key sender uses object-state length while color sender uses supplied length. Trace first-word initialization before enabling full reset. Offline reports do not broaden ordinary key authorization, prove firmware ignores padding or explain prior blackout."}
+        "offlineScope": {"bank": 0, "capacity": 56, "keyBytes": 378, "hardwareReady": False, "pendingSenderLengthState": False},
+        "limits": "Official key sender uses object-state length while color sender uses supplied length. The traced initializer overwrites constructor length 512 with deviceInfo[5]*3; current product scope requires key count 126. Offline reports do not broaden ordinary key authorization, prove firmware ignores padding or explain prior blackout."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1124,7 +1133,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 23,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 24,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

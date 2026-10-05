@@ -826,7 +826,8 @@ enum WindowsProfile {
     struct DefaultKeyPlan:Codable {
         var hardwareReady=false;var bank=0;var transportSelector=0
         var chunkCapacity=56;var pendingTransportIntegration=true
-        var pendingSenderLengthState=true
+        var pendingSenderLengthState=false
+        var senderLengthBytes=378
         var targetKeymap:[UInt8]
         var reports:[OfficialLightingPlan.Report]
         var restoreReports:[OfficialLightingPlan.Report]
@@ -850,9 +851,10 @@ enum WindowsProfile {
         return result
     }
     struct DefaultConfigurationReview:Codable {
-        var format="CherryMacDefaultConfigurationReview";var version=6;var hardwareReady=false
+        var format="CherryMacDefaultConfigurationReview";var version=7;var hardwareReady=false
         var original:HardwareSnapshot;var candidate:HardwareSnapshot
         var officialTemplateJSON:String;var factoryKeymap:[UInt8]
+        var lightingMapping:LightingMappingContext
         var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
         var defaultColorPlan:DefaultColorPlan
         var defaultKeyPlan:DefaultKeyPlan
@@ -869,6 +871,7 @@ enum WindowsProfile {
         guard baseline.deviceInfo[6]==24,baseline.deviceInfo[5]==126,baseline.parameters[0]==0,let originalColors=baseline.colors,baseline.macroData != nil else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线。")}
         let template=try extractDefaultTemplate(data)
         let plan=try planOfficialLighting(template,baseline:baseline,lightingMapping:mapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        guard plan.stages.count==1 else{throw HardwareError(message:"默认恢复核对目前需要内置灯效默认模板，逐键模式模板尚未接入此流程。")}
         var candidate=try plan.expectedReadback(from:baseline)
         candidate.keymap=mapping.factoryKeymap;try candidate.validate()
         // Model 47 registers 126 entries; 541330 resizes the color vector.
@@ -893,7 +896,48 @@ enum WindowsProfile {
             let offset=slot*3,type=candidate.keymap[offset],usage=candidate.keymap[offset+2]
             return !(type==0x30 || (type==0x20 && (usage==0 || (4..<224).contains(usage))))
         }
-        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,defaultColorPlan:colorPlan,defaultKeyPlan:keyPlan,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
+        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingMapping:mapping,lightingPlan:plan,changedKeySlots:changed,defaultColorPlan:colorPlan,defaultKeyPlan:keyPlan,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
+    }
+    struct DefaultRestoreProgress:Codable {
+        var format="CherryMacDefaultRestoreProgress";var version=1
+        var hardwareReady=false;var completeRestoreImplemented=false
+        var matchedDataPrefixes:[Int];var totalDataReports:Int
+        var configurationMatchesOriginal:Bool;var configurationMatchesCandidate:Bool
+    }
+    // Reconstruct all bytes from retained sources before recognizing a prefix.
+    // This check neither identifies the physical device nor authorizes recovery.
+    static func reviewDefaultRestoreProgress(_ review:DefaultConfigurationReview,current:HardwareSnapshot)throws->DefaultRestoreProgress {
+        guard review.format=="CherryMacDefaultConfigurationReview",review.version==7,!review.hardwareReady else{throw HardwareError(message:"默认恢复记录版本无效。")}
+        let root=try JSONSerialization.jsonObject(with:Data(review.officialTemplateJSON.utf8))
+        let source=try JSONSerialization.data(withJSONObject:["Device":[root]],options:.sortedKeys)
+        let rebuilt=try reviewDefaultConfiguration(source,baseline:review.original,mapping:review.lightingMapping)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        guard try encoder.encode(review)==encoder.encode(rebuilt) else{throw HardwareError(message:"默认恢复记录与保留的原始资料不一致，停止核对。")}
+        try current.validate()
+        guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"默认恢复核对需要完整当前配置。")}
+        func same(_ first:HardwareSnapshot,_ second:HardwareSnapshot)->Bool{
+            first.deviceInfo==second.deviceInfo && first.keymap==second.keymap && first.parameters==second.parameters && first.colors==second.colors && first.macroData==second.macroData
+        }
+        let stages=[("colors",rebuilt.defaultColorPlan.reports),("keymap",rebuilt.defaultKeyPlan.reports),("parameters",try rebuilt.lightingPlan.reports())]
+        var state=rebuilt.original,matched:[Int]=[],count=0
+        if same(state,current){matched.append(0)}
+        for (field,reports) in stages {
+            for report in reports where report.kind=="data" {
+                let bytes=report.request,length=Int(bytes[4]),offset=Int(bytes[5]) | Int(bytes[6])<<8
+                let limit=field=="parameters" ? 56:378,command:UInt8=field=="parameters" ? 6:field=="keymap" ? 9:0x0B
+                guard bytes.count==64,bytes[3]==command,length>0,length<=56,offset+length<=limit else{throw HardwareError(message:"默认恢复分包超出已知范围，停止核对。")}
+                let data=Array(bytes[8..<8+length])
+                switch field {
+                case "colors":state.colors!.replaceSubrange(offset..<offset+length,with:data)
+                case "keymap":state.keymap.replaceSubrange(offset..<offset+length,with:data)
+                default:state.parameters.replaceSubrange(offset..<offset+length,with:data)
+                }
+                count+=1;if same(state,current){matched.append(count)}
+            }
+        }
+        guard same(state,rebuilt.candidate) else{throw HardwareError(message:"默认恢复分包不能重建候选，停止核对。")}
+        guard !matched.isEmpty else{throw HardwareError(message:"当前配置不属于此次默认恢复的原始、目标或分包前缀，停止覆盖。")}
+        return .init(matchedDataPrefixes:matched,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.original),configurationMatchesCandidate:same(current,rebuilt.candidate))
     }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
