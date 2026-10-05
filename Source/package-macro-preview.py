@@ -36,11 +36,14 @@ files = {path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hex
 symbols = subprocess.check_output(['nm', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True)
 if ('LightingAcceptanceWindow' in symbols) != lighting_acceptance:
     raise SystemExit('App lighting acceptance compilation differs from requested package type')
+if 'applyDefaultCandidate' in symbols:
+    raise SystemExit('Default research USB entry must remain disabled in preview packages')
 manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance else 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
+            'compileFlags': ['CHERRY_MACRO_PRODUCT'],
+            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
 if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
@@ -51,6 +54,8 @@ manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').enco
 readme = '''# CherryMac 宏与文本预览
 
 设备设置与诊断使用独立菜单。回报率目前只保存到官方配置文件；Mac 端适配入口也在设备设置中。读取前若编辑区有资料会先提示保存；请先导出需要保留的草稿。快捷操作安装失败时会尝试恢复本次修改，无法恢复的项目会明确提示。
+
+在“配置与备份”可选择官方 DefaultData0～4.json 载入默认草稿，或核对并导出默认恢复计划。也可选择之前的计划／事务记录，核对并导出原始数据撤回计划。需要先读取完整配置和默认键位／LED 映射；文件核对不写入键盘。计划包含原始配置与宏，请保留原文件。完整恢复默认尚未开放，设备设置与宏存储默认语义仍在分析。
 
 适用于 Apple Silicon Mac，macOS 13 或更新版本。此包用于宏与文本模块统一验收，尚未通过完整成品验收，也尚未经过 Apple 公证。
 
