@@ -820,23 +820,42 @@ enum WindowsProfile {
         var restoreReports:[OfficialLightingPlan.Report]
         // Offline packets only, never accepted by the ordinary lamp writer.
         static func renderReports(_ colors:[UInt8])throws->[OfficialLightingPlan.Report]{
-            guard colors.count==378 else{throw HardwareError(message:"默认颜色步骤需要完整 378 字节原始颜色。")}
-            var result=[OfficialLightingPlan.Report(stage:0,kind:"begin",delayMilliseconds:0,request:try CherryPacket.make(1))]
-            for offset in stride(from:0,to:378,by:56){
-                let data=Array(colors[offset..<min(378,offset+56)])
-                let payload=[UInt8(data.count),UInt8(offset&255),UInt8(offset>>8),0]+data
-                result.append(.init(stage:0,kind:"data",delayMilliseconds:0,request:try CherryPacket.make(0x0B,payload:payload)))
-            }
-            result.append(.init(stage:0,kind:"finish",delayMilliseconds:10,request:try CherryPacket.make(2)))
-            return result
+            try renderDefaultBankReports(command:0x0B,data:colors,preflight:nil)
         }
     }
+    struct DefaultKeyPlan:Codable {
+        var hardwareReady=false;var bank=0;var transportSelector=0
+        var chunkCapacity=56;var pendingTransportIntegration=true
+        var pendingSenderLengthState=true
+        var targetKeymap:[UInt8]
+        var reports:[OfficialLightingPlan.Report]
+        var restoreReports:[OfficialLightingPlan.Report]
+    }
+    // The official bank helpers initialize a report once and reuse it. A short
+    // final chunk leaves the prior chunk's tail in the checksum-covered buffer.
+    // The key helper queries deviceInfo first; the color helper begins with 1.
+    private static func renderDefaultBankReports(command:UInt8,data:[UInt8],preflight:[UInt8]?)throws->[OfficialLightingPlan.Report]{
+        guard [UInt8(9),0x0B].contains(command),data.count==378 else{throw HardwareError(message:"默认恢复步骤需要完整 378 字节原始数据。")}
+        var result=[OfficialLightingPlan.Report(stage:0,kind:preflight==nil ? "begin":"preflight",delayMilliseconds:0,request:try preflight ?? CherryPacket.make(1))]
+        var buffer=[UInt8](repeating:0,count:64);buffer[0]=4;buffer[3]=command
+        for offset in stride(from:0,to:378,by:56){
+            let chunk=Array(data[offset..<min(378,offset+56)])
+            buffer[4]=UInt8(chunk.count);buffer[5]=UInt8(offset&255);buffer[6]=UInt8(offset>>8)
+            buffer.replaceSubrange(8..<8+chunk.count,with:chunk)
+            let sum=buffer[3...].reduce(0){$0+UInt16($1)}
+            buffer[1]=UInt8(sum&255);buffer[2]=UInt8(sum>>8)
+            result.append(.init(stage:0,kind:"data",delayMilliseconds:0,request:buffer))
+        }
+        result.append(.init(stage:0,kind:"finish",delayMilliseconds:10,request:try CherryPacket.make(2)))
+        return result
+    }
     struct DefaultConfigurationReview:Codable {
-        var format="CherryMacDefaultConfigurationReview";var version=5;var hardwareReady=false
+        var format="CherryMacDefaultConfigurationReview";var version=6;var hardwareReady=false
         var original:HardwareSnapshot;var candidate:HardwareSnapshot
         var officialTemplateJSON:String;var factoryKeymap:[UInt8]
         var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
         var defaultColorPlan:DefaultColorPlan
+        var defaultKeyPlan:DefaultKeyPlan
         var officialStageOrder=["defaultColors","factoryKeys","parameters"]
         var changedParameterOffsets:[Int];var protectedChangedSlots:[Int]
         var macroBindingSlots:[Int];var unsupportedFactorySlots:[Int]
@@ -864,6 +883,8 @@ enum WindowsProfile {
             proposedColors[slot*3+2]=red.contains(logical) ? 0:254
         }
         let colorPlan=DefaultColorPlan(targetColors:proposedColors,mappedColorSlots:mapped.sorted(),changedColorSlots:(0..<126).filter{proposedColors[$0*3..<$0*3+3] != originalColors[$0*3..<$0*3+3]},reports:try DefaultColorPlan.renderReports(proposedColors),restoreReports:try DefaultColorPlan.renderReports(originalColors))
+        let query=try CherryPacket.chunk(3,offset:0,length:34)
+        let keyPlan=DefaultKeyPlan(targetKeymap:mapping.factoryKeymap,reports:try renderDefaultBankReports(command:9,data:mapping.factoryKeymap,preflight:query),restoreReports:try renderDefaultBankReports(command:9,data:baseline.keymap,preflight:query))
         candidate.colors=proposedColors;try candidate.validate()
         let changed=(0..<126).filter{slot in candidate.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
         let protected=changed.filter{!KeymapWriteAuthorization.editableSlots.contains($0)}
@@ -872,7 +893,7 @@ enum WindowsProfile {
             let offset=slot*3,type=candidate.keymap[offset],usage=candidate.keymap[offset+2]
             return !(type==0x30 || (type==0x20 && (usage==0 || (4..<224).contains(usage))))
         }
-        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,defaultColorPlan:colorPlan,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
+        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,defaultColorPlan:colorPlan,defaultKeyPlan:keyPlan,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
     }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false

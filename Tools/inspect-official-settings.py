@@ -499,6 +499,13 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x503245: "c700ff000000", 0x50325F: "837df87e",
         0x4BC0DA: "e811fdffff", 0x4BC0DF: "8b00",
         0x4BBDFA: "e831000000", 0x4BBDFF: "83c004",
+        0x4FF041: "e8dab2fdff", 0x4DA3B7: "c644059803",
+        0x4DA37A: "c78540ffffff22000000",
+        0x4DA655: "c64405bc04", 0x4DA671: "c6440dbc89",
+        0x4DA680: "c64405bc09", 0x4DA6D9: "0fb708",
+        0x4DA6DC: "398d74ffffff", 0x4DA798: "e883c51a00",
+        0x4DA7C5: "83bd70ffffff40", 0x4DA83A: "e841ebffff",
+        0x4DCF54: "e8c79d1a00",
 
 
 
@@ -561,6 +568,19 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         "model01CE": {"skipsPID00C7Overrides": True, "bankOffset": "profile index * 512", "sendLength": "mapping container size * 3", "sender": "0x4dcde0"},
         "hardwareWriteAuthorized": False,
         "limits": "Static model47 color count, setter and resize are confirmed. The current offline color stage uses 126 logical entries and requires deviceInfo[5]==126; it is included in the candidate but remains separate from the parameter-only plan and cannot authorize writing. The traced mapping initializer inserts 126 keys under the product key-count guard. Other runtime insertions, live object selection, complete reset transaction and physical effects still require verification. Not blackout root cause evidence."}
+    for address, length, expected_hash in [(0x4DA610, 0x2BB, "9017029bbd555ac5ac62e2c8e0662290020c8a2ce80daa0bb9d184a4971c1b4d"), (0x4DCDE0, 0x2B1, "357ca182786e495806b961a3ab3e16d9b30b5bb4588325fbaa4991c2ce608258")]:
+        if hashlib.sha256(pe.at(address, length)).hexdigest() != expected_hash:
+            raise ValueError("Unexpected default bank helper function")
+    result["defaultKeyReports"] = {"helper": "0x4da610", "functionSHA256": "9017029bbd555ac5ac62e2c8e0662290020c8a2ce80daa0bb9d184a4971c1b4d",
+        "preflight": {"caller": "0x4ff041", "helper": "0x4da320", "command": "03; 83 only for selector 1", "bytes": 34, "purpose": "deviceInfo query, not the color begin command"},
+        "command": "09; 89 only for selector 1", "reportID": 4,
+        "lengthSource": "first word of communication object; not helper length argument at EBP+0x0c",
+        "capacitySource": "communication+0x690", "offsetSource": "third helper argument + chunk start",
+        "payloadStart": 8, "flag": 0, "checksumRange": [3, 63],
+        "shortFinalPacket": "Only valid payload bytes overwritten; previous payload tail retained in checksum-covered report buffer",
+        "colorHelperSamePaddingRule": {"method": "0x4dcde0", "functionSHA256": "357ca182786e495806b961a3ab3e16d9b30b5bb4588325fbaa4991c2ce608258", "lengthSource": "second helper argument at EBP+0x0c"},
+        "offlineScope": {"bank": 0, "capacity": 56, "keyBytes": 378, "hardwareReady": False, "pendingSenderLengthState": True},
+        "limits": "Official key sender uses object-state length while color sender uses supplied length. Trace first-word initialization before enabling full reset. Offline reports do not broaden ordinary key authorization, prove firmware ignores padding or explain prior blackout."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1104,7 +1124,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 22,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 23,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

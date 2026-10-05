@@ -496,11 +496,13 @@ export function importWindowsLightingDraft(profile,template){
   result.windowsTemplateJSON=JSON.stringify(root);validateProfile(result);return result;
 }
 // This format is separate from lightingPlan; ordinary lamp IO cannot accept it.
-function defaultColorReports(colors){
-  requireThat(bytes(colors,378),'默认颜色步骤需要完整 378 字节原始颜色。');
+function defaultBankReports(command,data,preflight=false){
+  requireThat([9,0x0b].includes(command)&&bytes(data,378),'默认恢复步骤需要完整 378 字节原始数据。');
   const encode=(command,payload=[])=>{const b=Array(64).fill(0);b[0]=4;b[3]=command;b.splice(4,payload.length,...payload);const sum=b.slice(3).reduce((n,v)=>n+v,0);b[1]=sum&255;b[2]=sum>>8;return b;};
-  const reports=[{stage:0,kind:'begin',delayMilliseconds:0,request:encode(1)}];
-  for(let offset=0;offset<378;offset+=56){const data=colors.slice(offset,offset+56);reports.push({stage:0,kind:'data',delayMilliseconds:0,request:encode(0x0b,[data.length,offset&255,offset>>8,0,...data])});}
+  const reports=[{stage:0,kind:preflight?'preflight':'begin',delayMilliseconds:0,request:preflight?encode(3,[34,0,0,0]):encode(1)}];
+  const buffer=Array(64).fill(0);buffer[0]=4;buffer[3]=command;
+  // Official helpers retain prior payload padding in the final short report.
+  for(let offset=0;offset<378;offset+=56){const chunk=data.slice(offset,offset+56);buffer[4]=chunk.length;buffer[5]=offset&255;buffer[6]=offset>>8;buffer.splice(8,chunk.length,...chunk);const sum=buffer.slice(3).reduce((n,v)=>n+v,0);buffer[1]=sum&255;buffer[2]=sum>>8;reports.push({stage:0,kind:'data',delayMilliseconds:0,request:[...buffer]});}
   reports.push({stage:0,kind:'finish',delayMilliseconds:10,request:encode(2)});return reports;
 }
 // Compute an offline candidate and unresolved scopes, without authorizing IO.
@@ -515,13 +517,14 @@ export function reviewDefaultConfiguration(text,baseline,mapping){
   // stage remains separate from the parameter-only lightingPlan.
   const redLogicalIndices=[44,64,65,66,96,113,114,115],targetColors=Array(378).fill(0),mapped=new Set();
   colorSlots.forEach((slot,logical)=>{if(slot===null)return;mapped.add(slot);targetColors.splice(slot*3,3,254,redLogicalIndices.includes(logical)?0:254,redLogicalIndices.includes(logical)?0:254);});
-  const defaultColorPlan={hardwareReady:false,logicalEntryCount:126,pendingTransportIntegration:true,redLogicalIndices,coefficient:255,targetColors,mappedColorSlots:[...mapped].sort((a,b)=>a-b),changedColorSlots:Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(targetColors.slice(slot*3,slot*3+3),baseline.colors.slice(slot*3,slot*3+3))),bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true,reports:defaultColorReports(targetColors),restoreReports:defaultColorReports(baseline.colors)};
+  const defaultColorPlan={hardwareReady:false,logicalEntryCount:126,pendingTransportIntegration:true,redLogicalIndices,coefficient:255,targetColors,mappedColorSlots:[...mapped].sort((a,b)=>a-b),changedColorSlots:Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(targetColors.slice(slot*3,slot*3+3),baseline.colors.slice(slot*3,slot*3+3))),bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true,reports:defaultBankReports(0x0b,targetColors),restoreReports:defaultBankReports(0x0b,baseline.colors)};
+  const defaultKeyPlan={hardwareReady:false,bank:0,transportSelector:0,chunkCapacity:56,pendingTransportIntegration:true,pendingSenderLengthState:true,targetKeymap:clone(mapping.factoryKeymap),reports:defaultBankReports(9,mapping.factoryKeymap,true),restoreReports:defaultBankReports(9,baseline.keymap,true)};
   candidate.colors=clone(targetColors);validateSnapshot(candidate,true);
   const changedKeySlots=Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(candidate.keymap.slice(slot*3,slot*3+3),baseline.keymap.slice(slot*3,slot*3+3)));
   const protectedChangedSlots=changedKeySlots.filter(slot=>!editableSlots.has(slot));
   const macroBindingSlots=changedKeySlots.filter(slot=>[0x70,0x71].includes(baseline.keymap[slot*3]));
   const unsupportedFactorySlots=changedKeySlots.filter(slot=>{const [type,,usage]=candidate.keymap.slice(slot*3,slot*3+3);return !(type===0x30||type===0x20&&(usage===0||usage>=4&&usage<224));});
-  return {format:'CherryMacDefaultConfigurationReview',version:5,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,defaultColorPlan,officialStageOrder:['defaultColors','factoryKeys','parameters'],changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
+  return {format:'CherryMacDefaultConfigurationReview',version:6,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,defaultColorPlan,defaultKeyPlan,officialStageOrder:['defaultColors','factoryKeys','parameters'],changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,pendingColorRestore:true,pendingMacroStorageSemantics:true,completeRestoreImplemented:false};
 }
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
