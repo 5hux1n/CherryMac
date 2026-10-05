@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -282,11 +282,14 @@ $('default-record-file').onchange=()=>operation(async()=>{
   requireThat(file.size<=16_000_000,'默认恢复记录超过 16 MB。');
   const record=JSON.parse(await file.text());
   requireThat(baseline===current&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
-  requireThat(['CherryMacDefaultConfigurationReview','CherryMacDefaultRecoveryPlan'].includes(record?.format),'请选择默认恢复核对计划或撤回计划。');
-  const plan=record.format==='CherryMacDefaultRecoveryPlan'?record:defaultRecoveryPlan(record,current);
+  requireThat(['CherryMacDefaultConfigurationReview','CherryMacDefaultRecoveryPlan','CherryMacDefaultTransactionRecord'].includes(record?.format),'请选择默认恢复核对计划、撤回计划或事务记录。');
+  const assessment=record.format==='CherryMacDefaultTransactionRecord'?assessDefaultTransactionRecord(record):null;
+  const plan=assessment?(record.direction==='recovery'?record.recovery:defaultRecoveryPlan(record.sourceReview,current)):record.format==='CherryMacDefaultRecoveryPlan'?record:defaultRecoveryPlan(record,current);
   requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(plan.sourceReview.lightingMapping?.[field],mapping[field])),'当前读取的映射与记录不一致，请使用同一台键盘的资料。');
   const progress=reviewDefaultRecoveryProgress(plan,current);
-  $('default-record-summary').textContent=`根据最近读取资料，匹配撤回数据包进度 ${progress.matchedDataPrefixes.join(' / ')}，共 ${progress.totalDataReports} 包。${progress.configurationMatchesOriginal?'配置与备份一致。':'已生成恢复原始参数、键位和颜色的撤回计划。'}此核对不证明设备身份或断电保留，不会发送报告；完整恢复尚未开放。`;
+  const transactionStates={failed:'失败',incomplete:'未完成',readbackMissing:'缺少读回',readbackMatched:'读回一致',readbackMismatch:'读回不一致'};
+  const logSummary=assessment?`事务状态：${transactionStates[assessment.status]}。记录日志核对：${assessment.traceReview.acceptedReports}/${assessment.traceReview.expectedReports} 个回复通过，${assessment.readbackMatches?'读回与目标一致':record.current==null?'缺少读回':'读回与目标不同'}；记录来源为 ${assessment.traceReview.source}。 `:'';
+  $('default-record-summary').textContent=`${logSummary}根据最近读取资料，匹配撤回数据包进度 ${progress.matchedDataPrefixes.join(' / ')}，共 ${progress.totalDataReports} 包。${progress.configurationMatchesOriginal?'配置与备份一致。':'已生成恢复原始参数、键位和颜色的撤回计划。'}此核对不证明设备身份或断电保留，不会发送报告；完整恢复尚未开放。`;
   download(plan,'CherryMac-default-recovery-plan.json');
   status('已核对并导出默认撤回计划，包含原始配置与宏；未修改编辑区或写入键盘。');
 },{localOnly:true});

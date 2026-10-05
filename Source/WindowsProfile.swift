@@ -666,7 +666,7 @@ enum WindowsProfile {
         // A trace is untrusted evidence, never permission to send or proof of
         // persistence. A pending/failed exchange must be the final entry.
         func reviewTrace(_ trace:Trace)throws->TraceReview {try Self.reviewTrace(trace,expected:reports())}
-        private static func reviewTrace(_ trace:Trace,expected:[Report])throws->TraceReview {
+        fileprivate static func reviewTrace(_ trace:Trace,expected:[Report])throws->TraceReview {
             guard trace.format=="CherryMacLightingTrace",trace.version==1,["simulation","usbTrace"].contains(trace.source),trace.entries.count<=expected.count else{throw HardwareError(message:"灯效日志格式无效。")}
             var accepted=0,previousEnd=0,status="incomplete",failedIndex = -1
             for (index,entry) in trace.entries.enumerated(){
@@ -997,6 +997,70 @@ enum WindowsProfile {
         guard same(state,rebuilt.expected) else{throw HardwareError(message:"撤回分包不能重建原始配置。")}
         guard !matched.isEmpty else{throw HardwareError(message:"当前配置不属于此次撤回的分包前缀，停止覆盖。")}
         return .init(matchedDataPrefixes:matched,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.expected))
+    }
+    static func defaultConfigurationReports(_ review:DefaultConfigurationReview)throws->[OfficialLightingPlan.Report] {
+        _ = try reviewDefaultRestoreProgress(review,current:review.original)
+        var reports:[OfficialLightingPlan.Report]=[]
+        for var packet in review.defaultColorPlan.reports{packet.stage=0;reports.append(packet)}
+        for var packet in review.defaultKeyPlan.reports{packet.stage=1;reports.append(packet)}
+        for var packet in try review.lightingPlan.reports(){packet.stage=2;reports.append(packet)}
+        return reports
+    }
+    struct DefaultTraceReview:Codable {
+        var format="CherryMacDefaultTraceReview";var version=1;var hardwareReady=false
+        var source:String;var status:String;var acceptedReports:Int;var expectedReports:Int;var failedIndex:Int
+    }
+    private static func reviewDefaultTrace(_ trace:OfficialLightingPlan.Trace,reports:[OfficialLightingPlan.Report],deviceInfo:[UInt8])throws->DefaultTraceReview {
+        guard trace.format=="CherryMacDefaultTrace",deviceInfo.count==34 else{throw HardwareError(message:"默认恢复日志格式无效。")}
+        var adapted=trace;adapted.format="CherryMacLightingTrace"
+        let basic=try OfficialLightingPlan.reviewTrace(adapted,expected:reports)
+        var result=DefaultTraceReview(source:basic.source,status:basic.status,acceptedReports:basic.acceptedReports,expectedReports:basic.expectedReports,failedIndex:basic.failedIndex)
+        // The query reply carries device data, not just a write acknowledgement.
+        for (index,entry) in trace.entries.enumerated() where reports[index].request[3]==3 && index<basic.acceptedReports {
+            guard let reply=entry.reply,reply[8..<42].elementsEqual(deviceInfo) else{
+                guard index==trace.entries.count-1 else{throw HardwareError(message:"默认恢复日志在设备查询不一致后仍继续发送。")}
+                result.status="failed";result.acceptedReports=index;result.failedIndex=index;break
+            }
+        }
+        return result
+    }
+    struct DefaultTransactionRecord:Codable {
+        var format="CherryMacDefaultTransactionRecord";var version=1;var hardwareReady=false
+        var operationID:String;var direction:String;var sourceReview:DefaultConfigurationReview
+        var recovery:DefaultRecoveryPlan?;var trace:OfficialLightingPlan.Trace
+        var current:HardwareSnapshot?;var failure:String
+        struct Assessment:Codable {
+            var format="CherryMacDefaultTransactionAssessment";var version=1;var hardwareReady=false
+            var operationID:String;var direction:String;var status:String;var traceReview:DefaultTraceReview
+            var readbackMatches:Bool;var recoveryStatus:String;var matchedDataPrefixes:[Int]
+        }
+        func assess()throws->Assessment {
+            let allowed=CharacterSet(charactersIn:"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+            guard format=="CherryMacDefaultTransactionRecord",version==1,!hardwareReady,!operationID.isEmpty,operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}),["forward","recovery"].contains(direction),failure.utf8.count<=4096 else{throw HardwareError(message:"默认恢复事务记录格式无效。")}
+            let reports:[OfficialLightingPlan.Report],target:HardwareSnapshot
+            if direction=="forward" {
+                guard recovery==nil else{throw HardwareError(message:"前向记录不能混入撤回计划。")}
+                reports=try WindowsProfile.defaultConfigurationReports(sourceReview);target=sourceReview.candidate
+            }else{
+                guard let recovery else{throw HardwareError(message:"撤回记录缺少原始撤回计划。")}
+                _ = try WindowsProfile.reviewDefaultRecoveryProgress(recovery,current:recovery.before)
+                let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+                guard try encoder.encode(sourceReview)==encoder.encode(recovery.sourceReview) else{throw HardwareError(message:"撤回记录的来源不一致。")}
+                reports=recovery.reports;target=recovery.expected
+            }
+            let reviewed=try WindowsProfile.reviewDefaultTrace(trace,reports:reports,deviceInfo:sourceReview.original.deviceInfo)
+            var matches=false,recoveryStatus="unavailable",prefixes:[Int]=[]
+            if let current {
+                try current.validate();guard current.colors != nil,current.macroData != nil else{throw HardwareError(message:"默认恢复记录读回不完整。")}
+                matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData
+                do{
+                    if let recovery{let progress=try WindowsProfile.reviewDefaultRecoveryProgress(recovery,current:current);prefixes=progress.matchedDataPrefixes;recoveryStatus=progress.configurationMatchesOriginal ? "unchanged":"available"}
+                    else{let progress=try WindowsProfile.reviewDefaultRestoreProgress(sourceReview,current:current);prefixes=progress.matchedDataPrefixes;recoveryStatus=progress.configurationMatchesOriginal ? "unchanged":"available"}
+                }catch{recoveryStatus="unrecognized"}
+            }
+            let status = !failure.isEmpty || reviewed.status=="failed" ? "failed":reviewed.status != "complete" ? "incomplete":current==nil ? "readbackMissing":matches ? "readbackMatched":"readbackMismatch"
+            return .init(operationID:operationID,direction:direction,status:status,traceReview:reviewed,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedDataPrefixes:prefixes)
+        }
     }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false

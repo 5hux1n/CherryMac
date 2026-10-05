@@ -586,6 +586,43 @@ export function reviewDefaultRecoveryProgress(plan,current){
   requireThat(matchedDataPrefixes.length>0,'当前配置不属于此次撤回的分包前缀，停止覆盖。');
   return {format:'CherryMacDefaultRecoveryProgress',version:1,hardwareReady:false,completeRestoreImplemented:false,matchedDataPrefixes,totalDataReports:count,configurationMatchesOriginal:same(current,rebuilt.expected)};
 }
+export function defaultConfigurationReports(review){
+  reviewDefaultRestoreProgress(review,review.original);
+  return [...clone(review.defaultColorPlan.reports).map(p=>({...p,stage:0})),...clone(review.defaultKeyPlan.reports).map(p=>({...p,stage:1})),...officialLightingReports(review.lightingPlan).map(p=>({...p,stage:2}))];
+}
+function reviewDefaultTrace(trace,reports,deviceInfo){
+  requireThat(trace?.format==='CherryMacDefaultTrace'&&bytes(deviceInfo,34),'默认恢复日志格式无效。');
+  const basic=reviewLightingReportTrace(reports,{...trace,format:'CherryMacLightingTrace'});
+  const result={...basic,format:'CherryMacDefaultTraceReview'};
+  for(let index=0;index<basic.acceptedReports;index++){
+    if(reports[index].request[3]!==3)continue;
+    if(!equal(trace.entries[index].reply.slice(8,42),deviceInfo)){
+      requireThat(index===trace.entries.length-1,'默认恢复日志在设备查询不一致后仍继续发送。');
+      result.status='failed';result.acceptedReports=index;result.failedIndex=index;break;
+    }
+  }
+  return result;
+}
+export function assessDefaultTransactionRecord(record){
+  requireThat(record?.format==='CherryMacDefaultTransactionRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&['forward','recovery'].includes(record.direction)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'默认恢复事务记录格式无效。');
+  let reports,target;
+  if(record.direction==='forward'){
+    requireThat(record.recovery==null,'前向记录不能混入撤回计划。');reports=defaultConfigurationReports(record.sourceReview);target=record.sourceReview.candidate;
+  }else{
+    requireThat(record.recovery!=null,'撤回记录缺少原始撤回计划。');reviewDefaultRecoveryProgress(record.recovery,record.recovery.before);
+    const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+    requireThat(JSON.stringify(canonical(record.sourceReview))===JSON.stringify(canonical(record.recovery.sourceReview)),'撤回记录的来源不一致。');
+    reports=record.recovery.reports;target=record.recovery.expected;
+  }
+  const traceReview=reviewDefaultTrace(record.trace,reports,record.sourceReview.original.deviceInfo);
+  let readbackMatches=false,recoveryStatus='unavailable',matchedDataPrefixes=[];
+  if(record.current!=null){
+    validateSnapshot(record.current,true);readbackMatches=['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(record.current[field],target[field]));
+    try{const progress=record.direction==='recovery'?reviewDefaultRecoveryProgress(record.recovery,record.current):reviewDefaultRestoreProgress(record.sourceReview,record.current);matchedDataPrefixes=progress.matchedDataPrefixes;recoveryStatus=progress.configurationMatchesOriginal?'unchanged':'available';}catch{recoveryStatus='unrecognized';}
+  }
+  const status=record.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':record.current==null?'readbackMissing':readbackMatches?'readbackMatched':'readbackMismatch';
+  return {format:'CherryMacDefaultTransactionAssessment',version:1,hardwareReady:false,operationID:record.operationID,direction:record.direction,status,traceReview,readbackMatches,recoveryStatus,matchedDataPrefixes};
+}
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');

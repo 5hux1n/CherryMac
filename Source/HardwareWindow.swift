@@ -1245,17 +1245,26 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard let size,size<=16_000_000 else{throw HardwareError(message:"默认恢复记录超过 16 MB。")}
                 let data=try Data(contentsOf:url)
                 let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
-                let decoder=JSONDecoder();let plan:WindowsProfile.DefaultRecoveryPlan
+                let decoder=JSONDecoder();let plan:WindowsProfile.DefaultRecoveryPlan;var logSummary=""
                 switch root?["format"] as? String {
                 case "CherryMacDefaultRecoveryPlan":plan=try decoder.decode(WindowsProfile.DefaultRecoveryPlan.self,from:data)
                 case "CherryMacDefaultConfigurationReview":plan=try WindowsProfile.defaultRecoveryPlan(decoder.decode(WindowsProfile.DefaultConfigurationReview.self,from:data),current:current)
-                default:throw HardwareError(message:"请选择默认恢复核对计划或撤回计划。")
+                case "CherryMacDefaultTransactionRecord":
+                    let record=try decoder.decode(WindowsProfile.DefaultTransactionRecord.self,from:data)
+                    let assessment=try record.assess()
+                    if record.direction=="recovery",let recovery=record.recovery{plan=recovery}
+                    else{plan=try WindowsProfile.defaultRecoveryPlan(record.sourceReview,current:current)}
+                    let readback=assessment.readbackMatches ? "读回与目标一致":record.current==nil ? "缺少读回":"读回与目标不同"
+                    let states=["failed":"失败","incomplete":"未完成","readbackMissing":"缺少读回","readbackMatched":"读回一致","readbackMismatch":"读回不一致"]
+                    logSummary="事务状态：\(states[assessment.status] ?? assessment.status)。记录日志核对：\(assessment.traceReview.acceptedReports)/\(assessment.traceReview.expectedReports) 个回复通过，\(readback)；记录来源为 \(assessment.traceReview.source)。\n"
+
+                default:throw HardwareError(message:"请选择默认恢复核对计划、撤回计划或事务记录。")
                 }
                 guard plan.sourceReview.lightingMapping==mapping else{throw HardwareError(message:"当前读取的映射与记录不一致，请使用同一台键盘的资料。")}
                 let progress=try WindowsProfile.reviewDefaultRecoveryProgress(plan,current:current)
                 let alert=NSAlert();alert.messageText="默认撤回计划核对"
                 let positions=progress.matchedDataPrefixes.map{String($0)}.joined(separator:" / ")
-                alert.informativeText="根据最近读取资料，匹配撤回数据包进度：\(positions)，共 \(progress.totalDataReports) 包。\n\(progress.configurationMatchesOriginal ? "配置与备份一致。":"已生成恢复原始参数、键位和颜色的撤回计划。")\n此核对不证明设备身份或断电保留，不发送报告，也不修改编辑区；完整恢复尚未开放。导出文件包含原始配置与宏。请保留同一份撤回计划供中断后继续核对。"
+                alert.informativeText="\(logSummary)根据最近读取资料，匹配撤回数据包进度：\(positions)，共 \(progress.totalDataReports) 包。\n\(progress.configurationMatchesOriginal ? "配置与备份一致。":"已生成恢复原始参数、键位和颜色的撤回计划。")\n此核对不证明设备身份或断电保留，不发送报告，也不修改编辑区；完整恢复尚未开放。导出文件包含原始配置与宏。请保留同一份撤回计划供中断后继续核对。"
                 alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出撤回计划")
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
                 let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let output=try encoder.encode(plan)
