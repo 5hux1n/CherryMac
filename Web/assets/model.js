@@ -635,6 +635,18 @@ export function assessDefaultTransactionRecord(record){
   const status=record.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':record.current==null?'readbackMissing':readbackMatches?'readbackMatched':'readbackMismatch';
   return {format:'CherryMacDefaultTransactionAssessment',version:1,hardwareReady:false,operationID:record.operationID,direction:record.direction,status,traceReview,readbackMatches,recoveryStatus,matchedDataPrefixes};
 }
+// Inspect retained files without USB; a recorded readback is not a current read.
+export function inspectDefaultTransaction(record){
+  const assessment=assessDefaultTransactionRecord(record);
+  const originalProfile={format:'CherryMacProfile',version:1,snapshot:clone(record.sourceReview.original),macros:[],lightingMapping:clone(record.sourceReview.lightingMapping)};
+  validateProfile(originalProfile);
+  let recoveryPlan=null,recoveryIssue='';
+  if(record.current!=null){
+    if(assessment.recoveryStatus==='unrecognized')recoveryIssue='记录中的读回不属于已知分包进度，不能据此生成撤回计划。';
+    else{recoveryPlan=record.direction==='recovery'?clone(record.recovery):defaultRecoveryPlan(record.sourceReview,record.current);reviewDefaultRecoveryProgress(recoveryPlan,record.current);}
+  }else recoveryIssue='记录缺少读回；保留原始备份，实际撤回前需重新读取键盘。';
+  return {format:'CherryMacDefaultTransactionInspection',version:1,hardwareReady:false,assessment,readbackAvailable:record.current!=null,failure:record.failure,originalProfile,recoveryPlan,recoveryIssue};
+}
 const sameDefaultConfiguration=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
 // Injectable transaction only; no WebHID import, write permission or retry.
 export async function executeDefaultTransaction(review,{recovery=null,source,operationID=globalThis.crypto.randomUUID(),assertCurrent,cancelled,read,backup,persist,clock,wait,exchange}){

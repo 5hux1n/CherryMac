@@ -350,6 +350,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("选择 Windows 安装目录 DefaultData 中的 DefaultData0～4.json，载入本型号默认键位、灯效与文件设置。会替换编辑区；原始宏存储保留。这里只准备草稿，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
         place(button("核对并导出默认恢复计划…",#selector(exportDefaultReview)),8,451,260,32,in:files)
         place(button("核对并导出默认撤回计划…",#selector(exportDefaultRecovery)),290,451,280,32,in:files)
+        place(button("检查默认配置操作记录…",#selector(inspectDefaultTransaction)),8,499,260,32,in:files)
+        place(label("无需连接键盘：检查发送与读回记录，取出原始备份。",12),290,502,570,26,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -1267,6 +1269,41 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             }catch{self.message.stringValue=error.localizedDescription}
         }
     }
+    @objc func inspectDefaultTransaction(){
+        guard !busy,let parent=window else{return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:parent){[weak self] response in
+            guard response == .OK,let url=panel.url,let self else{return}
+            do{
+                guard !self.busy else{throw HardwareError(message:"请等待键盘操作完成。")}
+                let values=try url.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey])
+                guard values.isRegularFile==true,let size=values.fileSize,size<=16_000_000 else{throw HardwareError(message:"请选择不超过 16 MB 的默认恢复事务记录。")}
+                let inspected=try WindowsProfile.inspectDefaultTransaction(Data(contentsOf:url))
+                let assessment=inspected.assessment
+                let states=["failed":"失败","incomplete":"未完成","readbackMissing":"缺少读回","readbackMatched":"读回一致","readbackMismatch":"读回不一致"]
+                let recovery=inspected.recoveryIssue.isEmpty ? "可导出按记录读回核对的撤回计划；执行前仍须重新读取。":inspected.recoveryIssue
+                let alert=NSAlert();alert.messageText="默认配置操作记录"
+                alert.informativeText="事务状态：\(states[assessment.status] ?? assessment.status)。\n\(assessment.direction=="recovery" ? "撤回":"候选写入")记录：\(assessment.traceReview.acceptedReports)/\(assessment.traceReview.expectedReports) 个回复通过。\n\(recovery)\n\(inspected.failure.isEmpty ? "":"记录错误："+inspected.failure+"\n")这里只检查文件，未读取当前键盘。原始备份包含键位、参数、颜色和宏区；不包含未记录的宏名称。日志不能证明实体输出或断电保留。"
+                alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出原始备份…");alert.addButton(withTitle:"导出分析…");if inspected.recoveryPlan != nil{alert.addButton(withTitle:"导出撤回计划…")}
+                let choice=alert.runModal();let output:Data;let name:String
+                if choice == .alertSecondButtonReturn{output=try inspected.originalProfile.encoded();name="CherryMac-default-original-backup.json"}
+                else if choice == .alertThirdButtonReturn{
+                    let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];output=try encoder.encode(inspected)
+                    guard output.count<=16_000_000 else{throw HardwareError(message:"分析资料超过 16 MB，请单独导出原始备份。")}
+                    name="CherryMac-default-transaction-inspection.json"
+                }else if choice.rawValue==NSApplication.ModalResponse.alertFirstButtonReturn.rawValue+3,let plan=inspected.recoveryPlan{
+                    let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];output=try encoder.encode(plan)
+                    guard output.count<=16_000_000 else{throw HardwareError(message:"撤回计划超过 16 MB。")}
+                    name="CherryMac-default-recovery-plan.json"
+                }else{return}
+                let save=NSSavePanel();save.nameFieldStringValue=name
+                save.beginSheetModal(for:parent){[weak self] result in
+                    guard result == .OK,let target=save.url else{return}
+                    do{try output.write(to:target,options:.atomic);self?.message.stringValue="已导出操作记录资料，未连接键盘或修改编辑区。"}catch{self?.message.stringValue=error.localizedDescription}
+                }
+            }catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
     @objc func exportDefaultRecovery(){
         guard !busy,let current=baseline,let mapping=baselineLightingMapping,let parent=window else{message.stringValue="请先读取键盘，取得完整配置和固件默认键位表。";return}
         let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
@@ -1320,7 +1357,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
                 let review=try WindowsProfile.reviewDefaultConfiguration(Data(contentsOf:url),baseline:original,mapping:mapping)
                 let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(review)
-                let alert=NSAlert();alert.messageText="默认恢复核对";alert.informativeText="按键差异：\(review.changedKeySlots.count) 个；灯效参数差异：\(review.changedParameterOffsets.count) 项。\n内部键差异：\(review.protectedChangedSlots.count) 个；涉及宏绑定：\(review.macroBindingSlots.count) 个；未支持的默认键记录：\(review.unsupportedFactorySlots.count) 个。\n设备设置的 \(review.pendingSystemFields.count) 个字段仍待确认，默认颜色差异：\(review.defaultColorPlan.changedColorSlots.count) 个，已纳入离线候选；颜色／键位恢复事务尚未接入。宏存储处理仍待核对。候选保留原始宏存储。计划包含当前配置与宏；这里只导出文件，不修改编辑区或写入键盘，完整恢复尚未开放。";alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出核对计划")
+                let alert=NSAlert();alert.messageText="默认恢复核对";alert.informativeText="按键差异：\(review.changedKeySlots.count) 个；灯效参数差异：\(review.changedParameterOffsets.count) 项。\n内部键差异：\(review.protectedChangedSlots.count) 个；涉及宏绑定：\(review.macroBindingSlots.count) 个；未支持的默认键记录：\(review.unsupportedFactorySlots.count) 个。\n设备设置的 \(review.pendingSystemFields.count) 个字段仍待确认，默认颜色差异：\(review.defaultColorPlan.changedColorSlots.count) 个，已纳入离线候选；颜色／键位候选事务已实现，普通版发送入口关闭。宏存储处理仍待核对。候选保留原始宏存储。计划包含当前配置与宏；这里只导出文件，不修改编辑区或写入键盘，完整恢复尚未开放。";alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出核对计划")
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
                 let save=NSSavePanel();save.nameFieldStringValue="CherryMac-default-review.json"
                 save.beginSheetModal(for:parent){[weak self] result in

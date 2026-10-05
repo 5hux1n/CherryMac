@@ -1066,6 +1066,30 @@ enum WindowsProfile {
             return .init(operationID:operationID,direction:direction,status:status,traceReview:reviewed,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedDataPrefixes:prefixes)
         }
     }
+    // File inspection only: recorded readback is never a fresh device read.
+    struct DefaultTransactionInspection:Codable {
+        var format="CherryMacDefaultTransactionInspection";var version=1;var hardwareReady=false
+        var assessment:DefaultTransactionRecord.Assessment
+        var readbackAvailable:Bool;var failure:String
+        var originalProfile:HardwareProfile;var recoveryPlan:DefaultRecoveryPlan?;var recoveryIssue:String
+    }
+    static func inspectDefaultTransaction(_ data:Data)throws->DefaultTransactionInspection {
+        guard data.count<=16_000_000 else{throw HardwareError(message:"默认恢复记录超过 16 MB。")}
+        let record=try JSONDecoder().decode(DefaultTransactionRecord.self,from:data)
+        let assessment=try record.assess()
+        var original=HardwareProfile(snapshot:record.sourceReview.original)
+        original.lightingMapping=record.sourceReview.lightingMapping
+        try original.validate()
+        var plan:DefaultRecoveryPlan?,issue=""
+        if let current=record.current {
+            if assessment.recoveryStatus=="unrecognized"{issue="记录中的读回不属于已知分包进度，不能据此生成撤回计划。"}
+            else{
+                plan=try record.direction=="recovery" ? record.recovery:defaultRecoveryPlan(record.sourceReview,current:current)
+                if let plan{_ = try reviewDefaultRecoveryProgress(plan,current:current)}
+            }
+        }else{issue="记录缺少读回；保留原始备份，实际撤回前需重新读取键盘。"}
+        return .init(assessment:assessment,readbackAvailable:record.current != nil,failure:record.failure,originalProfile:original,recoveryPlan:plan,recoveryIssue:issue)
+    }
     // Exact packet scope only; device ownership remains the adapter's duty.
     final class DefaultCandidateAuthorization {
         private let packets:[OfficialLightingPlan.Report];private let deviceInfo:[UInt8]

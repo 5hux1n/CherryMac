@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -14,6 +14,7 @@ import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
+let defaultInspection=null;
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
@@ -51,6 +52,9 @@ function render(){
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
   let pollingWords=null;try{if(profile.windowsTemplateJSON)pollingWords=officialSystemStageWords(JSON.parse(profile.windowsTemplateJSON));}catch{}
   $('polling-draft-summary').textContent=pollingWords?`当前官方草稿：${[125,250,500,1000][pollingWords[3]]?`${[125,250,500,1000][pollingWords[3]]} Hz`:`原始索引 ${pollingWords[3]}（尚未核对）`}；尚未写入键盘。`:'请先导入包含设备设置的官方配置。';
+  $('inspect-default-transaction').disabled=busy;
+  $('export-default-backup').disabled=busy||!defaultInspection;$('export-default-inspection').disabled=busy||!defaultInspection;
+  $('export-default-recorded-recovery').disabled=busy||!defaultInspection?.recoveryPlan;
   $('save-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
@@ -305,7 +309,7 @@ $('default-review-file').onchange=()=>operation(async()=>{
   const text=await file.text();
   requireThat(baseline===before&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
   const review=reviewDefaultConfiguration(text,before,mapping);
-  $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，默认颜色差异 ${review.defaultColorPlan.changedColorSlots.length} 个，已纳入离线候选；颜色／键位恢复事务尚未接入。宏存储处理仍待核对。候选保留原始宏存储，完整恢复尚未开放。`;
+  $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，默认颜色差异 ${review.defaultColorPlan.changedColorSlots.length} 个，已纳入离线候选；颜色／键位候选事务已实现，普通版发送入口关闭。宏存储处理仍待核对。候选保留原始宏存储，完整恢复尚未开放。`;
   download(review,'CherryMac-default-review.json');
   status('已导出默认恢复核对计划，包含当前配置与宏；未修改编辑区或写入键盘。');
 },{localOnly:true});
@@ -328,6 +332,32 @@ $('default-record-file').onchange=()=>operation(async()=>{
   $('default-record-summary').textContent=`${logSummary}根据最近读取资料，匹配撤回数据包进度 ${progress.matchedDataPrefixes.join(' / ')}，共 ${progress.totalDataReports} 包。${progress.configurationMatchesOriginal?'配置与备份一致。':'已生成恢复原始参数、键位和颜色的撤回计划。'}此核对不证明设备身份或断电保留，不会发送报告；完整恢复尚未开放。`;
   download(plan,'CherryMac-default-recovery-plan.json');
   status('已核对并导出默认撤回计划，包含原始配置与宏；未修改编辑区或写入键盘。');
+},{localOnly:true});
+$('inspect-default-transaction').onclick=()=>{if(!busy)$('default-transaction-file').click();};
+$('default-transaction-file').onchange=()=>operation(async()=>{
+  const input=$('default-transaction-file'),file=input.files[0];input.value='';if(!file)return;
+  defaultInspection=null;$('export-default-backup').disabled=true;$('export-default-inspection').disabled=true;
+  $('default-transaction-summary').textContent='正在检查本地操作记录…';
+  requireThat(file.size<=16_000_000,'默认恢复记录超过 16 MB。');
+  const inspected=inspectDefaultTransaction(JSON.parse(await file.text())),a=inspected.assessment;
+  const states={failed:'失败',incomplete:'未完成',readbackMissing:'缺少读回',readbackMatched:'读回一致',readbackMismatch:'读回不一致'};
+  defaultInspection=inspected;$('export-default-backup').disabled=false;$('export-default-inspection').disabled=false;
+  $('default-transaction-summary').textContent=`事务状态：${states[a.status]}。${a.direction==='recovery'?'撤回':'候选写入'}记录：${a.traceReview.acceptedReports}/${a.traceReview.expectedReports} 个回复通过。${inspected.recoveryIssue||'可导出按记录读回核对的撤回计划；执行前仍须重新读取。'}${inspected.failure?'记录错误：'+inspected.failure+'。':''}这里只检查文件，未读取当前键盘。原始备份包含键位、参数、颜色和宏区；不包含未记录的宏名称。`;
+  status('操作记录已检查，可取出原始备份；编辑区与键盘没有变化。');
+},{localOnly:true});
+$('export-default-backup').onclick=()=>operation(()=>{
+  requireThat(defaultInspection,'请先检查操作记录。');download(defaultInspection.originalProfile,'CherryMac-default-original-backup.json');
+  status('原始备份已导出。导入只载入编辑区，恢复前需要重新读取并核对。');
+},{localOnly:true});
+$('export-default-inspection').onclick=()=>operation(()=>{
+  requireThat(defaultInspection,'请先检查操作记录。');
+  requireThat(new TextEncoder().encode(JSON.stringify(defaultInspection,null,2)).length<=16_000_000,'分析资料超过 16 MB，请单独导出原始备份。');
+  download(defaultInspection,'CherryMac-default-transaction-inspection.json');status('已导出分析与撤回资料，未发送报告。');
+},{localOnly:true});
+$('export-default-recorded-recovery').onclick=()=>operation(()=>{
+  requireThat(defaultInspection?.recoveryPlan,'记录缺少可识别的读回，不能导出撤回计划。');
+  requireThat(new TextEncoder().encode(JSON.stringify(defaultInspection.recoveryPlan,null,2)).length<=16_000_000,'撤回计划超过 16 MB。');
+  download(defaultInspection.recoveryPlan,'CherryMac-default-recovery-plan.json');status('按记录读回导出了撤回计划；执行前仍须重新读取键盘。');
 },{localOnly:true});
 $('import-default').onclick=()=>$('default-file').click();
 $('default-file').onchange=()=>operation(async()=>{

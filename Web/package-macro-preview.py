@@ -65,7 +65,7 @@ contents['README.md'] = '''# CherryMac 网页宏与文本预览
 
 文本页可选择本型号官方 JSON，编辑按键绑定、多行文本、安装及解除绑定。文本定义与完整恢复记录保存在当前网站的本地数据库；安装前显示变更，写后完整读回。可导出定义与恢复记录，后者支持新版 Mac／网页互相导入，已有不同记录不覆盖。
 
-跨应用文本输入需要配套 Mac 预览 App（此次 Mac 0.45.0 / 网页 0.44.0）。在客户端文本页点击“网页联动”，开启并复制联动码，在网页粘贴后连接。安装并保存相同定义后，点击“启用 Mac 文本服务”；网页先释放 USB，再提交定义。客户端需要辅助功能权限及开启的配置窗口。网页配置操作和宏录制前先等待 Mac 停止服务；联系失败时不开始操作。刷新后先核对旧联动状态，关闭网页请求解除；失联超过两分钟，客户端停止网页启动的文本服务。网页不能独立向其他应用输入文本。此流程尚待统一真机验收。
+跨应用文本输入需要配套 Mac 预览 App（此次 Mac 0.46.0 / 网页 0.45.0）。在客户端文本页点击“网页联动”，开启并复制联动码，在网页粘贴后连接。安装并保存相同定义后，点击“启用 Mac 文本服务”；网页先释放 USB，再提交定义。客户端需要辅助功能权限及开启的配置窗口。网页配置操作和宏录制前先等待 Mac 停止服务；联系失败时不开始操作。刷新后先核对旧联动状态，关闭网页请求解除；失联超过两分钟，客户端停止网页启动的文本服务。网页不能独立向其他应用输入文本。此流程尚待统一真机验收。
 
 “配置与备份”可导入同时包含键位、宏和文本的 Windows 官方 JSON：键位和宏进入编辑区，文本定义进入文本页；文本键保留当前键盘功能，需要单独安装。“导出 Windows 配置草稿”会合并宏编辑和文本页当前定义，保留共享引用与附加字段。同一键若同时有普通键位修改和文本绑定，会提示先解除冲突；导入、导出都不会自动写入。
 
@@ -108,9 +108,11 @@ contents['README.md'] += '\n灯效页可使用“仅导入官方灯效”，单�
 contents['README.md'] += '\n按键页增加官方默认可见的 11 项多媒体功能，以及 Finder、邮件、音乐启动组合键。启动组合键需要先在 Mac 客户端手动安装对应系统快捷操作；网页不能安装 macOS 服务。安装与实体触发尚待验收。\n'.encode()
 contents['README.md'] += ('\n独立灯效页成功写入或恢复后可“核对并返回原编辑器”：返回前再读回、关闭 USB，会按原计划核对完整记录。原编辑器保留全部草稿，重新连接要求读回一致。返回失败可重新读取后重试，不需重复写入。回传不证明外观、物理身份或断电保留。\n' if lighting_acceptance else '\n灯效主按钮仅核对并导出计划，不发送灯效；计划导出不停止文本服务或关闭 USB。\n').encode()
 
+contents['README.md'] += '\n在“配置与备份”点击“检查默认配置操作记录”，可离线检查 CherryMac 默认配置事务 JSON，并导出原始备份和分析资料；无需连接键盘。记录有完整、可识别的读回时才能另行导出撤回计划。备份包含原始宏区，不补造宏名称；导入只载入草稿。记录读回不是当前键盘状态，也不能证明实体输出或断电保留；实际恢复仍需重新读取和核对。完整恢复默认写入尚未开放。\n'.encode()
+
 manifest = {'format': 'CherryMacWebLightingAcceptance' if lighting_acceptance else 'CherryMacWebMacroPreview', 'version': version, 'sourceCommit': commit,
             'sourceVersion': source_version, 'hardwareAcceptance': 'pending',
-            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': False, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True, 'awaitedUSBClose': True},
+            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultTransactionFileInspection': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': False, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True, 'awaitedUSBClose': True},
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(contents.items())}}
 contents['manifest.json'] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 if lighting_acceptance:
