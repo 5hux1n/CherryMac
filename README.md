@@ -2,7 +2,7 @@
 
 为 **CHERRY MX 3.0S 宝可梦无线键盘**提供 Mac 客户端和网页版。点选键盘图，设置按键、编辑宏与配色，备份和迁移配置。
 
-[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.42.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.42.0) · [PHP 0.41.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.41.0)
+[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.43.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.43.0) · [PHP 0.42.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.42.0)
 
 **当前是开发预览，完整复刻仍未完成。** USB 有线模式下提供按键、宏和文本触发键的独立写入、备份与读回核对。灯效可以编辑、保存和导出计划，普通版未开放灯效发送。新版两端仍待统一真机验收；旧网页灯效故障根因尚未确认。[各功能的实际验收范围](docs/当前功能与验收状态.md)
 
@@ -38,7 +38,7 @@ CHERRY_MACRO_PRODUCT=1 CHERRY_TEXT_PRODUCT=1 php -S 127.0.0.1:8770 -t .
 
 逐键配色取得实际 LED 映射后可从空白开始，不需要先导入官方文件。未写入的草稿导出 JSON 保存；“保存本机配色”只保存与最近读回匹配的原始 RGB。Windows 格式导出需要本型号官方根模板；缺少颜色表时可补齐，隐藏颜色和未知字段保留。
 
-宏支持键盘及五个鼠标按钮，滚轮尚未支持。文本内容由 Mac 保存和输入，需要客户端持续运行及辅助功能权限，键盘保存的是触发键。[宏、文本与联动说明](docs/宏产品预览.md)
+宏支持键盘及五个鼠标按钮，滚轮尚未支持。扩展宏最多 762 个事件，按绑定数量计算存储占用；未绑定宏保存在本机。旧配置可在宏页点击“启用扩展宏编辑”迁移草稿，核对后再写入。文本内容由 Mac 保存和输入，需要客户端持续运行及辅助功能权限，键盘保存的是触发键。[宏、文本与联动说明](docs/宏产品预览.md)
 
 ## 写入与恢复
 

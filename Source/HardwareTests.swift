@@ -887,7 +887,7 @@ private func runHardwareEditorTests(_ fixture:HardwareSnapshot) {
     precondition(insert.steps.map{$0.delayMilliseconds}==[50,0,12,0] && insert.delays==["50","0","12","0"])
     insert.select(3);insert.insertion.selectItem(at:2);insert.addPair()
     precondition(insert.steps.map{$0.delayMilliseconds}==[50,0,12,0,50,0])
-    insert.steps=Array(repeating:.init(usage:4,pressed:true,delayMilliseconds:0),count:256);insert.delays=Array(repeating:"0",count:256);insert.addPair();precondition(insert.steps.count==256 && insert.delays.count==256)
+    insert.steps=Array(repeating:.init(usage:4,pressed:true,delayMilliseconds:0),count:762);insert.delays=Array(repeating:"0",count:762);insert.addPair();precondition(insert.steps.count==762 && insert.delays.count==762)
     var graphResult:[KeyboardMacro.Step]?
     let graph=MacroStepEditor(steps:[.init(usage:4,pressed:true,delayMilliseconds:50),.init(usage:4,pressed:false,delayMilliseconds:0)],choices:[.init(name:"A",usage:4,kind:nil)]){graphResult=$0}
     graph.delays[0]="-1";graph.apply();precondition(!graph.finished && graphResult==nil)

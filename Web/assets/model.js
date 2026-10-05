@@ -158,7 +158,7 @@ export function validateSnapshot(s,complete=false){
 const macroNameKey=name=>typeof name==='string'?name.normalize('NFC'):null;
 const sameMacroName=(first,second)=>macroNameKey(first)===macroNameKey(second);
 const macroNameStem=name=>[...name.normalize('NFC')].slice(0,65).join('');
-export function validateMacro(m){return validateMacroWithin(m,256);}
+export function validateMacro(m){return validateMacroWithin(m,762);}
 function validateMacroWithin(m,maximumEvents){
   if(m?.hardwareReserved!=null)requireThat(bytes(m.hardwareReserved,2),'宏保留数据长度无效。');
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
@@ -176,7 +176,7 @@ function validateMacroWithin(m,maximumEvents){
 }
 export function encodeBank(macros,headerReserved=[]){
   requireThat(Array.isArray(headerReserved)&&(headerReserved.length===0||bytes(headerReserved,10)),'宏头部保留数据长度无效。');
-  requireThat(Array.isArray(macros)&&macros.length<=32,'最多支持 32 个宏。');macros.forEach(validateMacro);
+  requireThat(Array.isArray(macros)&&macros.length<=32,'最多支持 32 个宏。');macros.forEach(m=>validateMacroWithin(m,256));
   const bank=Array(3071).fill(0);if(!macros.length)return bank;
   const total=16+macros.length*6+macros.reduce((n,m)=>n+m.steps.length*4,0);
   requireThat(total<=3071,'宏超过键盘存储容量。');
@@ -188,7 +188,7 @@ export function encodeBank(macros,headerReserved=[]){
     bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
   });if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);cursor+=4+m.steps.length*4;});return bank;
 }
-export function decodeBank(bank){return decodeBankWithin(bank,32,256);}
+export function decodeBank(bank){return decodeBankWithin(bank,126,762);}
 function decodeBankWithin(bank,maximumRecords,maximumEvents){
   requireThat(bytes(bank,3071),'宏区长度无效。');if(bank.every(x=>x===0)||bank.every(x=>x===255))return [];
   const word=o=>bank[o]|bank[o+1]<<8;const length=word(2),count=word(4);
@@ -228,10 +228,10 @@ export function fromHardware(snapshot){
   p.macros=decodeBank(snapshot.macroData);p.macroBindings={};p.macroModes={};
   for(let slot=0;slot<126;slot++){const b=snapshot.keymap.slice(slot*3,slot*3+3);if([0x70,0x71].includes(b[0])){
     requireThat(![6,71].includes(slot),'宏不能绑定到内部键。');p.macroModes[slot]=decodeMacroBinding(b,p.macros.length);p.macroBindings[slot]=p.macros[b[1]].name;
-  }}return p;
+  }}if(p.macros.length>32||p.macros.some(m=>m.steps.length>256))p.macroStorageLayout='officialBindings';return p;
 }
 export function validateProfile(p){
-  requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&p.macros.length<=32,'配置格式或版本不受支持。');validateSnapshot(p.snapshot);p.macros.forEach(validateMacro);if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
+  requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&(p.macroStorageLayout==='officialBindings'||p.macros.length<=32),'配置格式或版本不受支持。');validateSnapshot(p.snapshot);requireThat(p.macroStorageLayout==null||['sharedLibrary','officialBindings'].includes(p.macroStorageLayout),'宏存储方式无效。');p.macros.forEach(m=>validateMacroWithin(m,p.macroStorageLayout==='officialBindings'?762:256));if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
   if(p.lightingColorEncoding!=null)requireThat(['hardwareRGB','officialRGB'].includes(p.lightingColorEncoding),'灯效颜色来源无效。');
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
   if(p.hostTextJSON!=null){requireThat(typeof p.hostTextJSON==='string','文本配置定义无效。');validateHostTextDefinition(JSON.parse(p.hostTextJSON));}
@@ -242,7 +242,7 @@ export function validateProfile(p){
     for(const [slot,name] of Object.entries(p.macroBindings))requireThat(/^(0|[1-9]\d*)$/.test(slot)&&Number(slot)<126&&![6,71].includes(Number(slot))&&p.macros.some(m=>sameMacroName(m.name,name)),'宏绑定无效。');}
 }
 export function resolveMacros(p){
-  validateProfile(p);requireThat(p.macroBindings!=null,'未知宏不能覆盖，请重新读取键盘。');const s=clone(p.snapshot);
+  validateProfile(p);requireThat(p.macroBindings!=null,'未知宏不能覆盖，请重新读取键盘。');if(p.macroStorageLayout==='officialBindings')return officialMacroReceipt(p).expected;const s=clone(p.snapshot);
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(s.keymap[slot*3]))requireThat(Object.hasOwn(p.macroBindings,slot),'宏记录缺少绑定。');
   const header=s.macroData?.[0]===0xaa&&s.macroData[1]===0x55?s.macroData.slice(6,16):[];
   s.macroData=encodeBank(p.macros,header);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
@@ -355,12 +355,12 @@ export function exportWindowsKeysAndMacros(profile,template,{preservingTextIndic
       requireThat(winInt(k.ActionLink??0,'ActionLink',0,1)===1,'文本键缺少官方文本定义，无法导出。');
       const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,old.length-1);requireThat(remap.has(index),'文本动作索引无效，无法导出。');
       const plan=officialHostTextPlan(old[index]);requireThat(!equal(b,[0xa1,0,0])||plan.marker!==null,'已安装文本键对应空定义，无法导出。');k.ActionLinkIndex=remap.get(index);
-    }else if([0x70,0x71].includes(b[0])){const playback=decodeMacroBinding(b,profile.macros.length);k.ActionLink=1;k.ActionLinkIndex=add(b[1],playback);k.Assignment=k.DefaultAssignment;}
+    }else if([0x70,0x71].includes(b[0])){const index=profile.macros.findIndex(m=>sameMacroName(m.name,profile.macroBindings?.[slot]));requireThat(index>=0,'宏库与绑定名称不一致，不能导出。');const playback=profile.macroModes?.[slot]??{mode:'count',count:1};k.ActionLink=1;k.ActionLinkIndex=add(index,playback);k.Assignment=k.DefaultAssignment;}
     else{requireThat([0x20,0x30].includes(b[0]),'此按键动作尚不能导出到官方格式。');k.Assignment=b[0]*65536+b[1]*256+b[2];k.ActionLink=0;k.ActionLinkIndex=-1;}
   });
   // Official actions with different modes import as separate library items.
   // Check that representation still fits before returning a usable document.
-  encodeBank(emitted);root.ActionInfo=actions;
+  if(profile.macroStorageLayout!=='officialBindings')encodeBank(emitted);root.ActionInfo=actions;
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的配置文件过大。');return root;
 }
 // Portable draft validation does not require a connected keyboard.
@@ -432,7 +432,7 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
   requireThat(root.ActionInfo==null||Array.isArray(root.ActionInfo),'Windows 动作结构无效。');
   const p=fromHardware(baseline),old=clone(p.macroBindings),actions=root.ActionInfo??[],imported=new Map(),physical=new Set(WINDOWS_DEFAULTS.map(physicalSlot));
   const lightingSlots=lightingMapping==null?null:lightingMappingSlots(lightingMapping,baseline);
-  if(lightingMapping!=null)p.lightingMapping=clone(lightingMapping);
+  if(lightingMapping!=null){p.lightingMapping=clone(lightingMapping);p.macroStorageLayout='officialBindings';}
   p.windowsTemplateJSON=JSON.stringify(root);
   const oldModes=clone(p.macroModes??{});
   if(deferHostText&&validateHostTextDefinition(root)>0)p.hostTextJSON=p.windowsTemplateJSON;
@@ -464,7 +464,7 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
       if(type===1)b=record(c.ActionKey);
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
-        importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
+        importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macroStorageLayout==='officialBindings'?0:p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);
       }else if(type===3){officialHostTextPlan(a);if(deferHostText){if(old[slot]!=null)p.macroBindings[slot]=old[slot];if(oldModes[slot]!=null)p.macroModes[slot]=oldModes[slot];return;}throw new Error('此配置含文本绑定，请使用带“文本”页的预览，在该页单独选择和安装。普通配置导入保留原编辑区。');}else throw new Error('Windows 文本和其他动作尚未支持导入。');
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
@@ -928,7 +928,7 @@ export class MacroRecorder{
     requireThat(Number.isSafeInteger(milliseconds)&&milliseconds>=this.lastMilliseconds&&typeof pressed==='boolean'&&(kind==null||kind==='mouse')&&Number.isInteger(usage)&&(kind==='mouse'?[1,2,4,8,16].includes(usage):usage>=4&&usage<=231),'录制事件或时钟无效。');
     const identity=`${kind==='mouse'?'mouse':'key'}:${usage}`;
     if(repeatEvent||(pressed?this.held.has(identity):!this.held.has(identity)))return;
-    requireThat(this.steps.length<256,'录制最多 256 个事件，请取消或缩短操作。');
+    requireThat(this.steps.length<762,'录制最多 762 个事件，请取消或缩短操作。');
     const delayMilliseconds=this.timing==='fixed'?this.fixedMilliseconds:this.timing==='ignore'?0:Math.min(60000,milliseconds-this.lastMilliseconds);
     // Delay follows the event in the observed USB firmware execution.
     // Startup latency and time spent clicking Stop are not macro actions.
@@ -1024,7 +1024,7 @@ export function replayMacroExecutionLog(log){
 export function macroWriteReview(profile,before,target,labels={},descriptions={}){
   validateSnapshot(before);validateSnapshot(target);
   const old=decodeBank(before.macroData),next=decodeBank(target.macroData),changed=!equal(before.macroData,target.macroData);
-  const name=index=>profile.macros[index]?.name??next[index].name;
+  const names=macroStorageNames(profile);const name=index=>names[index]??next[index].name;
   const lines=[`宏库：${old.length} → ${next.length} 个，${changed?'将更新':'内容保留'}。`];
   if(changed){next.slice(0,6).forEach((macro,index)=>lines.push(`准备写入：${name(index)} · ${macro.steps.length} 步`));if(next.length>6)lines.push(`另有 ${next.length-6} 个宏。`);if(!next.length)lines.push('将清空宏库。');}
   const bindings=[];
@@ -1157,4 +1157,19 @@ export function reconcileOfficialMacroDraftReceipt(receipt,observed,factoryKeyma
     decoded.forEach((m,index)=>{const source=receipt.macros[receipt.layout.records[index].libraryIndex];const events=steps=>steps.map(s=>[s.usage,s.pressed,s.delayMilliseconds,s.kind??null]);requireThat(equal(events(m.steps),events(source.steps))&&equal(m.hardwareReserved??[0,0],source.hardwareReserved??[0,0]),'宏事件或保留数据读回不一致。');});
   }
   return clone({hardwareReady:false,configurationMatches:true,snapshot:observed,macros:receipt.macros,bindings:receipt.bindings,modes:receipt.modes,records:receipt.layout.records});
+}
+
+export function officialMacroReceipt(profile,before=profile.snapshot){
+  validateProfile(profile);requireThat(equal(profile.snapshot.deviceInfo,before.deviceInfo),'配置来自不同固件，请重新读取。');
+  requireThat(profile.lightingMapping&&equal(profile.lightingMapping.deviceInfo,before.deviceInfo),'官方宏写入需要重新读取完整默认键位映射。');
+  requireThat(profile.macroBindings!=null,'未知宏不能覆盖，请先读取完整配置。');
+  return prepareOfficialMacroDraftReceipt({before,factoryKeymap:profile.lightingMapping.factoryKeymap,macros:profile.macros,bindings:profile.macroBindings,modes:profile.macroModes??{}});
+}
+export function macroStorageUsage(profile){
+  if(profile.macroStorageLayout==='officialBindings')return officialMacroReceipt(profile).layout.usedBytes;
+  const bank=encodeBank(profile.macros);return profile.macros.length?bank[2]|bank[3]<<8:0;
+}
+export function macroStorageNames(profile){
+  if(profile.macroStorageLayout==='officialBindings')return officialMacroReceipt(profile).layout.records.map(r=>profile.macros[r.libraryIndex].name);
+  return profile.macros.map(m=>m.name);
 }

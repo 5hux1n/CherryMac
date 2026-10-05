@@ -22,7 +22,7 @@ struct KeyboardMacro: Codable, Equatable {
     // Opaque bytes carried by each firmware record; never interpret as events.
     var hardwareReserved:[UInt8]? = nil
     static func nameStem(_ name:String)->String{name.precomposedStringWithCanonicalMapping.unicodeScalars.prefix(65).map{String($0)}.joined()}
-    func validate(maximumEvents:Int = 256) throws {
+    func validate(maximumEvents:Int = 762) throws {
         if let hardwareReserved{guard hardwareReserved.count==2 else{throw HardwareError(message:"宏保留数据长度无效。")}}
         try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
@@ -69,6 +69,8 @@ struct HardwareProfile: Codable, Equatable {
     var format = "CherryMacProfile"
     var version = 1
     var snapshot: HardwareSnapshot
+    enum MacroStorageLayout:String,Codable {case sharedLibrary,officialBindings}
+    var macroStorageLayout:MacroStorageLayout? = nil
     var macros: [KeyboardMacro] = []
     // nil means that the raw device bank has not been decoded for editing.
     // Optional keeps older exported profiles readable.
@@ -82,12 +84,12 @@ struct HardwareProfile: Codable, Equatable {
     enum LightingColorEncoding:String,Codable {case hardwareRGB,officialRGB}
     var lightingColorEncoding:LightingColorEncoding? = nil
     func validate() throws {
-        guard format == "CherryMacProfile", version == 1, macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
+        guard format == "CherryMacProfile", version == 1, macroStorageLayout == .officialBindings || macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         if let lightingMapping{_ = try lightingMapping.slots(for:snapshot)}
         if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
         if let hostTextJSON{_ = try WindowsProfile.validateHostTextDefinition(Data(hostTextJSON.utf8))}
-        for macro in macros { try macro.validate(); _ = try WindowsProfile.macroSource(self,macro:macro) }
+        for macro in macros { try macro.validate(maximumEvents:macroStorageLayout == .officialBindings ? 762:256); _ = try WindowsProfile.macroSource(self,macro:macro) }
         guard Set(macros.map { $0.name }).count == macros.count else { throw HardwareError(message: "宏名称不能重复。") }
         for (slot,playback) in macroModes ?? [:]{
             guard macroBindings?[slot] != nil else{throw HardwareError(message:"宏执行方式缺少对应绑定。")};try playback.validate()
@@ -111,7 +113,8 @@ struct HardwareProfile: Codable, Equatable {
             modes[slot]=try CherryMacroCodec.playback(record,macroCount:macros.count)
             bindings[slot]=macros[Int(record[1])].name
         }
-        let profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings,macroModes:modes,lightingColorEncoding:.hardwareRGB)
+        var profile=HardwareProfile(snapshot:snapshot,macros:macros,macroBindings:bindings,macroModes:modes,lightingColorEncoding:.hardwareRGB)
+        if macros.count>32 || macros.contains(where:{$0.steps.count>256}){profile.macroStorageLayout = .officialBindings}
         try profile.validate();return profile
     }
     func colorSlot(_ keySlot:Int)->Int? {
@@ -121,6 +124,7 @@ struct HardwareProfile: Codable, Equatable {
     func resolvedMacros() throws -> HardwareSnapshot {
         try validate()
         guard let bindings=macroBindings else{throw HardwareError(message:"请先读取完整宏配置；未知硬件宏暂不能覆盖。")}
+        if macroStorageLayout == .officialBindings{return try officialMacroReceipt().expected}
         var result=snapshot
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(result.keymap[slot*3]) {
             guard bindings[slot] != nil else{throw HardwareError(message:"配置包含未关联的硬件宏，请重新读取配置。")}
@@ -132,6 +136,21 @@ struct HardwareProfile: Codable, Equatable {
             result.keymap.replaceSubrange(slot*3..<slot*3+3,with:try CherryMacroCodec.binding(index,playback:macroModes?[slot] ?? .once))
         }
         return result
+    }
+    func officialMacroReceipt(before:HardwareSnapshot?=nil)throws->OfficialMacroDraftReceipt {
+        try validate();let original=before ?? snapshot
+        guard snapshot.deviceInfo==original.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请重新读取。") }
+        guard let mapping=lightingMapping,mapping.deviceInfo==original.deviceInfo else{throw HardwareError(message:"官方宏写入需要重新读取完整默认键位映射。")}
+        guard let bindings=macroBindings else{throw HardwareError(message:"未知宏不能覆盖，请先读取完整配置。")}
+        return try OfficialMacroDraftReceipt.prepare(before:original,factoryKeymap:mapping.factoryKeymap,macros:macros,bindings:bindings,modes:macroModes ?? [:])
+    }
+    func macroStorageUsage()throws->Int {
+        if macroStorageLayout == .officialBindings{return try officialMacroReceipt().layout.usedBytes}
+        let bank=try CherryMacroCodec.encode(macros);return macros.isEmpty ? 0:Int(bank[2]) | Int(bank[3])<<8
+    }
+    func macroStorageNames()throws->[String] {
+        if macroStorageLayout == .officialBindings{return try officialMacroReceipt().layout.records.map{macros[$0.libraryIndex].name}}
+        return macros.map{$0.name}
     }
     mutating func assignMacro(named name:String,to slot:Int,playback:MacroPlayback = .once) throws {
         var draft=self;try draft.stageMacroAssignment(named:name,to:slot,playback:playback);self=draft
@@ -208,10 +227,11 @@ struct HardwareProfile: Codable, Equatable {
         try before.validate();try target.validate()
         guard let oldBank=before.macroData,let nextBank=target.macroData else{throw HardwareError(message:"缺少完整宏库，无法核对。")}
         let old=try CherryMacroCodec.decode(oldBank),next=try CherryMacroCodec.decode(nextBank)
+        let storedNames=try macroStorageNames()
         let changed=oldBank != nextBank
         var lines=["宏库：\(old.count) → \(next.count) 个，\(changed ? "将更新":"内容保留")。"]
         if changed {
-            lines += next.enumerated().prefix(6).map{index,macro in "准备写入：\(macros.indices.contains(index) ? macros[index].name:macro.name) · \(macro.steps.count) 步"}
+            lines += next.enumerated().prefix(6).map{index,macro in "准备写入：\(storedNames.indices.contains(index) ? storedNames[index]:macro.name) · \(macro.steps.count) 步"}
             if next.count>6{lines.append("另有 \(next.count-6) 个宏。")}
             if next.isEmpty{lines.append("将清空宏库。")}
         }
@@ -222,7 +242,7 @@ struct HardwareProfile: Codable, Equatable {
                 let description:String
                 if [UInt8(0x70),0x71].contains(record[0]) {
                     let mode=try CherryMacroCodec.playback(record,macroCount:next.count),index=Int(record[1])
-                    description="\(macros.indices.contains(index) ? macros[index].name:next[index].name) · \(mode.label)"
+                    description="\(storedNames.indices.contains(index) ? storedNames[index]:next[index].name) · \(mode.label)"
                 }else{description=CherryMatrix.describe(record)}
                 bindings.append("\(labels[slot] ?? "槽位 \(slot)") → \(description)")
             }
@@ -328,5 +348,38 @@ struct RawLightingMetadata:Codable {
               profile.snapshot.parameters==snapshot.parameters,profile.snapshot.colors==snapshot.colors else{return nil}
         var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = .officialRGB
         try next.validate();return next
+    }
+}
+
+struct MacroMetadataRecord:Codable {
+    let format:String
+    let version:Int
+    let profile:HardwareProfile
+    let receipt:OfficialMacroDraftReceipt?
+    static func prepare(_ draft:HardwareProfile,snapshot:HardwareSnapshot,before:HardwareSnapshot?=nil)throws->Self {
+        var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;try saved.validate()
+        let resolved=try saved.resolvedMacros()
+        guard resolved.deviceInfo==snapshot.deviceInfo,resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称与设备数据不一致，未保存名称。")}
+        var receipt:OfficialMacroDraftReceipt?
+        if saved.macroStorageLayout == .officialBindings {
+            let next=try saved.officialMacroReceipt(before:before ?? snapshot)
+            _ = try next.reconcile(observed:snapshot,factoryKeymap:saved.lightingMapping!.factoryKeymap);receipt=next
+        }
+        return .init(format:"CherryMacMacroMetadata",version:1,profile:saved,receipt:receipt)
+    }
+    func restore(snapshot:HardwareSnapshot,mapping:LightingMappingContext?)throws->HardwareProfile {
+        guard format=="CherryMacMacroMetadata",version==1 else{throw HardwareError(message:"宏名称记录格式或版本无效。")}
+        try profile.validate();try snapshot.validate()
+        guard profile.snapshot.deviceInfo==snapshot.deviceInfo else{throw HardwareError(message:"宏名称记录来自不同固件。")}
+        if profile.macroStorageLayout == .officialBindings {
+            guard let receipt,let mapping,mapping.deviceInfo==snapshot.deviceInfo,
+                  receipt.macros==profile.macros,receipt.bindings==profile.macroBindings,
+                  receipt.modes==(profile.macroModes ?? [:]) else{throw HardwareError(message:"官方宏名称记录缺少匹配的草稿或实际默认映射。")}
+            _ = try receipt.reconcile(observed:snapshot,factoryKeymap:mapping.factoryKeymap)
+        }else if receipt != nil{throw HardwareError(message:"宏名称记录的存储方式不一致。")}
+        var saved=profile;if saved.macroStorageLayout==nil{saved.macroStorageLayout = .sharedLibrary};saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB
+        let resolved=try saved.resolvedMacros()
+        guard resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称记录与完整读回数据不一致。")}
+        return saved
     }
 }

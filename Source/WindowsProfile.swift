@@ -416,15 +416,16 @@ enum WindowsProfile {
                 guard bytes != [0xA1,0,0] || plan.marker != nil else{throw HardwareError(message:"已安装文本键对应空定义，无法导出。")}
                 keys[i]["ActionLinkIndex"]=mapped
             }else if [UInt8(0x70),0x71].contains(bytes[0]){
-                let playback=try CherryMacroCodec.playback(bytes,macroCount:profile.macros.count)
-                keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=try add(Int(bytes[1]),playback);keys[i]["Assignment"]=keys[i]["DefaultAssignment"]
+                guard let name=profile.macroBindings?[slot],let index=profile.macros.firstIndex(where:{$0.name==name}) else{throw HardwareError(message:"宏库与绑定名称不一致，不能导出。")}
+                let playback=profile.macroModes?[slot] ?? .once
+                keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=try add(index,playback);keys[i]["Assignment"]=keys[i]["DefaultAssignment"]
             }else{
                 guard [UInt8(0x20),0x30].contains(bytes[0]) else{throw HardwareError(message:"此按键动作尚不能导出到官方格式。")}
                 keys[i]["Assignment"]=Int(bytes[0])*65536+Int(bytes[1])*256+Int(bytes[2]);keys[i]["ActionLink"]=0;keys[i]["ActionLinkIndex"] = -1
             }
         }
         // Distinct playback variants become separate macros on official import.
-        _ = try CherryMacroCodec.encode(emitted)
+        if profile.macroStorageLayout != .officialBindings{_ = try CherryMacroCodec.encode(emitted)}
         root["KeyList"]=keys;root["ActionInfo"]=actions
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
         guard output.count<=1_000_000 else{throw HardwareError(message:"导出的配置文件过大。")};return output
@@ -1413,6 +1414,7 @@ enum WindowsProfile {
         let lightingSlots=try lightingMapping?.slots(for:baseline)
         var result=try HardwareProfile.fromHardware(baseline)
         result.lightingMapping=lightingMapping
+        if lightingMapping != nil{result.macroStorageLayout = .officialBindings}
         result.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),as:UTF8.self)
         let oldBindings=result.macroBindings ?? [:],oldModes=result.macroModes ?? [:]
         if deferHostText,try validateHostTextDefinition(data)>0 {result.hostTextJSON=result.windowsTemplateJSON}
@@ -1426,7 +1428,7 @@ enum WindowsProfile {
             guard let content=actions[index]["ActionContent"] as? [String:Any] else{throw HardwareError(message:"Windows 宏内容无效。")}
             let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
             let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
-            guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=256 else{throw HardwareError(message:"Windows 宏事件无效。")}
+            guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=762 else{throw HardwareError(message:"Windows 宏事件无效。")}
             let steps=try events.map{event->KeyboardMacro.Step in
                 let type=try integer(event["Type"],"宏 Type",range:0...127)
                 let button=try integer(event["Button"],"宏 Button",range:0...255)
@@ -1469,7 +1471,7 @@ enum WindowsProfile {
                     let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
                     let playback=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
                     result.macroModes![slot]=playback
-                    bytes=try CherryMacroCodec.binding(result.macros.firstIndex{$0.name==name}!,playback:playback)
+                    bytes=try CherryMacroCodec.binding(result.macroStorageLayout == .officialBindings ? 0:result.macros.firstIndex{$0.name==name}!,playback:playback)
                 case 3:
                     _=try HostTextPlan(action:actions[actionIndex])
                     if deferHostText {

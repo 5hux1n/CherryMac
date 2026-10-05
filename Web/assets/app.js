@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -84,14 +84,14 @@ function renderMacroSummary(){
   const element=$('macro-summary');element.classList.remove('error');
   if(profile.macroBindings==null){element.textContent='读取完整配置后显示宏容量。';return;}
   try{
-    const saved=encodeBank(profile.macros),used=profile.macros.length?saved[2]|saved[3]<<8:0;
-    const library=`宏库 ${profile.macros.length}/32 · 已占用 ${used}/3071 字节`;
+    const used=macroStorageUsage(profile);
+    const library=`宏库 ${profile.macros.length} · 已绑定 ${Object.keys(profile.macroBindings).length} 个键 · 写入数据 ${used}/3071 字节`;
     if(!steps.length){element.textContent=library+' · 添加或录制步骤后显示本次保存容量。';return;}
     try{
-      const macro={name:$('macro-name').value.trim(),steps:clone(steps)},draft=clone(profile.macros),index=draft.findIndex(m=>m.name===$('macro-list').value);
-      if(index<0)draft.push(macro);else draft[index]=macro;
-      requireThat(new Set(draft.map(m=>m.name.normalize('NFC'))).size===draft.length,'宏名称已存在。');
-      const bank=encodeBank(draft),next=bank[2]|bank[3]<<8,playback={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(playback);
+      const macro={name:$('macro-name').value.trim(),steps:clone(steps)},draft=clone(profile),index=draft.macros.findIndex(m=>m.name===$('macro-list').value);
+      if(index<0)draft.macros.push(macro);else{const old=draft.macros[index].name;draft.macros[index]=macro;for(const [slot,name] of Object.entries(draft.macroBindings??{}))if(name===old)draft.macroBindings[slot]=macro.name;}
+      requireThat(new Set(draft.macros.map(m=>m.name.normalize('NFC'))).size===draft.macros.length,'宏名称已存在。');
+      const next=macroStorageUsage(draft),playback={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(playback);
       const cycle=steps.reduce((sum,step)=>sum+step.delayMilliseconds,0),duration=playback.mode==='count'?`${cycle*playback.count} ms`:`每轮 ${cycle} ms · 持续执行`;
       element.textContent=library+` · 本次保存 ${next}/3071 字节 · ${steps.length} 步 · 设定等待总量：${duration}`;
     }catch(error){element.textContent=library+' · 本次保存：'+error.message;element.classList.add('error');}
@@ -127,9 +127,9 @@ async function read(){
   }
   baseline=clone(s);baselineLightingMapping=clone(mapping);
   const metadataWarnings=[];
-  if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){metadataWarnings.push('本地宏名称无法读取：'+error.message);}}
+  if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s,mapping)??profile;}catch(error){metadataWarnings.push('本地宏名称无法读取：'+error.message);}}
   else{validateProfile(profile);lightingReconnectSnapshot=null;}
-  if(mapping)profile.lightingMapping=mapping;else if(!keepLightingDraft)delete profile.lightingMapping;
+  if(mapping){profile.lightingMapping=mapping;profile.macroStorageLayout??='officialBindings';}else if(!keepLightingDraft)delete profile.lightingMapping;
   if(mapping){try{
     if(keepLightingDraft)await rememberRawLightingMetadata(profile,s);
     else profile=await recalledRawLightingMetadata(profile)??profile;
@@ -262,7 +262,7 @@ $('review-lighting').onclick=()=>operation(()=>{
 },{localOnly:true});
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);p[3]=4-Number($('speed').value);if($('direction').value!=='')p[4]=Number($('direction').value);if($('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
 $('global-color').onclick=()=>act(()=>{profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));profile.snapshot.parameters[5]=0;$('rainbow').value='0';status('已设置内置灯效单色，尚未写入。');});
-$('macro-name').oninput=renderMacroSummary;$('macro-repeat').oninput=renderMacroSummary;$('macro-playback').onchange=()=>{$('macro-repeat').disabled=$('macro-playback').value!=='count';renderMacroSummary();};$('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>act(()=>{requireThat(steps.length<=254,'最多 256 个事件，请先删除部分步骤。');const event={};setMacroUsage(event,$('macro-key').value);const [where,raw]=$('macro-insert').value.split(':');let index=steps.length;if(where){index=Number(raw);requireThat(Number.isInteger(index)&&index>=0&&index<steps.length,'请选择有效插入位置。');if(where==='after')index++;}steps.splice(index,0,{...event,pressed:true,delayMilliseconds:30},{...event,pressed:false,delayMilliseconds:0});$('macro-insert').value='';renderSteps();});
+$('macro-name').oninput=renderMacroSummary;$('macro-repeat').oninput=renderMacroSummary;$('macro-playback').onchange=()=>{$('macro-repeat').disabled=$('macro-playback').value!=='count';renderMacroSummary();};$('macro-list').onchange=loadMacro;$('add-pair').onclick=()=>act(()=>{requireThat(steps.length<=760,'最多 762 个事件，请先删除部分步骤。');const event={};setMacroUsage(event,$('macro-key').value);const [where,raw]=$('macro-insert').value.split(':');let index=steps.length;if(where){index=Number(raw);requireThat(Number.isInteger(index)&&index>=0&&index<steps.length,'请选择有效插入位置。');if(where==='after')index++;}steps.splice(index,0,{...event,pressed:true,delayMilliseconds:30},{...event,pressed:false,delayMilliseconds:0});$('macro-insert').value='';renderSteps();});
 $('save-macro').onclick=()=>act(async()=>{const p=clone(profile),old=$('macro-list').value,m={name:$('macro-name').value.trim(),steps:clone(steps)};const preference=recordingPreference??p.macros.find(m=>m.name===old)?.recordingDelay;if(preference!=null)m.recordingDelay=clone(preference);const preferred={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(preferred);m.preferredPlayback=preferred;const original=p.macros.find(m=>m.name===old);if(original?.hardwareReserved!=null)m.hardwareReserved=clone(original.hardwareReserved);const source=original?.windowsActionIndex;if(source!=null)m.windowsActionIndex=source;validateMacro(m);requireThat(!p.macros.some(macro=>macro.name===m.name&&macro.name!==old),'宏名称已存在。');const index=p.macros.findIndex(m=>m.name===old);if(index<0)p.macros.push(m);else{p.macros[index]=m;for(const [slot,name] of Object.entries(p.macroBindings??{}))if(name===old)p.macroBindings[slot]=m.name;}p.snapshot=resolveMacros(p);profile=p;refreshMacros(m.name);loadMacro({preferDefault:true});render();try{await rememberMacroProfileIfMatching(p,baseline);}catch(error){status('编辑区已保存，但本地宏名称／默认方式保存失败：'+error.message,true);return;}status('宏与默认执行方式已保存到编辑区；已有绑定不变，点击分配后应用到所选键。');});
 $('assign-macro').onclick=()=>act(()=>{const name=$('macro-list').value,key=keys.find(k=>k.id===selected);requireThat(name&&editableSlots.has(key.slot),'请选择已保存的宏和可配置按键。');const p=clone(profile);const playback={mode:$('macro-playback').value,count:$('macro-playback').value==='count'?Number($('macro-repeat').value):1};validatePlayback(playback);p.macroBindings[key.slot]=name;p.macroModes??={};p.macroModes[key.slot]=playback;p.snapshot=resolveMacros(p);profile=p;status(`已将 ${name} 分配到 ${key.label}，尚未写入。`);});
 $('copy-macro').onclick=()=>act(()=>{const copy=duplicateMacro(profile,$('macro-list').value);profile=copy.profile;refreshMacros(copy.name);loadMacro();status('已复制宏；原绑定保留，副本尚未绑定或写入。');});
@@ -279,7 +279,7 @@ $('connect').onclick=()=>{
   });
 };
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
-$('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping)profile.lightingMapping=clone(baselineLightingMapping);else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
+$('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot,baselineLightingMapping)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping){profile.lightingMapping=clone(baselineLightingMapping);profile.macroStorageLayout??='officialBindings';}else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
 function adoptImportedProfile(next,name){
   const mixed=textProduct&&typeof next.hostTextJSON==='string';
   // Validate text before replacing either editor; imports never enable the service.
@@ -372,12 +372,12 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
   catch(error){baseline=null;if(macroAbort?.signal.aborted)throw new Error('宏操作已停止发送。请重新读取，或使用配置页的宏恢复入口；保存的原配置与目标记录仍在本机。');throw error;}
   finally{macroAbort=null;}
   baseline=clone(after);if(wanted.kind==='macro'){for(let slot=0;slot<126;slot++){const offset=slot*3;if(!equal(wanted.before.keymap.slice(offset,offset+3),after.keymap.slice(offset,offset+3)))profile.snapshot.keymap.splice(offset,3,...after.keymap.slice(offset,offset+3));}}else profile.snapshot.keymap=clone(after.keymap);
-  if(wanted.kind==='macro'){profile.snapshot.macroData=clone(after.macroData);try{await rememberMacroProfile(profile,after);}catch(error){status('宏已写入并读回一致，但本地名称保存失败：'+error.message,true);return;}}
+  if(wanted.kind==='macro'){profile.snapshot.macroData=clone(after.macroData);try{await rememberMacroProfile(profile,after,wanted.before);}catch(error){status('宏已写入并读回一致，但本地名称保存失败：'+error.message,true);return;}}
   syncLights();status((wanted.kind==='macro'?'宏与绑定键':'按键')+'写入完成，完整读回一致。备份和日志已自动保存；其他草稿尚未写入。');
 });};
 $('recover-macro').onclick=e=>{if(busy||!macroProduct)return;try{gate.acknowledge(e);}catch(error){status(error.message,true);return;}void operation(async()=>{
   const previous=clone(profile),saved=await lastMacroTransaction();macroAbort=new AbortController();render();
-  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after)??safeProfile(after);try{profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);}catch(error){throw new Error(`键盘宏已恢复且读回一致，但草稿合并失败：${error.message}。原编辑区保留，尚未写入。`);}refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
+  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after,baselineLightingMapping)??safeProfile(after);try{profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);}catch(error){throw new Error(`键盘宏已恢复且读回一致，但草稿合并失败：${error.message}。原编辑区保留，尚未写入。`);}refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
   catch(error){baseline=null;if(macroAbort.signal.aborted)throw new Error('宏恢复已停止发送。恢复记录仍保留，重连后可再次恢复。');throw error;}
   finally{macroAbort=null;}
 });};
@@ -521,4 +521,9 @@ $('lighting-record-file').onchange=()=>act(async()=>{
   $('lighting-record-result').textContent=`${state}；${recovery}。有效回复 ${review.traceReview.acceptedReports}/${review.traceReview.expectedReports}。未修改键盘。`;
   if(['available','unchanged'].includes(review.recoveryStatus))lightingRecordForPlan=clone(record);
   download(review,'CherryMac-lighting-recovery-assessment.json');status('已完成本地分析并下载结果，未修改编辑区或键盘。');
+});
+
+$('official-macros').onclick=()=>act(()=>{
+  const draft=clone(profile);draft.macroStorageLayout='officialBindings';draft.snapshot=resolveMacros(draft);profile=draft;render();
+  status('已启用扩展宏编辑，尚未写入。多个键绑定同一宏会分别占用空间，未绑定宏保存在本机。');
 });

@@ -59,7 +59,7 @@ enum CherryMacroCodec {
         }
         return bank
     }
-    static func decode(_ bytes:[UInt8],maximumRecords:Int = 32,maximumEvents:Int = 256) throws -> [KeyboardMacro] {
+    static func decode(_ bytes:[UInt8],maximumRecords:Int = 126,maximumEvents:Int = 762) throws -> [KeyboardMacro] {
         guard (1...126).contains(maximumRecords),(1...762).contains(maximumEvents) else{throw HardwareError(message:"宏解析范围无效。")}
         guard bytes.count==accessibleSize else{throw HardwareError(message:"宏备份长度与目标固件不符。")}
         if bytes.allSatisfy({$0==0}) || bytes.allSatisfy({$0==255}){return []}
@@ -131,7 +131,7 @@ struct MacroRecorder {
         guard milliseconds>=lastMilliseconds,(kind == .mouse ? [UInt8(1),2,4,8,16].contains(usage):(4...231).contains(usage)) else{throw HardwareError(message:"录制事件或时钟无效。")}
         let identity=Int(usage)+(kind == .mouse ? 256:0)
         if repeatEvent || (pressed ? held.contains(identity):!held.contains(identity)){return}
-        guard steps.count<256 else{throw HardwareError(message:"录制最多 256 个事件，请取消或缩短操作。")}
+        guard steps.count<762 else{throw HardwareError(message:"录制最多 762 个事件，请取消或缩短操作。")}
         let delay=timing == .fixed ? fixedMilliseconds:timing == .ignore ? 0:min(60000,milliseconds-lastMilliseconds)
         // USB execution captures associate the delay with the preceding event.
         // Ignore recorder startup latency and leave the final event at zero.

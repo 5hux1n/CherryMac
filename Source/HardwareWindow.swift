@@ -51,7 +51,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     func select(_ index:Int){table.reloadData();if steps.indices.contains(index){table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false);table.scrollRowToVisible(index)}}
     @objc func addPair(){
         window?.makeFirstResponder(nil)
-        guard steps.count<=254 else{message.stringValue="最多 256 个事件，请先删除部分步骤。";return}
+        guard steps.count<=760 else{message.stringValue="最多 762 个事件，请先删除部分步骤。";return}
         guard insertion.indexOfSelectedItem==0 || steps.indices.contains(table.selectedRow) else{message.stringValue="请先选中插入位置对应的步骤。";return}
         let key=steps.indices.contains(table.selectedRow) ? steps[table.selectedRow]:.init(usage:4,pressed:true,delayMilliseconds:50)
         let index=insertion.indexOfSelectedItem==0 ? steps.count:table.selectedRow+(insertion.indexOfSelectedItem==2 ? 1:0)
@@ -300,6 +300,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("删除宏",#selector(deleteMacro)),359,8,90,28,in:macros)
         place(button("复制",#selector(copyMacro)),456,8,64,28,in:macros)
         place(button("清空",#selector(clearMacros)),527,8,64,28,in:macros)
+        place(button("启用扩展宏编辑",#selector(enableOfficialMacros)),600,8,170,28,in:macros)
         place(label("名称"),8,57,90,24,in:macros);controls.append(macroName);place(macroName,116,53,333,28,in:macros)
         macroSummary.font = .systemFont(ofSize:11);macroSummary.textColor = .secondaryLabelColor
         place(macroSummary,463,45,412,51,in:macros)
@@ -758,21 +759,24 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         globalLightColor.color=NSColor(srgbRed:CGFloat(parameters[6])/255,green:CGFloat(parameters[7])/255,blue:CGFloat(parameters[8])/255,alpha:1)
         brightness.doubleValue=Double(parameters[2]);speed.doubleValue=Double(4-Int(parameters[3]));lightDirection.selectItem(at:0);lightRainbow.selectItem(at:0);loadLightColor()
     }
-    func recalledMacroProfile(_ snapshot:HardwareSnapshot)->HardwareProfile?{
+    func recalledMacroProfile(_ snapshot:HardwareSnapshot,mapping:LightingMappingContext?=nil)->HardwareProfile?{
         let files=(try? FileManager.default.contentsOfDirectory(at:backupDirectory,includingPropertiesForKeys:[.contentModificationDateKey])) ?? []
         let candidates=files.filter{$0.lastPathComponent.hasPrefix("MacroMetadata-") && $0.pathExtension=="json"}.sorted{((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)}
         for url in candidates.prefix(128){
-            guard let data=try? Data(contentsOf:url),var saved=try? HardwareProfile.decode(data),saved.snapshot.deviceInfo==snapshot.deviceInfo else{continue}
-            saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB
+            guard let size=try? url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=7_000_000,let data=try? Data(contentsOf:url) else{continue}
+            if let record=try? JSONDecoder().decode(MacroMetadataRecord.self,from:data),let restored=try? record.restore(snapshot:snapshot,mapping:mapping){return restored}
+            guard var saved=try? HardwareProfile.decode(data),saved.macroStorageLayout != .officialBindings,saved.snapshot.deviceInfo==snapshot.deviceInfo else{continue}
+            saved.macroStorageLayout = .sharedLibrary;saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB
             guard let resolved=try? saved.resolvedMacros(),resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{continue}
             return saved
         };return nil
     }
-    func rememberMacroProfile(_ draft:HardwareProfile,snapshot:HardwareSnapshot)throws{
-        var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;let resolved=try saved.resolvedMacros()
-        guard resolved.deviceInfo==snapshot.deviceInfo,resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称与设备数据不一致，未保存名称。")}
+    func rememberMacroProfile(_ draft:HardwareProfile,snapshot:HardwareSnapshot,before:HardwareSnapshot?=nil)throws{
+        let record=try MacroMetadataRecord.prepare(draft,snapshot:snapshot,before:before)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(record)
+        guard data.count<=7_000_000 else{throw HardwareError(message:"宏名称记录超过本地保存范围。")}
         try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true)
-        let url=backupDirectory.appendingPathComponent("MacroMetadata-\(UUID().uuidString).json"),data=try saved.encoded()
+        let url=backupDirectory.appendingPathComponent("MacroMetadata-\(UUID().uuidString).json")
         try data.write(to:url,options:.atomic)
         guard try Data(contentsOf:url)==data else{throw HardwareError(message:"宏名称保存校验失败。")}
         UserDefaults.standard.set(url.path,forKey:"hardware.macroMetadata")
@@ -810,8 +814,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let read):
                     let snapshot=read.snapshot
-                    self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                    self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot,mapping:read.mapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
                     self.profile?.lightingMapping=read.mapping;self.baselineLightingMapping=read.mapping
+                    if read.mapping != nil,self.profile?.macroStorageLayout==nil{self.profile?.macroStorageLayout = .officialBindings}
                     if let current=self.profile,let saved=self.recalledRawLighting(current){self.profile=saved}
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
@@ -862,7 +867,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     #if CHERRY_MACRO_PRODUCT
     func macroWriteTarget()throws->HardwareSnapshot{
         guard let draft=profile,let baseline else{throw HardwareError(message:"请先读取键盘。")}
-        var target=try draft.resolvedMacros()
+        try draft.validate()
+        guard draft.snapshot.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请重新读取。") }
+        var target=try draft.macroStorageLayout == .officialBindings ? draft.officialMacroReceipt(before:baseline).expected:draft.resolvedMacros()
         guard target.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置固件信息与当前键盘不一致，请重新读取。")}
         target.parameters=baseline.parameters;target.colors=baseline.colors
         for slot in 0..<126 where ![UInt8(0x70),0x71].contains(baseline.keymap[slot*3]) && ![UInt8(0x70),0x71].contains(target.keymap[slot*3]){target.keymap.replaceSubrange(slot*3..<slot*3+3,with:baseline.keymap[slot*3..<slot*3+3])}
@@ -900,7 +907,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     switch result{
                     case .success(let snapshot):
                         self.baseline=snapshot;self.baselineWasRead=true
-                        let restored=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                        let restored=self.recalledMacroProfile(snapshot,mapping:self.baselineLightingMapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
                         do{
                             self.profile=try HardwareProfile.mergeMacroRecovery(restored:restored,previous:previousDraft,before:authorization.before,target:authorization.expected)
                             self.message.stringValue="宏原配置已恢复，完整读回一致；其他草稿保留。"
@@ -942,7 +949,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 }
                 DispatchQueue.main.async{guard let self else{return};self.currentMacroOperation=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true};self.actionChanged()
                     switch result{
-                    case .success(let snapshot):self.baseline=snapshot;var remaining=draft;for slot in 0..<126 where baseline.keymap[slot*3..<slot*3+3] != snapshot.keymap[slot*3..<slot*3+3]{remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3])};remaining.snapshot.macroData=snapshot.macroData;self.profile=remaining;self.update();do{try self.rememberMacroProfile(remaining,snapshot:snapshot)}catch{self.message.stringValue="宏已写入并读回一致，但本地名称保存失败：\(error.localizedDescription)";return};self.message.stringValue="宏与按键写入完成，完整读回一致；备份与日志已保存。普通键与灯效草稿保留在编辑区。"
+                    case .success(let snapshot):self.baseline=snapshot;var remaining=draft;for slot in 0..<126 where baseline.keymap[slot*3..<slot*3+3] != snapshot.keymap[slot*3..<slot*3+3]{remaining.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:snapshot.keymap[slot*3..<slot*3+3])};remaining.snapshot.macroData=snapshot.macroData;self.profile=remaining;self.update();do{try self.rememberMacroProfile(remaining,snapshot:snapshot,before:baseline)}catch{self.message.stringValue="宏已写入并读回一致，但本地名称保存失败：\(error.localizedDescription)";return};self.message.stringValue="宏与按键写入完成，完整读回一致；备份与日志已保存。普通键与灯效草稿保留在编辑区。"
                     case .failure(let error):self.baseline=nil;self.update();self.message.stringValue=error.localizedDescription+" 请重新连接并读取后核对；备份和日志已保留。"
                     }
                 }
@@ -1113,15 +1120,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     func updateMacroSummary(){
         guard let profile,profile.macroBindings != nil else{macroSummary.stringValue="读取完整配置后显示宏容量。";return}
         do{
-            let saved=try CherryMacroCodec.encode(profile.macros),used=profile.macros.isEmpty ? 0:Int(saved[2]) | Int(saved[3])<<8
-            let library="宏库 \(profile.macros.count)/32 · 已占用 \(used)/3071 字节"
+            let used=try profile.macroStorageUsage()
+            let library="宏库 \(profile.macros.count) · 已绑定 \(profile.macroBindings?.count ?? 0) 个键 · 写入数据 \(used)/3071 字节"
             guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{macroSummary.stringValue=library+"\n添加或录制步骤后显示本次保存容量。";return}
             do{
                 let steps=try parsedMacroSteps(),macro=KeyboardMacro(name:macroName.stringValue,steps:steps)
-                var draft=profile.macros;let index=macroPicker.indexOfSelectedItem-1
-                if draft.indices.contains(index){draft[index]=macro}else{draft.append(macro)}
-                guard Set(draft.map{$0.name}).count==draft.count else{throw HardwareError(message:"宏名称已存在。")}
-                let bank=try CherryMacroCodec.encode(draft),next=Int(bank[2]) | Int(bank[3])<<8
+                var draft=profile;let index=macroPicker.indexOfSelectedItem-1
+                if draft.macros.indices.contains(index){let old=draft.macros[index].name;draft.macros[index]=macro;for (slot,name) in draft.macroBindings ?? [:] where name==old{draft.macroBindings?[slot]=macro.name}}else{draft.macros.append(macro)}
+                guard Set(draft.macros.map{$0.name}).count==draft.macros.count else{throw HardwareError(message:"宏名称已存在。")}
+                let next=try draft.macroStorageUsage()
                 let cycle=steps.reduce(0){$0+$1.delayMilliseconds}
                 guard let count=macroPlayback.indexOfSelectedItem==0 ? Int(macroRepeat.stringValue):1 else{throw HardwareError(message:"请输入宏执行次数。")}
                 let mode:[MacroPlayback.Mode]=[.count,.held,.toggle]
@@ -1141,6 +1148,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func copyMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name,newName=try p.duplicateMacro(named:name);profile=p;refreshMacroPicker();macroPicker.selectItem(withTitle:newName);chooseMacro();update();message.stringValue="已复制宏；原绑定保留，副本尚未绑定或写入。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func enableOfficialMacros(){
+        guard !busy,var draft=profile else{return}
+        do{draft.macroStorageLayout = .officialBindings;draft.snapshot=try draft.resolvedMacros();profile=draft;update();updateMacroSummary();message.stringValue="已启用扩展宏编辑，尚未写入。最多 762 个事件；多个键绑定同一宏会分别占用空间。未绑定宏保存在本机。"}
+        catch{message.stringValue=error.localizedDescription}
+    }
     @objc func clearMacros(){guard var p=profile else{return};do{try p.clearMacros();profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。"}catch{message.stringValue=error.localizedDescription}}
     @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key) else{return};do{try p.unassignMacro(from:slot);profile=p;loadSelectedAssignment();update();message.stringValue="已解除 \(key.label) 的宏绑定并设为禁用；宏库保留，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
     @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
@@ -1317,7 +1329,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
     func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
-    @objc func discardDraft(){guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);profile?.lightingMapping=baselineLightingMapping;if let current=profile,let saved=recalledRawLighting(current){profile=saved};message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
+    @objc func discardDraft(){guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline,mapping:baselineLightingMapping) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);profile?.lightingMapping=baselineLightingMapping;if baselineLightingMapping != nil,profile?.macroStorageLayout==nil{profile?.macroStorageLayout = .officialBindings};if let current=profile,let saved=recalledRawLighting(current){profile=saved};message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     func windowWillClose(_ notification:Notification){
         #if CHERRY_MACRO_PRODUCT
         stopHostTextBridge()
