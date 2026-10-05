@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -260,6 +260,19 @@ $('file').onchange=()=>operation(async()=>{
   profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
 });
+$('review-default').onclick=()=>$('default-review-file').click();
+$('default-review-file').onchange=()=>operation(async()=>{
+  const file=$('default-review-file').files[0];$('default-review-file').value='';if(!file)return;
+  const before=baseline,mapping=baselineLightingMapping;
+  requireThat(before&&mapping,'请先读取键盘，取得完整配置和固件默认键位表。');
+  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
+  const text=await file.text();
+  requireThat(baseline===before&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
+  const review=reviewDefaultConfiguration(text,before,mapping);
+  $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，原始宏存储保留。完整恢复尚未开放。`;
+  download(review,'CherryMac-default-review.json');
+  status('已导出默认恢复核对计划，包含当前配置与宏；未修改编辑区或写入键盘。');
+},{localOnly:true});
 $('import-default').onclick=()=>$('default-file').click();
 $('default-file').onchange=()=>operation(async()=>{
   const file=$('default-file').files[0];$('default-file').value='';if(!file)return;

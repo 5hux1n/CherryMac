@@ -347,6 +347,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("官方默认配置",17,.semibold),8,354,850,28,in:files)
         place(button("载入官方默认草稿…",#selector(importDefaultTemplate)),8,401,260,32,in:files)
         place(label("选择 Windows 安装目录 DefaultData 中的 DefaultData0～4.json，载入本型号默认键位、灯效与文件设置。会替换编辑区；原始宏存储保留。这里只准备草稿，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
+        place(button("核对并导出默认恢复计划…",#selector(exportDefaultReview)),8,451,260,32,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -1229,6 +1230,27 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
                 try self.loadImport(template)
                 self.message.stringValue="官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。"
+            }catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func exportDefaultReview(){
+        guard !busy,let original=baseline,let mapping=baselineLightingMapping,let parent=window else{message.stringValue="请先读取键盘，取得完整配置和固件默认键位表。";return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:parent){[weak self] response in
+            guard response == .OK,let url=panel.url,let self else{return}
+            do{
+                guard !self.busy,self.baseline==original,self.baselineLightingMapping==mapping else{throw HardwareError(message:"读取资料已改变，请重新核对。")}
+                let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
+                guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
+                let review=try WindowsProfile.reviewDefaultConfiguration(Data(contentsOf:url),baseline:original,mapping:mapping)
+                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(review)
+                let alert=NSAlert();alert.messageText="默认恢复核对";alert.informativeText="按键差异：\(review.changedKeySlots.count) 个；灯效参数差异：\(review.changedParameterOffsets.count) 项。\n内部键差异：\(review.protectedChangedSlots.count) 个；涉及宏绑定：\(review.macroBindingSlots.count) 个；未支持的默认键记录：\(review.unsupportedFactorySlots.count) 个。\n设备设置的 \(review.pendingSystemFields.count) 个字段仍待确认，原始宏存储保留。计划包含当前配置与宏；这里只导出文件，不修改编辑区或写入键盘，完整恢复尚未开放。";alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出核对计划")
+                guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
+                let save=NSSavePanel();save.nameFieldStringValue="CherryMac-default-review.json"
+                save.beginSheetModal(for:parent){[weak self] result in
+                    guard result == .OK,let target=save.url else{return}
+                    do{try data.write(to:target,options:.atomic);self?.message.stringValue="已导出默认恢复核对计划，未修改编辑区或写入键盘。"}catch{self?.message.stringValue=error.localizedDescription}
+                }
             }catch{self.message.stringValue=error.localizedDescription}
         }
     }
