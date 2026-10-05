@@ -657,7 +657,7 @@ export function reviewLightingDraft(profile,baseline){
   if(profile.snapshot.parameters[1]===8)requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
   const template=exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON));
   const plan=planOfficialLighting(template,baseline,profile.lightingMapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true}),target=officialLightingReadbackTarget(plan,baseline);
-  return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3)))};
+  return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{})};
 }
 export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(baseline,true);

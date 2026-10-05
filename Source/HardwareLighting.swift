@@ -292,6 +292,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
                 let value=try JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:data)
                 guard value.version==1,!value.hardwareReady,try value.plan.expectedReadback(from:value.original)==value.target else{throw HardwareError(message:"灯效核对目标与计划不一致。")}
                 _ = try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:value.plan,baseline:value.original)
+                if value.target.parameters[1]==8,value.lightingMapping==nil{throw HardwareError(message:"逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。")}
+                _ = try value.lightingMapping?.slots(for:value.original)
                 review=value;summary.stringValue="模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
             }else if root?["format"] as? String=="CherryMacLightingRecoveryRecord" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data).assess();recoveryData=data;summary.stringValue="已载入写入恢复记录；恢复前重新读取配置。"
@@ -397,7 +399,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             self?.editorResult=EditorResult(kind:.write,current:current,review:review)
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
-            let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
+            let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,lightingMapping:review.lightingMapping,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
             DispatchQueue.main.async{self.writtenTarget=review.target;self.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"}
             return result.current

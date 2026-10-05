@@ -1,5 +1,5 @@
 import {executeStoredDefaultTransaction} from './storage.js?v=0.6.0';
-import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingMapping,equal,requireThat,validateSnapshot} from './model.js?v=0.6.0';
+import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingMapping,lightingMappingSlots,officialLightingReadbackTarget,equal,requireThat,validateSnapshot} from './model.js?v=0.6.0';
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
 import {assertReadOnlyRequest,DefaultCandidateAuthorization,LightingCandidateAuthorization,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -146,8 +146,11 @@ export class CherryHID{
       read:()=>this.snapshot(),clock:()=>Math.floor(performance.now()),wait:sleep,exchange:request=>this.exchange(request)});
     }finally{this.#lightingAuthorization=null;this.#writeGate=null;}
   }
-  async #applyLightingCandidate(plan,baseline,{gate,cancelled,backup,persist}){
-    plan=structuredClone(plan);baseline=structuredClone(baseline);
+  async #applyLightingCandidate(plan,baseline,{lightingMapping=null,gate,cancelled,backup,persist}){
+    plan=structuredClone(plan);baseline=structuredClone(baseline);lightingMapping=structuredClone(lightingMapping);
+    requireThat(officialLightingReadbackTarget(plan,baseline).parameters[1]!==8||lightingMapping!==null,'逐键计划缺少 LED 映射，请重新准备。');
+    if(lightingMapping!==null)lightingMappingSlots(lightingMapping,baseline);
+    let mappingVerified=false;
     const authorization=new LightingCandidateAuthorization(plan,baseline),device=this.device;
     requireThat(gate&&typeof gate.check==='function'&&[cancelled,backup,persist].every(fn=>typeof fn==='function'),'灯效研究需要释放确认、取消、备份与日志接口。');
     await this.tail;
@@ -155,7 +158,14 @@ export class CherryHID{
     this.stopHostTextObservation();this.#lightingAuthorization=authorization;this.#writeGate=gate;
     try{return await executeOfficialLightingCandidate(plan,baseline,{source:'usbTrace',cancelled,backup,persist,
       assertCurrent:()=>requireThat(!this.dead&&device.opened&&this.device===device&&this.#lightingAuthorization===authorization,'灯效 USB 会话已经改变。'),
-      read:()=>this.snapshot(),clock:()=>Math.floor(performance.now()),wait:sleep,exchange:request=>this.exchange(request)});
+      read:async()=>{
+        const snapshot=await this.snapshot();
+        if(!mappingVerified&&lightingMapping!==null){
+          const actual=await this.readLightingMapping(snapshot);
+          requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(actual[field],lightingMapping[field])),'实际 LED 映射与灯效计划不一致，请重新读取并准备计划。');mappingVerified=true;
+        }
+        return snapshot;
+      },clock:()=>Math.floor(performance.now()),wait:sleep,exchange:request=>this.exchange(request)});
     }finally{this.#lightingAuthorization=null;this.#writeGate=null;}
   }
   exchange(request){

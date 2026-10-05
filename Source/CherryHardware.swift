@@ -337,10 +337,14 @@ final class CherryUSB: CherryHardwareAccess {
         },exchange:{try self.exchange($0)})
     }
     // Only an explicitly compiled research entry can install this scope.
-    func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,
+    func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext? = nil,
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                 persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
+        let target=try plan.expectedReadback(from:baseline)
+        guard target.parameters[1] != 8 || lightingMapping != nil else{throw HardwareError(message:"逐键计划缺少 LED 映射，请重新准备。")}
+        _ = try lightingMapping?.slots(for:baseline)
+        var mappingVerified=false
         let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:plan,baseline:baseline)
         stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log
@@ -348,7 +352,15 @@ final class CherryUSB: CherryHardwareAccess {
         return try plan.executeCandidate(baseline:baseline,source:"usbTrace",assertCurrent:{
             guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"灯效 USB 会话已经改变。")}
             guard try self.lightingRegistryID()==selectedRegistryID else{throw HardwareError(message:"灯效事务的 USB 设备标识已改变，停止后续发送。")}
-        },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
+        },cancelled:cancelled,read:{
+            let snapshot=try self.completeSnapshot()
+            if !mappingVerified,let expected=lightingMapping{
+                let actual=try self.readLightingMapping(snapshot)
+                guard actual==expected else{throw HardwareError(message:"实际 LED 映射与灯效计划不一致，请重新读取并准备计划。")}
+                mappingVerified=true
+            }
+            return snapshot
+        },backup:backup,persist:persist,
         clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
             if milliseconds>0{Thread.sleep(forTimeInterval:Double(milliseconds)/1000)}
         },exchange:{try self.exchange($0)})

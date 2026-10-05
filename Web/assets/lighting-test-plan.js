@@ -1,5 +1,5 @@
 // File validation and fresh-read preparation only. No transport or browser APIs.
-import {clone,equal,requireThat,officialLightingReports,officialLightingReadbackTarget,assessLightingRecoveryRecord,assessLightingRestoreAttempt,lightingRestorePlanFromRecord} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,lightingMappingSlots,officialLightingReports,officialLightingReadbackTarget,assessLightingRecoveryRecord,assessLightingRestoreAttempt,lightingRestorePlanFromRecord} from './model.js?v=0.6.0';
 export function lightingAcceptanceInput(value){
   const input=clone(value);
   if(input?.format==='CherryMacLightingDraftReview'){
@@ -7,6 +7,8 @@ export function lightingAcceptanceInput(value){
     officialLightingReports(input.plan);
     const target=officialLightingReadbackTarget(input.plan,input.original);
     requireThat(equal(target,input.target),'灯效计划与预计读回不一致。');
+    requireThat(target.parameters[1]!==8||input.lightingMapping!=null,'逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。');
+    if(input.lightingMapping!=null)lightingMappingSlots(input.lightingMapping,input.original);
     return {kind:'write',value:input,target};
   }
   if(input?.format==='CherryMacLightingRecoveryRecord'){assessLightingRecoveryRecord(input);return {kind:'restore',value:input,target:clone(input.original)};}

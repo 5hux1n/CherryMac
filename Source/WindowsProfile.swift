@@ -1242,6 +1242,7 @@ enum WindowsProfile {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot
         var changedParameterOffsets:[Int];var changedColorSlots:[Int]
+        var lightingMapping:LightingMappingContext? = nil
     }
     static func reviewLightingDraft(_ profile:HardwareProfile,baseline:HardwareSnapshot)throws->LightingDraftReview {
         try profile.validate();try baseline.validate();try profile.snapshot.validate()
@@ -1250,7 +1251,7 @@ enum WindowsProfile {
         let data=try encodeProfileLightingDraft(profile,template:Data(template.utf8))
         let plan=try planOfficialLighting(data,baseline:baseline,lightingMapping:profile.lightingMapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         let target=try plan.expectedReadback(from:baseline)
-        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]})
+        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]},lightingMapping:profile.lightingMapping)
     }
     // A candidate sequence for the traced parameter/custom-load methods only.
     // This is not HardwareWritePlan and cannot authorize any USB operation.

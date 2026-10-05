@@ -113,7 +113,7 @@ $('lighting-write').onclick=event=>operation('write',async()=>{
   requireThat(input?.kind==='write'&&!writeAttempted,'请先载入新的写入核对文件。');
   requireThat(confirm('本研究入口将实际写入灯效。请确认已保存恢复资料、松开全部按键，并保持页面前台。是否继续？'),'已取消，未写入。');
   gate.acknowledge(event);abort=new AbortController();writeAttempted=true;powerCycle=null;writtenTarget=null;render();
-  const result=await hid.applyLightingCandidate(input.value.plan,input.value.original,{gate,cancelled:()=>abort.signal.aborted,backup,persist});
+  const result=await hid.applyLightingCandidate(input.value.plan,input.value.original,{lightingMapping:input.value.lightingMapping,gate,cancelled:()=>abort.signal.aborted,backup,persist});
   if(result.readbackMatches){if(editorReview)pendingEditorRecord=clone(result.record);writtenTarget=clone(input.target);powerCycle=new LightingPowerCycle(token(hid.device));status('写入与完整读回一致。请观察灯光，再按下方提示断电重连。尚未验证外观或断电保留。');}
   else throw new Error(`本次写入未通过：${result.failure}。请保留记录，重新连接后核对恢复。`);
 });
