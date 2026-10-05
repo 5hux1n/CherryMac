@@ -656,9 +656,11 @@ export function reviewLightingDraft(profile,baseline){
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo),'请先读取当前键盘，配置与基线的固件信息必须一致。');
   if(profile.snapshot.parameters[1]===8)requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
   const options={bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true};
-  const plan=typeof profile.windowsTemplateJSON==='string'
-    ?planOfficialLighting(exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON)),baseline,profile.lightingMapping,options)
-    :planBuiltInLighting(profile.snapshot,options);
+  const plan=profile.snapshot.parameters[1]===8
+    ?planCustomLighting(profile,options)
+    :typeof profile.windowsTemplateJSON==='string'
+      ?planOfficialLighting(exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON)),baseline,profile.lightingMapping,options)
+      :planBuiltInLighting(profile.snapshot,options);
   const target=officialLightingReadbackTarget(plan,baseline);
   return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{})};
 }
@@ -674,13 +676,33 @@ export function planOfficialLighting(template,baseline,lightingMapping,{bank,tra
 }
 // Direct built-in editing reuses the confirmed sender without interpreting
 // a brightness-scaled firmware RGB bank as an unscaled custom-color source.
-export function planBuiltInLighting(snapshot,{bank,transportSelector,chunkCapacity,beginRequired}){
+export function newCustomLightingDraft(profile){
+  validateProfile(profile);validateSnapshot(profile.snapshot,true);
+  requireThat(profile.lightingMapping!=null,'请先读取键盘，取得 LED 映射。');lightingMappingSlots(profile.lightingMapping,profile.snapshot);
+  const result=clone(profile);result.snapshot.colors=Array(378).fill(0);result.snapshot.parameters[1]=8;result.lightingColorEncoding='officialRGB';
+  validateProfile(result);return result;
+}
+function editorLightingParameters(snapshot,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(snapshot,true);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=127&&[0,1].includes(transportSelector)&&Number.isInteger(chunkCapacity)&&chunkCapacity>=1&&chunkCapacity<=56&&typeof beginRequired==='boolean','配置地址、传输分支或报告容量超出离线计划范围。');
   const p=snapshot.parameters;
-  requireThat(p[1]!==8,'逐键配色计划需要先导入 Windows 官方原始配色。');
-  requireThat(modes.some(([code])=>code===p[1])&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前内置灯效参数超出本型号已核对范围，请先保存有效模式、亮度、速度和方向。');
-  return assembleLightingPlan({head:[bank,...p.slice(1,9)],lightOpenFlag:p[21]},null,{bank,transportSelector,chunkCapacity,beginRequired});
+  requireThat(modes.some(([code])=>code===p[1])&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数超出本型号已核对范围，请先保存有效模式、亮度、速度和方向。');
+  return {head:[bank,...p.slice(1,9)],lightOpenFlag:p[21]};
+}
+export function planBuiltInLighting(snapshot,options){
+  const parameters=editorLightingParameters(snapshot,options);
+  requireThat(parameters.head[1]!==8,'逐键配色需要新建配色或导入 Windows 官方原始配色。');
+  return assembleLightingPlan(parameters,null,options);
+}
+export function planCustomLighting(profile,options){
+  validateProfile(profile);const parameters=editorLightingParameters(profile.snapshot,options);
+  requireThat(parameters.head[1]===8&&profile.lightingColorEncoding==='officialRGB','请先新建逐键配色，或导入 Windows 官方原始配色；不能将读回颜色直接当作原始 RGB。');
+  requireThat(profile.lightingMapping!=null,'逐键配色需要有效 LED 映射。');
+  const slots=lightingMappingSlots(profile.lightingMapping,profile.snapshot),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[parameters.head[2]],colors=Array(378).fill(0);
+  // Utility zeroes the color bank and only fills logical entries with LEDs.
+  // The editable RGB values are raw; apply global brightness exactly once.
+  for(const slot of slots)if(slot!=null)for(let channel=0;channel<3;channel++)colors[slot*3+channel]=(profile.snapshot.colors[slot*3+channel]*coefficient)>>8;
+  return assembleLightingPlan(parameters,colors,options);
 }
 function assembleLightingPlan(parameters,colors,{bank,transportSelector,chunkCapacity,beginRequired}){
   const finishCommand=transportSelector===1?0x82:2,flag=transportSelector===1?0:0x55;

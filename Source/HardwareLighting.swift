@@ -1,6 +1,17 @@
 import AppKit
 
 extension HardwareWindowController {
+    @objc func newCustomLightingDraft(){
+        guard !busy,baselineWasRead,baseline != nil,let current=profile else{message.stringValue="请先读取键盘，取得完整配置和 LED 映射。";return}
+        do{
+            let next=try WindowsProfile.newCustomLightingDraft(current)
+            let alert=NSAlert();alert.messageText="新建逐键配色？";alert.informativeText="当前颜色草稿将清空，并从全部熄灭开始。请先导出需要保留的配色。按键、宏、文本和设备设置保留；不会写入键盘。"
+            alert.addButton(withTitle:"取消，保留草稿");alert.addButton(withTitle:"新建空白配色")
+            guard alert.runModal() == .alertSecondButtonReturn else{return}
+            profile=next;loadLighting();loadLightColor();update()
+            message.stringValue="已新建空白逐键配色。选择按键并应用颜色后核对计划；尚未写入键盘。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
     @objc func importLightingDraft(){
         guard !busy,let current=profile else{message.stringValue="请先读取键盘。";return}
         let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
@@ -88,6 +99,7 @@ extension HardwareWindowController {
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
         place(label("内置灯效读取后即可核对，无需导入文件。不同模式可能忽略速度、方向或颜色。",12),8,206,832,27,in:builtins)
         let colors=tabs.tabViewItems[1].view!
+        place(button("新建逐键配色…",#selector(newCustomLightingDraft)),630,4,234,28,in:colors)
         controls.append(lightMultiple);place(lightMultiple,8,7,76,25,in:colors)
         lightRegion.addItems(withTitles:CherryLighting.regions);controls.append(lightRegion);place(lightRegion,94,4,163,28,in:colors)
         place(button("选择按键",#selector(selectLightRegion)),276,4,108,28,in:colors);place(lightCount,407,9,140,22,in:colors)
@@ -105,7 +117,7 @@ extension HardwareWindowController {
         place(button("应用到所选键",#selector(stageColor)),8,158,192,30,in:colors)
         place(button("熄灭所选键",#selector(stageLightOff)),218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
-        place(label("⌘ 点击可多选。逐键配色为静态，切换页面不会丢失已保存的编辑。",12),8,206,866,27,in:colors)
+        place(label("新建配色从全部熄灭开始。⌘ 点击可多选；逐键配色为静态。",12),8,206,866,27,in:colors)
         chooseLightTab(lightTabButtons[0])
     }
     @objc func chooseLightTab(_ sender:NSButton){

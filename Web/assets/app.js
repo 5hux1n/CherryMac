@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -55,6 +55,7 @@ function render(){
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
+  $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
@@ -157,6 +158,12 @@ document.querySelectorAll('[data-region]').forEach(b=>b.onclick=()=>{const regio
 $('color').oninput=()=>setColor(rgb($('color').value));$('hex').onchange=()=>act(()=>setColor(rgb($('hex').value)));
 ['red','green','blue'].forEach(id=>$(id).onchange=()=>act(()=>{const b=['red','green','blue'].map(id=>$(id).value===''?NaN:Number($(id).value));requireThat(b.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'RGB 必须是 0–255 的整数。');setColor(b);}));
 $('strength').oninput=()=>{const b=rgb($('color').value),peak=Math.max(...b),scale=Number($('strength').value)*255/100;setColor(b.map(v=>Math.round(peak?v/peak*scale:scale)));};
+$('new-custom-lighting').onclick=()=>operation(()=>{
+  requireThat(baseline&&profile.lightingMapping,'请先读取键盘，取得完整配置和 LED 映射。');
+  requireThat(confirm('新建逐键配色会清空当前颜色草稿，并从全部熄灭开始。请先导出需要保留的配色。按键、宏、文本和设备设置保留；不会写入键盘。继续？'),'已取消，原配色草稿保留。');
+  profile=newCustomLightingDraft(profile);syncLights();
+  status('已新建空白逐键配色。选择按键并应用颜色后核对计划；尚未写入键盘。');
+},{localOnly:true});
 $('paint').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,$('pattern').value,rgb($('hex').value),rgb($('end-color').value),profile.lightingMapping);syncLights();status(`已为 ${selection.size} 键加入配色，尚未写入。`);});
 $('off').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,'solid',[0,0,0],[0,0,0],profile.lightingMapping);syncLights();status('所选键已设为熄灭，尚未写入。');});
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;

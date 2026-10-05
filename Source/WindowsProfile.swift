@@ -1249,7 +1249,9 @@ enum WindowsProfile {
         guard profile.snapshot.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"请先读取当前键盘，配置与基线的固件信息必须一致。")}
         if profile.snapshot.parameters[1]==8,profile.lightingMapping==nil{throw HardwareError(message:"逐键写入核对需要读取灯光映射。")}
         let plan:OfficialLightingPlan
-        if let template=profile.windowsTemplateJSON{
+        if profile.snapshot.parameters[1]==8{
+            plan=try planCustomLighting(profile,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        }else if let template=profile.windowsTemplateJSON{
             let data=try encodeProfileLightingDraft(profile,template:Data(template.utf8))
             plan=try planOfficialLighting(data,baseline:baseline,lightingMapping:profile.lightingMapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         }else{plan=try planBuiltInLighting(profile.snapshot,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)}
@@ -1273,13 +1275,35 @@ enum WindowsProfile {
     }
     // Direct editing reuses the traced sender without inventing an official
     // document or treating stored RGB as an unscaled color source.
-    static func planBuiltInLighting(_ snapshot:HardwareSnapshot,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
+    static func newCustomLightingDraft(_ profile:HardwareProfile)throws->HardwareProfile {
+        try profile.validate();try profile.snapshot.validate()
+        guard profile.snapshot.colors != nil,profile.snapshot.macroData != nil,let mapping=profile.lightingMapping else{throw HardwareError(message:"请先读取完整配置及 LED 映射。")}
+        _ = try mapping.slots(for:profile.snapshot)
+        var result=profile;result.snapshot.colors=Array(repeating:0,count:378);result.snapshot.parameters[1]=8;result.lightingColorEncoding = .officialRGB
+        try result.validate();return result
+    }
+    private static func editorLightingParameters(_ snapshot:HardwareSnapshot,bank:Int,transportSelector:Int,chunkCapacity:Int)throws->(head:[UInt8],lightOpenFlag:UInt8) {
         try snapshot.validate()
         guard snapshot.colors != nil,snapshot.macroData != nil,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity)else{throw HardwareError(message:"需要完整配置，且配置地址、传输分支和报告容量须在离线计划范围内。")}
         let p=snapshot.parameters
-        guard p[1] != 8 else{throw HardwareError(message:"逐键配色计划需要先导入 Windows 官方原始配色。")}
-        guard CherryLighting.modes.contains(where:{$0.1==p[1]}),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前内置灯效参数超出本型号已核对范围，请先保存有效模式、亮度、速度和方向。")}
-        return assembleLightingPlan(head:[UInt8(bank)]+Array(p[1..<9]),lightOpenFlag:p[21],colors:nil,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,beginRequired:beginRequired)
+        guard CherryLighting.modes.contains(where:{$0.1==p[1]}),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数超出本型号已核对范围，请先保存有效模式、亮度、速度和方向。")}
+        return ([UInt8(bank)]+Array(p[1..<9]),p[21])
+    }
+    static func planBuiltInLighting(_ snapshot:HardwareSnapshot,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
+        let parameters=try editorLightingParameters(snapshot,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity)
+        guard parameters.head[1] != 8 else{throw HardwareError(message:"逐键配色需要新建配色或导入 Windows 官方原始配色。")}
+        return assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:nil,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,beginRequired:beginRequired)
+    }
+    static func planCustomLighting(_ profile:HardwareProfile,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
+        try profile.validate()
+        let parameters=try editorLightingParameters(profile.snapshot,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity)
+        guard parameters.head[1]==8,profile.lightingColorEncoding == .officialRGB else{throw HardwareError(message:"请先新建逐键配色，或导入 Windows 官方原始配色；不能将读回颜色直接当作原始 RGB。")}
+        guard let mapping=profile.lightingMapping else{throw HardwareError(message:"逐键配色需要有效 LED 映射。")}
+        let slots=try mapping.slots(for:profile.snapshot),coefficient=CherryLighting.officialBrightnessCoefficients[Int(parameters.head[2])]
+        var colors=[UInt8](repeating:0,count:378)
+        // Match Utility's zero-filled output bank; scale raw RGB only once.
+        for slot in slots.compactMap({$0}){for channel in 0..<3{colors[slot*3+channel]=UInt8((Int(profile.snapshot.colors![slot*3+channel])*coefficient)>>8)}}
+        return assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:colors,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,beginRequired:beginRequired)
     }
     private static func assembleLightingPlan(head:[UInt8],lightOpenFlag:UInt8,colors:[UInt8]?,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)->OfficialLightingPlan {
         let finish=transportSelector==1 ? 0x82:2,flag=transportSelector==1 ? 0:0x55
