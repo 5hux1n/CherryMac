@@ -248,16 +248,20 @@ $('connect').onclick=()=>{
 };
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
 $('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping)profile.lightingMapping=clone(baselineLightingMapping);else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
+function adoptImportedProfile(next,name){
+  const mixed=textProduct&&typeof next.hostTextJSON==='string';
+  // Validate text before replacing either editor; imports never enable the service.
+  if(mixed)selectImportedText(JSON.parse(next.hostTextJSON),name);
+  else if(textProduct){textRoot=null;$('text-summary').textContent='本配置未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
+  profile=next;refreshMacros();loadMacro();loadPlayback();syncLights();
+  return mixed;
+}
 $('import').onclick=()=>$('file').click();
 $('file').onchange=()=>operation(async()=>{
   const file=$('file').files[0];$('file').value='';if(!file)return;
   requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');
-  const raw=await file.text(),root=JSON.parse(raw),p=parseProfile(raw,baseline,{deferHostText:textProduct,lightingMapping:profile.lightingMapping});
-  const mixed=textProduct&&typeof p.hostTextJSON==='string';
-  // Both parsers validate before replacing either editor. No HID writes here.
-  if(mixed)selectImportedText(JSON.parse(p.hostTextJSON),file.name);
-  else if(textProduct){textRoot=null;$('text-summary').textContent='本配置未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
-  profile=p;refreshMacros();loadMacro();loadPlayback();syncLights();
+  const raw=await file.text(),p=parseProfile(raw,baseline,{deferHostText:textProduct,lightingMapping:profile.lightingMapping});
+  const mixed=adoptImportedProfile(p,file.name);
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
 });
 $('review-default').onclick=()=>$('default-review-file').click();
@@ -307,7 +311,7 @@ $('default-file').onchange=()=>operation(async()=>{
 });
 $('export').onclick=()=>act(()=>{const output=clone(profile);if(textProduct){delete output.hostTextJSON;if(textRoot!==null)output.hostTextJSON=JSON.stringify(textRoot);}validateProfile(output);requireThat(new TextEncoder().encode(JSON.stringify(output,null,2)).length<=3_000_000,'配置文件超过 3 MB，请精简文本或分别导出。');download(output,'CherryMac-profile.json');status('配置已导出，包含选中的文本定义；文本恢复记录需在文本页另行导出。');});
 $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const template=JSON.parse(profile.windowsTemplateJSON),mixed=textProduct&&textRoot!==null;const output=mixed?exportWindowsKeysMacrosAndText(profile,template,textRoot,baseline):exportWindowsKeysAndMacros(profile,template);download(exportProfileWindowsLightingDraft(profile,output),'CHERRY-configuration.json');const lightingNote=profile.lightingColorEncoding==='officialRGB'?'包含当前灯效草稿':'包含当前内置灯效；逐键配色沿用导入模板';status(`${mixed?'已合并导出 Windows 格式键位、宏与文本':'已导出 Windows 格式键位与宏'}；${lightingNote}；设备设置沿用导入模板。`);});
-$('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(backupConfiguration(record),`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>act(()=>{profile=parseProfile(JSON.stringify(backupConfiguration(record)));refreshMacros();loadMacro();loadPlayback();syncLights();switchTab('keys');status('备份已导入编辑区。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
+$('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(backupConfiguration(record),`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>operation(()=>{const next=parseProfile(JSON.stringify(backupConfiguration(record)));adoptImportedProfile(next,'键盘备份');switchTab('keys');status('备份已导入编辑区，原文本草稿已清除，输入服务保持关闭。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
 $('diagnostics').onclick=()=>operation(async()=>{
   await Promise.all([hid?.logTasks,pageLogTasks]);
   const results=await Promise.allSettled([listLogs(),listBackups(),macroLocalRecords(),listDefaultTransactions()]),names=['usbLogs','backups','macroLocalRecords','defaultTransactions'],records={},storageErrors={};
