@@ -653,10 +653,13 @@ export async function executeDefaultTransaction(review,{recovery=null,source,ope
 }
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
-  requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');
+  requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo),'请先读取当前键盘，配置与基线的固件信息必须一致。');
   if(profile.snapshot.parameters[1]===8)requireThat(profile.lightingMapping!=null,'逐键写入核对需要读取灯光映射。');
-  const template=exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON));
-  const plan=planOfficialLighting(template,baseline,profile.lightingMapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true}),target=officialLightingReadbackTarget(plan,baseline);
+  const options={bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true};
+  const plan=typeof profile.windowsTemplateJSON==='string'
+    ?planOfficialLighting(exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON)),baseline,profile.lightingMapping,options)
+    :planBuiltInLighting(profile.snapshot,options);
+  const target=officialLightingReadbackTarget(plan,baseline);
   return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{})};
 }
 export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
@@ -665,11 +668,26 @@ export function planOfficialLighting(template,baseline,lightingMapping,{bank,tra
   if(lightingMapping!=null)lightingMappingSlots(lightingMapping,baseline);
   const parameters=prepareOfficialLightingParameters(template,bank);
   requireThat(modes.some(([code])=>code===parameters.head[1]),'此灯效不在本型号已核对的模式列表中。');
+  let colors=null;
+  if(parameters.head[1]===8){requireThat(lightingMapping!=null,'官方逐键颜色计划需要有效 LED 映射。');colors=prepareOfficialCustomColors(template,baseline,lightingMapping);}
+  return assembleLightingPlan(parameters,colors,{bank,transportSelector,chunkCapacity,beginRequired});
+}
+// Direct built-in editing reuses the confirmed sender without interpreting
+// a brightness-scaled firmware RGB bank as an unscaled custom-color source.
+export function planBuiltInLighting(snapshot,{bank,transportSelector,chunkCapacity,beginRequired}){
+  validateSnapshot(snapshot,true);
+  requireThat(Number.isInteger(bank)&&bank>=0&&bank<=127&&[0,1].includes(transportSelector)&&Number.isInteger(chunkCapacity)&&chunkCapacity>=1&&chunkCapacity<=56&&typeof beginRequired==='boolean','配置地址、传输分支或报告容量超出离线计划范围。');
+  const p=snapshot.parameters;
+  requireThat(p[1]!==8,'逐键配色计划需要先导入 Windows 官方原始配色。');
+  requireThat(modes.some(([code])=>code===p[1])&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前内置灯效参数超出本型号已核对范围，请先保存有效模式、亮度、速度和方向。');
+  return assembleLightingPlan({head:[bank,...p.slice(1,9)],lightOpenFlag:p[21]},null,{bank,transportSelector,chunkCapacity,beginRequired});
+}
+function assembleLightingPlan(parameters,colors,{bank,transportSelector,chunkCapacity,beginRequired}){
   const finishCommand=transportSelector===1?0x82:2,flag=transportSelector===1?0:0x55;
   const chunks=(command,offset,flag,data)=>Array.from({length:Math.ceil(data.length/chunkCapacity)},(_,i)=>({command,offset:offset+i*chunkCapacity,flag,data:data.slice(i*chunkCapacity,(i+1)*chunkCapacity)}));
   const stage=(name,writes)=>({name,beginRequired,beginCommand:transportSelector===1?0x81:1,writes,finishCommand,finishDelayMilliseconds:10});
   const stages=[stage('parameters',[...chunks(6,bank*64,flag,parameters.head),...chunks(6,bank*64+21,flag,[parameters.lightOpenFlag]),...chunks(6,bank*64+24,flag,[1])])];
-  if(parameters.head[1]===8){requireThat(lightingMapping!=null,'官方逐键颜色计划需要有效 LED 映射。');stages.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,prepareOfficialCustomColors(template,baseline,lightingMapping))));}
+  if(colors!==null)stages.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,colors)));
   return {format:'CherryMacOfficialLightingPlan',version:2,hardwareReady:false,bank,transportSelector,chunkCapacity,stages};
 }
 // Offline rendering only; this object is never a transport authorization.

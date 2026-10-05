@@ -68,7 +68,7 @@ extension HardwareWindowController {
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;lightTabView=tabs;place(tabs,0,44,930,246,in:pane)
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
-        let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="先保存到编辑区再核对；仅导出计划。";place(review,690,4,210,30,in:pane)
+        let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="读取后保存内置灯效即可核对，无需官方文件；逐键配色仍需原始颜色。仅导出计划。";place(review,690,4,210,30,in:pane)
         #if CHERRY_LIGHTING_TEST
         place(button("独立灯效验收…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
         #endif
@@ -86,7 +86,7 @@ extension HardwareWindowController {
         place(button("使用此颜色",#selector(stageGlobalLightColor)),625,99,139,30,in:builtins)
         place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
-        place(label("不同模式可能忽略不适用的速度、方向和颜色设置。",12),8,206,832,27,in:builtins)
+        place(label("内置灯效读取后即可核对，无需导入文件。不同模式可能忽略速度、方向或颜色。",12),8,206,832,27,in:builtins)
         let colors=tabs.tabViewItems[1].view!
         controls.append(lightMultiple);place(lightMultiple,8,7,76,25,in:colors)
         lightRegion.addItems(withTitles:CherryLighting.regions);controls.append(lightRegion);place(lightRegion,94,4,163,28,in:colors)
