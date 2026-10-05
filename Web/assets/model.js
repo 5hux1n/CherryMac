@@ -1140,7 +1140,7 @@ export function prepareOfficialMacroDraftReceipt({before,factoryKeymap,macros,bi
     requireThat(![6,71].includes(slot),'原宏覆盖内部键，停止转换。');expected.keymap.splice(slot*3,3,0x20,0,0);
   }
   for(const r of layout.records)expected.keymap.splice(r.physicalSlot*3,3,...r.binding);
-  if(layout.bank!==null)expected.macroData=clone(layout.bank);
+  if(layout.bank!==null)expected.macroData.splice(0,layout.usedBytes,...layout.bank.slice(0,layout.usedBytes));
   return clone({format:'CherryMacOfficialMacroDraftReceipt',version:1,hardwareReady:false,before,factoryKeymap,macros,bindings,modes,layout,expected});
 }
 export function validateOfficialMacroDraftReceipt(receipt){

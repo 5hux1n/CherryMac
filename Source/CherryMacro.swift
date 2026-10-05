@@ -431,7 +431,9 @@ struct OfficialMacroDraftReceipt:Codable,Equatable {
         for record in layout.records {
             expected.keymap.replaceSubrange(record.physicalSlot*3..<record.physicalSlot*3+3,with:record.binding)
         }
-        if let bank=layout.bank{expected.macroData=bank}
+        if let bank=layout.bank{
+            var target=originalBank;target.replaceSubrange(0..<layout.usedBytes,with:bank.prefix(layout.usedBytes));expected.macroData=target
+        }
         return .init(format:"CherryMacOfficialMacroDraftReceipt",version:1,hardwareReady:false,
             before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes,layout:layout,expected:expected)
     }

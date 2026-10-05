@@ -1701,6 +1701,10 @@ def inspect_macro_capacity_sender(pe):
         0x5000E6: "8d048a", 0x500240: "0fb688fa1d0000",
         0x500247: "c1e107", 0x50024A: "0faf4d08",
         0x500269: "e822bbfdff",
+        0x50024F: "8b95d4fcffff", 0x500255: "52",
+        0x4DBE59: "3b450c", 0x4DBE5C: "0f83c0010000",
+        0x4DBE75: "3b550c", 0x4DBE8F: "8b550c",
+        0x4DBE92: "2b9578ffffff", 0x4DBEAC: "884c05bc",
     }
     for address, encoded in checks.items():
         raw = bytes.fromhex(encoded)
@@ -1709,6 +1713,9 @@ def inspect_macro_capacity_sender(pe):
     digest = hashlib.sha256(pe.at(0x4FF710, 0x50035A - 0x4FF710)).hexdigest()
     if digest != "b5173c2681529d65765d444cee70165257fdc75da27801063223b6f78bbd7967":
         raise ValueError("Unexpected target macro serializer body")
+    helper_digest = hashlib.sha256(pe.at(0x4DBD90, 0x4DC037-0x4DBD90)).hexdigest()
+    if helper_digest != "87c7314f69901a0b49924d9725d920dfdee7405becdf00c2a0b0bba82afb2309":
+        raise ValueError("Unexpected bounded macro transport helper body")
     return {"instructionChecks": len(checks), "virtualOffset": "0x2b4", "method": "0x4ff710",
             "functionEndExclusive": "0x50035a", "functionSHA256": digest,
             "capacityCheck": {"member": "byte(device+0x1dfa)", "multiplier": 128,
@@ -1719,7 +1726,10 @@ def inspect_macro_capacity_sender(pe):
             "emptyCollectedBindings": {"branch": "0x4ffa2f", "returnJump": "0x4ffae3",
                                        "result": 0, "sendsMacroBankFromThisMethod": False},
             "transport": {"targetCall": "0x500269", "helper": "0x4dbd90",
-                          "profileBase": "byte(device+0x1dfa) * 128 * profileIndex"},
+                          "profileBase": "byte(device+0x1dfa) * 128 * profileIndex",
+                          "transferLength": "serialized total byte count, not nominal bank capacity",
+                          "lastChunk": "minimum of chunk capacity and transferLength - cursor",
+                          "helperEndExclusive": "0x4dc037", "helperSHA256": helper_digest},
             "productPolicyDistinction": "The named sender counts bytes and encodes word-sized counts; CherryMac's current 32-macro/256-event guards are not established as official UI or firmware limits by this evidence.",
             "hardwareWriteAuthorized": False,
             "limits": "Sender structure only. Does not establish official UI limits, firmware acceptance of larger counts, or readable/writable final capacity byte. Zero collected bindings means no bank send in this method, not whole-program or firmware erasure/retention proof."}
@@ -2012,7 +2022,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 40,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 41,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
