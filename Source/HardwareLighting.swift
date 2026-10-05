@@ -1,6 +1,17 @@
 import AppKit
 
 extension HardwareWindowController {
+    @objc func importLightingDraft(){
+        guard !busy,let current=profile else{message.stringValue="请先读取键盘。";return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        guard panel.runModal() == .OK,let url=panel.url else{return}
+        do{
+            let values=try url.resourceValues(forKeys:[.fileSizeKey]);guard let size=values.fileSize,size<=1_000_000 else{throw HardwareError(message:"官方配置超过 1 MB。")}
+            let next=try WindowsProfile.importLightingDraft(Data(contentsOf:url),into:current)
+            profile=next;loadLighting();update()
+            message.stringValue="已仅载入官方灯效与配色到编辑区。键位、宏、文本及设备设置保留，尚未写入。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
     @objc func inspectLightingRecovery(){
         guard !busy else{return}
         let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
@@ -74,6 +85,7 @@ extension HardwareWindowController {
         place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)
         place(button("使用此颜色",#selector(stageGlobalLightColor)),625,99,139,30,in:builtins)
         place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
+        place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
         place(label("不同模式可能忽略不适用的速度、方向和颜色设置。",12),8,206,832,27,in:builtins)
         let colors=tabs.tabViewItems[1].view!
         controls.append(lightMultiple);place(lightMultiple,8,7,76,25,in:colors)
@@ -92,6 +104,7 @@ extension HardwareWindowController {
         place(label("渐变终点",12),548,105,66,23,in:colors);endColor.color = .systemBlue;controls.append(endColor);place(endColor,625,97,55,31,in:colors)
         place(button("应用到所选键",#selector(stageColor)),8,158,192,30,in:colors)
         place(button("熄灭所选键",#selector(stageLightOff)),218,158,172,30,in:colors)
+        place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
         place(label("⌘ 点击可多选。逐键配色为静态，切换页面不会丢失已保存的编辑。",12),8,206,866,27,in:colors)
         chooseLightTab(lightTabButtons[0])
     }

@@ -456,6 +456,28 @@ export function officialCustomColors(raw,brightness){
   const coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[brightness];return raw.map(value=>(value*coefficient)>>8);
 }
 // Pure file conversion; caller bank is not inferred from read-back parameters.
+export function importWindowsLightingDraft(profile,template){
+  validateProfile(profile);const source=clone(template);validateWindowsTemplate(source,new TextEncoder().encode(JSON.stringify(source)).length);
+  const light=source.LightInfo;requireThat(light&&typeof light==='object'&&!Array.isArray(light),'官方配置缺少灯效设置。');
+  const mode=MODE_CODES[winInt(light.SelectItem,'SelectItem',0,24)];requireThat(modes.some(([code])=>code===mode),'此灯效模式尚未支持。');
+  const result=clone(profile),root=typeof profile.windowsTemplateJSON==='string'?JSON.parse(profile.windowsTemplateJSON):clone(source);
+  if(typeof profile.windowsTemplateJSON!=='string')delete root.SystemStages;
+  result.snapshot.parameters.splice(1,8,mode,winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winInt(light.MultiColor,'MultiColor',0,1),...['Red','Green','Blue'].map(key=>winInt(light[key],key,0,255)));
+  result.snapshot.parameters[21]=winInt(light.LightOpenFlag,'LightOpenFlag',0,255);
+  root.LightInfo=clone(light);
+  if(Object.hasOwn(source,'CustomLightMode')){
+    const custom=source.CustomLightMode,groups=custom?.LightColorInfo;
+    requireThat(custom&&typeof custom==='object'&&!Array.isArray(custom)&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126&&Array.isArray(result.snapshot.colors),'官方配色需要完整的 126 项颜色表和当前颜色区。');
+    const mapping=profile.lightingMapping==null?null:lightingMappingSlots(profile.lightingMapping,profile.snapshot);
+    groups[0].forEach((entry,index)=>{
+      requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');
+      const bytes=['Red','Green','Blue'].map(key=>winInt(entry[key],key,0,255));if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);
+      const slot=mapping===null?physicalSlot(WINDOWS_DEFAULTS[index]):mapping[index];if(slot!=null)result.snapshot.colors.splice(slot*3,3,...bytes);
+    });
+    root.CustomLightMode=clone(custom);result.lightingColorEncoding='officialRGB';
+  }else requireThat(mode!==8,'自定义模式缺少官方原始颜色表。');
+  result.windowsTemplateJSON=JSON.stringify(root);validateProfile(result);return result;
+}
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');

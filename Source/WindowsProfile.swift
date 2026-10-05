@@ -748,6 +748,39 @@ enum WindowsProfile {
         }
         return try restorePlanFromRecord(prepared)
     }
+    // Import only the lighting section. Existing action indices must continue
+    // to refer to the current template, not the selected file's action list.
+    static func importLightingDraft(_ data:Data,into profile:HardwareProfile)throws->HardwareProfile {
+        try profile.validate();let source=try templateRoot(data)
+        guard let light=source["LightInfo"] as? [String:Any] else{throw HardwareError(message:"官方配置缺少灯效设置。")}
+        let mode=modeCodes[try integer(light["SelectItem"],"SelectItem",range:0...24)]
+        guard CherryLighting.modes.contains(where:{$0.1==mode})else{throw HardwareError(message:"此灯效模式尚未支持。")}
+        var result=profile
+        let parameters:[UInt8]=[mode,
+            UInt8(try integer(light["Light"],"Light",range:0...4)),
+            UInt8(4 - (try integer(light["Speed"],"Speed",range:0...4))),
+            UInt8(try integer(light["Fx"],"Fx",range:0...1)),
+            UInt8(try integer(light["MultiColor"],"MultiColor",range:0...1))] +
+            (try ["Red","Green","Blue"].map{UInt8(try integer(light[$0],$0,range:0...255))})
+        result.snapshot.parameters.replaceSubrange(1..<9,with:parameters)
+        result.snapshot.parameters[21]=UInt8(try integer(light["LightOpenFlag"],"LightOpenFlag",range:0...255))
+        var root=try profile.windowsTemplateJSON.map{try templateRoot(Data($0.utf8))} ?? source
+        if profile.windowsTemplateJSON==nil{root.removeValue(forKey:"SystemStages")}
+        root["LightInfo"]=light
+        if let custom=source["CustomLightMode"] {
+            guard let value=custom as? [String:Any],let groups=value["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126,result.snapshot.colors != nil else{throw HardwareError(message:"官方配色需要完整的 126 项颜色表和当前颜色区。")}
+            let mapping=try profile.lightingMapping?.slots(for:profile.snapshot)
+            for (index,entry) in groups[0].enumerated(){
+                let bytes=try ["Red","Green","Blue"].map{UInt8(try integer(entry[$0],$0,range:0...255))}
+                if let alpha=entry["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
+                if let slot=(mapping == nil ? physicalSlot(defaults[index]):mapping![index]){result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes)}
+            }
+            root["CustomLightMode"]=value;result.lightingColorEncoding = .officialRGB
+        }else if mode==8{throw HardwareError(message:"自定义模式缺少官方原始颜色表。")}
+        let encoded=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys])
+        _ = try templateRoot(encoded);result.windowsTemplateJSON=String(decoding:encoded,as:UTF8.self)
+        try result.validate();return result
+    }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot

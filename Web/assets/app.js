@@ -1,5 +1,5 @@
 import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -151,6 +151,16 @@ if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>{
       status('编辑区计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。');
     }catch(error){view.close();throw error;}
   }).finally(()=>{if(!sent)view.close();});
+};
+$('import-lighting').onclick=()=>{if(!busy)$('lighting-draft-file').click();};
+$('lighting-draft-file').onchange=()=>{
+  const file=$('lighting-draft-file').files[0];$('lighting-draft-file').value='';if(!file)return;
+  return operation(async()=>{
+    requireThat(baseline,'请先读取键盘。');requireThat(file.size<=1_000_000,'官方配置超过 1 MB。');
+    const next=importWindowsLightingDraft(profile,JSON.parse(await file.text()));
+    profile=next;syncLights();loadColor();
+    status('已仅载入官方灯效与配色到编辑区。键位、宏、文本及设备设置保留，尚未写入。');
+  },{localOnly:true});
 };
 $('review-lighting').onclick=()=>act(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
