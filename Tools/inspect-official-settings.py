@@ -442,6 +442,66 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
+def inspect_settings_ui_control_actions(path):
+    data = Path(path).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    expected_hash = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if digest != expected_hash:
+        raise ValueError("DuiLib hash differs from the analyzed version")
+    pe = PE32(data)
+    exports = {"?Selected@COptionUI@DuiLib@@UAEX_N0@Z": 0x110A9400,
+               "?SetValue@CSliderUI@DuiLib@@QAEXH@Z": 0x110B6610,
+               "?SendNotify@CPaintManagerUI@DuiLib@@QAEXPAVCControlUI@2@PB_WIJ_N@Z": 0x11068AD0}
+    directory = pe.base + pe.u32(pe.u32(0x3C) + 24 + 96)
+    count, names_count, functions, names, ordinals = struct.unpack("<5I", pe.at(directory + 20, 20))
+    if not 1 <= names_count <= count <= 65536:
+        raise ValueError("Invalid UI DLL export table")
+    found = {}
+    for index in range(names_count):
+        name_address = pe.base + pe.pointer(pe.base + names + index * 4)
+        name = pe.at(name_address, 256).split(b"\0", 1)[0].decode("ascii")
+        if name not in exports:
+            continue
+        ordinal = struct.unpack("<H", pe.at(pe.base + ordinals + index * 2, 2))[0]
+        if ordinal >= count or name in found:
+            raise ValueError("Invalid or duplicate UI DLL export")
+        found[name] = pe.base + pe.pointer(pe.base + functions + ordinal * 4)
+    if found != exports or pe.class_name(0x11113C94) != ".?AVCOptionUI@DuiLib@@" or pe.pointer(0x11113C94 + 0x1C0) != 0x110A9400:
+        raise ValueError("Unexpected option selection export or virtual table")
+    if pe.class_name(0x111141BC) != ".?AVCSliderUI@DuiLib@@" or pe.pointer(0x111141BC + 0x190) != 0x110AA520:
+        raise ValueError("Unexpected slider value callback virtual table")
+    checks = {
+        0x110AA557: "0fb68818070000", 0x110AA560: "0f84a7000000",
+        0x110AA584: "8b8a24070000", 0x110AA5A8: "8b8a1c070000",
+        0x110AA5C8: "6870c41111", 0x110AA5F6: "8b422c", 0x110AA5F9: "ffd0",
+        0x110A940C: "0fb688580b0000", 0x110A9413: "0fb65508",
+        0x110A9419: "7505", 0x110A941B: "e935010000",
+        0x110A9426: "8888580b0000", 0x110A94F1: "6a01", 0x110A94F3: "6a00",
+        0x110A94FD: "8b82c0010000", 0x110A9503: "ffd0",
+        0x110A9507: "0fb64d0c", 0x110A950D: "741a",
+        0x110A9524: "e8a7f5fbff", 0x110A952B: "0fb64d0c",
+        0x110A9531: "741a", 0x110A9548: "e883f5fbff",
+        0x110A9550: "e87bebfaff", 0x110A9558: "c20800",
+        0x110B662E: "e88d3effff", 0x110B6636: "c20400",
+        0x110AA4F9: "898824070000", 0x110AA502: "e8c9dbfaff",
+        0x110AA50F: "8b9090010000", 0x110AA515: "ffd2",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected UI control action instruction")
+    return {"dllSHA256": digest, "instructionChecks": len(checks), "exports": {k: hex(v) for k, v in exports.items()},
+            "optionVirtualTable": "0x11113c94", "selectedMethodOffset": "0x1c0",
+            "selectedParameters": ["selected", "sendNotify"],
+            "messageUpdateArguments": [True, False],
+            "directNotifyCalls": ["0x110a9524", "0x110a9548"],
+            "directNotifyGuard": "second argument must be nonzero; the audited child update passes zero",
+            "groupPeerSelection": {"virtualOffset": "0x1c0", "arguments": [False, True]},
+            "sliderValueUpdate": {"forwardMethod": "0x110aa4c0", "valueMember": "0x724", "followingVirtualOffset": "0x190", "callbackMethod": "0x110aa520", "followingTextVirtualOffset": "0x2c"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Current option direct notify is bypassed, but peer virtual dispatch, slider text virtual dispatch and invalidation are not exhaustively classified. No assertion that all callbacks lack hardware effects or that firmware polling settings are unsupported."}
+
+
 def inspect_settings_child_polling_message(pe):
     if pe.class_name(0x77813C) != ".?AVCBasicSetWnd@@" or pe.pointer(0x77813C + 0x80) != 0x426A70:
         raise ValueError("Unexpected basic settings child message dispatch")
@@ -646,7 +706,7 @@ def inspect_macro_ui(pe, skin):
             "limits": "Static selected resource and one recorder branch; not proof against all indirect/hidden paths or firmware wheel capability"}
 
 
-def inspect(path, skin=None, macro_ui=False):
+def inspect(path, skin=None, macro_ui=False, ui_dll=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != EXPECTED_SHA256:
@@ -767,7 +827,7 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 12,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 13,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -796,6 +856,8 @@ def inspect(path, skin=None, macro_ui=False):
         result["modelResource"] = inspect_model_resources(skin)
         result["settingsResource"] = inspect_settings_resources(skin)
         result["basicSettingsDialog"] = inspect_basic_settings_dialog(skin)
+    if ui_dll is not None:
+        result["settingsUIControlActions"] = inspect_settings_ui_control_actions(ui_dll)
     if macro_ui:
         if skin is None:
             raise ValueError("Macro UI audit requires --skin")
@@ -809,9 +871,10 @@ def main():
     parser.add_argument("executable", help="Local CHERRY-Utility-Software.exe; it will only be read")
     parser.add_argument("--skin", help="Optional extracted Skin directory; verifies target model resource without copying it")
     parser.add_argument("--macro-ui", action="store_true", help="Also audit the target macro resource, menu and recorder branch; requires --skin")
+    parser.add_argument("--ui-dll", help="Optional extracted DuiLib.dll; read-only control action audit")
     args = parser.parse_args()
     try:
-        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui), ensure_ascii=False, indent=2))
+        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui, args.ui_dll), ensure_ascii=False, indent=2))
     except (OSError, ValueError, struct.error, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
 
