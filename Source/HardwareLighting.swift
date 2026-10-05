@@ -198,12 +198,33 @@ extension HardwareWindowController {
                 prepared=try encoder.encode(WindowsProfile.reviewLightingDraft(profile,baseline:baseline))
             }else{prepared=nil}
         }catch{prepared=nil;preparationFailure=error.localizedDescription}
+        let editorBaseline=baseline,editorDraft=profile
+        let preparedReview=prepared.flatMap{try? JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:$0)}
         let acceptance=LightingAcceptanceWindow(queue:queue,prepared:prepared);lightingAcceptance=acceptance
         if let preparationFailure{acceptance.state.stringValue="编辑区计划不能生成：\(preparationFailure)。可载入已有恢复记录。"}
         owner.beginSheet(acceptance.window!){[weak self] _ in
             guard let self else{return};self.lightingAcceptance=nil;self.busy=false
             self.controls.forEach{$0.isEnabled=true};self.baseline=nil;self.baselineWasRead=false
-            self.message.stringValue="灯效验收窗口已关闭；请重新读取键盘后继续编辑。";self.update()
+            self.message.stringValue="灯效验收窗口已关闭；草稿保留，请重新读取键盘后继续编辑。"
+            if let receipt=acceptance.editorResult,acceptance.readback==receipt.current,
+               let original=editorBaseline,let draft=editorDraft{
+                do{
+                    try original.validate();try receipt.current.validate();try draft.validate()
+                    let accepted:Bool
+                    switch receipt.kind{
+                    case .write:
+                        accepted=receipt.review?.original==original && receipt.review?.target==receipt.current && receipt.review?.plan==preparedReview?.plan && preparedReview?.target==receipt.current
+                    case .restore:
+                        accepted=receipt.current==original
+                    }
+                    guard accepted else{throw HardwareError(message:"独立窗口结果与编辑区原计划不一致。")}
+                    // Keep the official raw RGB draft; a firmware readback has
+                    // already had brightness applied and must not replace it.
+                    self.profile=draft;self.baseline=receipt.current;self.baselineWasRead=true
+                    self.message.stringValue=receipt.kind == .write ? "灯效写入结果已接回编辑区，完整读回一致；未发送的键位、宏与文本草稿保留。外观与断电保存尚待验收。":"灯效恢复结果已接回编辑区，原始读回一致；所有未发送草稿保留。"
+                }catch{self.message.stringValue="灯效窗口已关闭，草稿保留；\(error.localizedDescription) 请重新读取键盘。"}
+            }
+            self.loadLighting();self.loadSelectedAssignment();self.update()
         }
     }
 }
@@ -217,9 +238,14 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     let summary=NSTextField(wrappingLabelWithString:"载入灯效写入核对文件，或之前保存的写入／恢复记录。")
     var buttons:[NSButton]=[];var running=false;var log:HardwareOperationLog?
     var review:WindowsProfile.LightingDraftReview?;var recoveryData:Data?
+    struct EditorResult{
+        enum Kind{case write,restore}
+        let kind:Kind;let current:HardwareSnapshot;let review:WindowsProfile.LightingDraftReview?
+    }
+    var editorResult:EditorResult?
     var readback:HardwareSnapshot?;var writtenTarget:HardwareSnapshot?;var attempted=false
     var manager:IOHIDManager?;var registryID:UInt64?;var cycle:CalculatorPowerCycleEvidence?
-    var refresh:Timer?;var focusObserver:NSObjectProtocol?
+    var refresh:Timer?;var focusObserver:NSObjectProtocol?;var connectionRevision=0
     var powerEvents:[[String:Any]]=[];var monitorFailure:String?
     init(queue:DispatchQueue,prepared:Data?=nil){
         self.queue=queue
@@ -256,7 +282,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         guard panel.runModal() == .OK,let url=panel.url else{return}
         resetInput();do{loadData(try Data(contentsOf:url),source:"选择的文件")}catch{fail(error);render()}
     }
-    func resetInput(){review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新计划；旧选择已清除。"}
+    func resetInput(){editorResult=nil;review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新计划；旧选择已清除。"}
     func loadData(_ data:Data,source:String){
         guard !running else{return};resetInput()
         do{
@@ -284,7 +310,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         IOHIDManagerRegisterDeviceRemovalCallback(m,{context,_,_,device in
             guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
             guard let selectedID=selfRef.registryID,selfRef.id(device)==selectedID else{return}
-            selfRef.readback=nil;selfRef.log?.requestCancellation()
+            selfRef.connectionRevision += 1
+            selfRef.readback=nil;selfRef.editorResult=nil;selfRef.log?.requestCancellation()
             if selfRef.writtenTarget != nil{
                 selfRef.cycle = .init(originalRegistryID:selectedID)
                 selfRef.cycle?.disconnected(at:ProcessInfo.processInfo.systemUptime)
@@ -304,9 +331,10 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:powerEvents,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("power-events.json"),options:.atomic)}catch{monitorFailure=error.localizedDescription;fail(error)}
     }
     func id(_ device:IOHIDDevice)->UInt64?{var value:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&value)==KERN_SUCCESS ? value:nil}
-    func perform(_ kind:String,_ body:@escaping (CherryUSB,HardwareOperationLog)throws->HardwareSnapshot?){
-        guard !running else{return};let operation:HardwareOperationLog
+    func perform(_ kind:String,completed:((HardwareSnapshot)->Void)?=nil,_ body:@escaping (CherryUSB,HardwareOperationLog)throws->HardwareSnapshot?){
+        guard !running else{return};editorResult=nil;let operation:HardwareOperationLog
         do{operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");operation.record("phase","started");try operation.requireHealthy()}catch{fail(error);return}
+        let startedRevision=connectionRevision
         log=operation;running=true;render();state.stringValue="正在操作，请保持窗口前台并松开全部按键…"
         queue.async{[weak self] in
             guard let self else{return}
@@ -322,7 +350,14 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             do{try operation.requireStorageHealthy()}catch{result = .failure(error)}
             let finalResult=result
             DispatchQueue.main.async{self.running=false;self.log=nil
-                if case .success(let snapshot)=finalResult{if let snapshot{self.readback=snapshot}}
+                if case .success(let snapshot)=finalResult{
+                    if self.connectionRevision==startedRevision,!operation.isCancelled{
+                        if let snapshot{self.readback=snapshot;completed?(snapshot)}
+                    }else{
+                        self.readback=nil;self.editorResult=nil
+                        self.state.stringValue="操作结束后设备已断开或收到停止请求；资料已保留，请重新读取后继续。"
+                    }
+                }
                 else if case .failure(let error)=finalResult{self.readback=nil;self.fail(error)}
                 self.render()
             }
@@ -357,7 +392,10 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     @objc func write(){
         guard !running,!attempted,let review,let selectedID=registryID,readback != nil,confirmation("写入所选灯效计划？") else{return}
         attempted=true;cycle=nil;writtenTarget=nil
-        perform("lighting-acceptance-write"){usb,log in
+        perform("lighting-acceptance-write",completed:{[weak self] current in
+            guard current==review.target else{return}
+            self?.editorResult=EditorResult(kind:.write,current:current,review:review)
+        }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
             let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
@@ -367,7 +405,9 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     }
     @objc func restore(){
         guard !running,let data=recoveryData,let selectedID=registryID,readback != nil,confirmation("重新核对并恢复原始灯效数据？")else{return}
-        perform("lighting-acceptance-restore"){usb,log in
+        perform("lighting-acceptance-restore",completed:{[weak self] current in
+            self?.editorResult=EditorResult(kind:.restore,current:current,review:nil)
+        }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"恢复会话与此前读取设备不同，请重新读取。")}
             let current=try usb.completeSnapshot()
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"恢复准备期间 USB 设备改变，请重新读取。")}
@@ -381,7 +421,11 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     @objc func powerOff(){guard !running,cycle?.confirmPowerOff(at:ProcessInfo.processInfo.systemUptime)==true else{return};savePowerEvent("userConfirmedPowerOff");state.stringValue=monitorFailure.map{"关电记录保存失败：\($0)"} ?? "已记录你的关电确认。至少等待 15 秒后开电、接 USB，并重新读取。";render()}
     @objc func retention(){
         guard !running,let target=writtenTarget,let evidence=cycle,evidence.hasConfirmedPowerCycle,let reconnectedID=evidence.reconnectedRegistryID,registryID==reconnectedID,monitorFailure==nil else{return}
-        perform("lighting-acceptance-retention"){usb,log in
+        let retainedReview=review
+        perform("lighting-acceptance-retention",completed:{[weak self] current in
+            guard let retainedReview,current==retainedReview.target else{return}
+            self?.editorResult=EditorResult(kind:.write,current:current,review:retainedReview)
+        }){usb,log in
             guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"读回会话不是本轮记录的重连设备，请重新核对。")}
             log.record("userConfirmedPowerOff",true);log.record("confirmedOffInterval",evidence.confirmedOffInterval ?? -1);log.record("originalRegistryID",evidence.originalRegistryID);log.record("reconnectedRegistryID",evidence.reconnectedRegistryID ?? 0)
             let current=try usb.completeSnapshot();guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"断电读回期间 USB 设备改变。")};try self.saveSnapshot(current,log);let matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData

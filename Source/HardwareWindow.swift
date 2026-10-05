@@ -718,11 +718,19 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             writeButtons.first(where:{$0.tag==2})?.toolTip="只写宏区与宏绑定键；普通键和灯效草稿保留。"
         }
         #endif
+        // Official RGB is a raw draft, whereas the device stores scaled RGB.
+        // Compare the projected write target so a completed write is not
+        // displayed as a pending change solely because brightness was applied.
+        var lightingComparisonColors=profile?.snapshot.colors
+        if lightingTab,let draft=profile,let baseline,draft.lightingColorEncoding == .officialRGB,
+           let review=try? WindowsProfile.reviewLightingDraft(draft,baseline:baseline){
+            lightingComparisonColors=review.target.colors
+        }
         for b in keyButtons{b.chosen=lightingTab ? lightSelection.contains(b.spec.id):b.spec.id==selected
             b.lightingColor=nil
             if lightingTab,let keySlot=CherryMatrix.slot(b.spec),let p=profile,let slot=p.colorSlot(keySlot),let colors=p.snapshot.colors{b.lightingColor=NSColor(srgbRed:CGFloat(colors[slot*3])/255,green:CGFloat(colors[slot*3+1])/255,blue:CGFloat(colors[slot*3+2])/255,alpha:1)}
             if let slot=CherryMatrix.slot(b.spec),let p=profile,let original=baseline{
-                if lightingTab{if let colorSlot=p.colorSlot(slot),let colors=p.snapshot.colors,let previous=original.colors{b.mapped=colors[colorSlot*3..<colorSlot*3+3] != previous[colorSlot*3..<colorSlot*3+3]}else{b.mapped=false}}else{b.mapped=p.snapshot.keymap[slot*3..<slot*3+3] != original.keymap[slot*3..<slot*3+3]}
+                if lightingTab{if let colorSlot=p.colorSlot(slot),let colors=lightingComparisonColors,let previous=original.colors{b.mapped=colors[colorSlot*3..<colorSlot*3+3] != previous[colorSlot*3..<colorSlot*3+3]}else{b.mapped=false}}else{b.mapped=p.snapshot.keymap[slot*3..<slot*3+3] != original.keymap[slot*3..<slot*3+3]}
             }else{b.mapped=false}}
         lightCount.stringValue="已选 \(lightSelection.count) 键"
         guard let key=keyboardLayout().first(where:{$0.id==selected})else{return}
