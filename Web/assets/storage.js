@@ -1,3 +1,4 @@
+import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 let database;
 function db(){if(!database)database=new Promise((resolve,reject)=>{const r=indexedDB.open('CherryMacWeb',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('备份数据库被其他页面占用。'));});return database;}
@@ -103,7 +104,15 @@ export async function listDefaultTransactions(){
 }
 
 // Storage callbacks are fixed here; callers supply only device/session actions.
-export function executeStoredDefaultTransaction(review,options){
-  const operationID=options.operationID??globalThis.crypto.randomUUID();
-  return executeDefaultTransaction(review,{...options,operationID,backup:snapshot=>saveDefaultBackup(operationID,snapshot),persist:record=>saveDefaultTransaction(record)});
+export async function executeStoredDefaultTransaction(review,options){
+  options={...options};review=clone(review);const recovery=clone(options.recovery??null),operationID=options.operationID??globalThis.crypto.randomUUID();let authorization=null;
+  try{return await executeDefaultTransaction(review,{...options,recovery,operationID,
+    read:async()=>{const snapshot=clone(await options.read());if(!authorization)authorization=recovery?DefaultCandidateAuthorization.recovery(recovery,snapshot):new DefaultCandidateAuthorization(review,snapshot);return snapshot;},
+    backup:snapshot=>saveDefaultBackup(operationID,snapshot),persist:record=>saveDefaultTransaction(record),
+    exchange:async request=>{
+      requireThat(authorization,'默认恢复尚未绑定完整起始配置。');
+      try{authorization.begin(request);const reply=Array.from(await options.exchange(clone(request)));await options.assertCurrent();authorization.accept(reply,request);return reply;}
+      catch(error){authorization.invalidate();throw error;}
+    }
+  });}finally{authorization?.invalidate();}
 }

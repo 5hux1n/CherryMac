@@ -1065,6 +1065,43 @@ enum WindowsProfile {
             return .init(operationID:operationID,direction:direction,status:status,traceReview:reviewed,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedDataPrefixes:prefixes)
         }
     }
+    // Exact packet scope only; device ownership remains the adapter's duty.
+    final class DefaultCandidateAuthorization {
+        private let packets:[OfficialLightingPlan.Report];private let deviceInfo:[UInt8]
+        private let lock=NSLock();private var index=0;private var pending=false;private var invalidated=false
+        init(review:DefaultConfigurationReview,started:HardwareSnapshot)throws {
+            let progress=try WindowsProfile.reviewDefaultRestoreProgress(review,current:started)
+            guard progress.configurationMatchesOriginal else{throw HardwareError(message:"默认恢复授权需要原始完整基线。")}
+            packets=try WindowsProfile.defaultConfigurationReports(review);deviceInfo=review.original.deviceInfo
+        }
+        init(recovery:DefaultRecoveryPlan,started:HardwareSnapshot)throws {
+            let progress=try WindowsProfile.reviewDefaultRecoveryProgress(recovery,current:started)
+            packets=progress.configurationMatchesOriginal ? []:recovery.reports;deviceInfo=recovery.sourceReview.original.deviceInfo
+        }
+        private func check(_ request:[UInt8])throws {
+            guard !invalidated,index<packets.count,request==packets[index].request else{throw HardwareError(message:"默认恢复报告偏离本次计划或授权已失效。")}
+        }
+        func validate(_ request:[UInt8])throws {
+            lock.lock();defer{lock.unlock()}
+            do{try check(request)}catch{invalidated=true;throw error}
+        }
+        func begin(_ request:[UInt8])throws {
+            lock.lock();defer{lock.unlock()}
+            do{try check(request);guard !pending else{throw HardwareError(message:"默认恢复上一包尚未确认，不能重复发送。")};pending=true}
+            catch{invalidated=true;throw error}
+        }
+        func accept(_ reply:[UInt8],request:[UInt8])throws {
+            lock.lock();defer{lock.unlock()}
+            do{
+                try check(request);guard pending else{throw HardwareError(message:"默认恢复回复没有对应发送记录。")}
+                try packets[index].validateReply(reply)
+                if request[3]==3{guard reply[8..<42].elementsEqual(deviceInfo) else{throw HardwareError(message:"默认恢复设备查询与原始资料不一致。")}}
+                pending=false;index+=1
+            }catch{invalidated=true;pending=false;throw error}
+        }
+        func invalidate(){lock.lock();invalidated=true;pending=false;lock.unlock()}
+        var complete:Bool{lock.lock();defer{lock.unlock()};return !invalidated && !pending && index==packets.count}
+    }
     // Append-only evidence per operation; constructed without filesystem access.
     final class DefaultTransactionStore {
         let directory:URL;let operationID:String
@@ -1131,7 +1168,20 @@ enum WindowsProfile {
         func execute(review:DefaultConfigurationReview,recovery:DefaultRecoveryPlan?=nil,source:String,
             assertCurrent:()throws->Void,cancelled:()->Bool,read:()throws->HardwareSnapshot,
             clock:()->Int,wait:(Int)throws->Void,exchange:([UInt8])throws->[UInt8])throws->DefaultTransactionRecord {
-            try WindowsProfile.executeDefaultTransaction(review:review,recovery:recovery,source:source,operationID:operationID,assertCurrent:assertCurrent,cancelled:cancelled,read:read,backup:self.backup,persist:self.persist,clock:clock,wait:wait,exchange:exchange)
+            var authorization:DefaultCandidateAuthorization?
+            defer{authorization?.invalidate()}
+            return try WindowsProfile.executeDefaultTransaction(review:review,recovery:recovery,source:source,operationID:operationID,assertCurrent:assertCurrent,cancelled:cancelled,read:{
+                let snapshot=try read()
+                if authorization==nil {
+                    if let recovery{authorization=try DefaultCandidateAuthorization(recovery:recovery,started:snapshot)}
+                    else{authorization=try DefaultCandidateAuthorization(review:review,started:snapshot)}
+                }
+                return snapshot
+            },backup:self.backup,persist:self.persist,clock:clock,wait:wait,exchange:{request in
+                guard let authorization else{throw HardwareError(message:"默认恢复尚未绑定完整起始配置。")}
+                do{try authorization.begin(request);let reply=try exchange(request);try assertCurrent();try authorization.accept(reply,request:request);return reply}
+                catch{authorization.invalidate();throw error}
+            })
         }
         func records()throws->[DefaultTransactionRecord] {
             try locked {
