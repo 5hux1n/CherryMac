@@ -766,7 +766,22 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         UserDefaults.standard.set(url.path,forKey:"hardware.macroMetadata")
     }
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
-    @objc func readKeyboard(){readKeyboardThen()}
+    @objc func readKeyboard(){
+        guard !busy else{return}
+        if let draft=profile{
+            let original=baseline ?? HardwareSnapshot.demo()
+            let resolved=(try? draft.resolvedMacros()) ?? draft.snapshot
+            let contentChanged=resolved.deviceInfo != original.deviceInfo || resolved.keymap != original.keymap || resolved.parameters != original.parameters || resolved.colors != original.colors || resolved.macroData != original.macroData
+            let replacesDraft=draft.windowsTemplateJSON != nil || draft.hostTextJSON != nil || contentChanged
+            if replacesDraft{
+                let alert=NSAlert();alert.messageText="重新读取并替换编辑区？"
+                alert.informativeText="当前编辑区含草稿或导入的配置资料。重新读取会用键盘配置替换它们；请先在配置与备份导出保存。读取本身不会写入键盘。"
+                alert.addButton(withTitle:"取消，保留编辑区");alert.addButton(withTitle:"已保存，重新读取")
+                guard alert.runModal() == .alertSecondButtonReturn else{return}
+            }
+        }
+        readKeyboardThen()
+    }
     func readKeyboardThen(_ completion:((HardwareSnapshot)->Void)? = nil){
         guard !busy else{return};suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};message.stringValue="正在读取 USB 配置…"
         queue.async{[weak self] in

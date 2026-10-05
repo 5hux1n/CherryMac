@@ -109,7 +109,14 @@ function renderSteps(){
   });renderMacroSummary();}
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];if(p.macroModes)delete p.macroModes[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
-async function read(){const s=await hid.snapshot();let mapping=null,mappingError=null;try{mapping=await hid.readLightingMapping(s);}catch(error){mappingError=error.message;}const keepLightingDraft=lightingReconnectSnapshot!==null;
+async function read(){
+  if(!lightingReconnectSnapshot){
+    let draft=profile.snapshot;try{draft=resolveMacros(profile);}catch{}
+    if(profile.windowsTemplateJSON||!sameSnapshot(draft,baseline??demo)){
+      requireThat(confirm('重新读取会替换当前编辑区草稿和导入的配置资料。请先在配置与备份导出保存。继续读取？（不会写入键盘）'),'已取消读取，编辑区保留。');
+    }
+  }
+  const s=await hid.snapshot();let mapping=null,mappingError=null;try{mapping=await hid.readLightingMapping(s);}catch(error){mappingError=error.message;}const keepLightingDraft=lightingReconnectSnapshot!==null;
   if(keepLightingDraft&&!sameSnapshot(s,lightingReconnectSnapshot)){
     baseline=null;throw new Error('新读回与返回的灯效结果不同；编辑区草稿保留，未写入。请保存草稿并核对键盘配置。');
   }
