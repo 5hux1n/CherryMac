@@ -860,6 +860,7 @@ enum WindowsProfile {
         guard p[1] != 8 else{throw HardwareError(message:"自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。")}
         guard var light=root["LightInfo"] as? [String:Any],CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数或官方模板无效，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
+        light["LightOpenFlag"]=Int(p[21])
         for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(p[6+offset])}
         root["LightInfo"]=light
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
@@ -874,6 +875,7 @@ enum WindowsProfile {
         let p=snapshot.parameters
         guard CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数超出本型号已核对范围，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
+        light["LightOpenFlag"]=Int(p[21])
         for (offset,name) in ["Red","Green","Blue"].enumerated(){light[name]=Int(p[6+offset])}
         for i in groups[0].indices {
             for name in ["Red","Green","Blue"]{_ = try integer(groups[0][i][name],name,range:0...255)}
@@ -977,6 +979,9 @@ enum WindowsProfile {
             result.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:bytes);keyCount+=1
         }
         if let lighting=root["LightInfo"] as? [String:Any] {
+            // Preserve the current byte when an older file omits the field.
+            // Its representation is known; physical on/off semantics are not.
+            if let flag=lighting["LightOpenFlag"]{result.snapshot.parameters[21]=UInt8(try integer(flag,"LightOpenFlag",range:0...255))}
             let selected=try integer(lighting["SelectItem"],"SelectItem",range:0...modeCodes.count-1)
             let mode=modeCodes[selected]
             guard CherryLighting.modes.contains(where:{$0.1==mode})else{throw HardwareError(message:"此 Windows 灯效不在本型号已验证的 12 个模式中。")}

@@ -384,7 +384,7 @@ export function exportProfileWindowsLightingDraft(profile,template){
   const p=profile.snapshot.parameters;requireThat(p[1]!==8,'自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。');
   const light=root.LightInfo,selected=MODE_CODES.indexOf(p[1]);
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数或官方模板无效，不能导出。');
-  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
+  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8],LightOpenFlag:p[21]});
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的官方配置文件过大。');return root;
 }
 export function exportWindowsLightingDraft(snapshot,template,lightingMapping=null){
@@ -393,7 +393,7 @@ export function exportWindowsLightingDraft(snapshot,template,lightingMapping=nul
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&custom&&typeof custom==='object'&&!Array.isArray(custom)&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126&&Array.isArray(snapshot.colors),'导出灯效需要完整读取配色和带 126 项颜色表的官方模板。');
   const mapping=lightingMapping==null?null:lightingMappingSlots(lightingMapping,snapshot);
   const p=snapshot.parameters,selected=MODE_CODES.indexOf(p[1]);requireThat(modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数超出本型号已核对范围，不能导出。');
-  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8]});
+  Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8],LightOpenFlag:p[21]});
   groups[0].forEach((entry,i)=>{requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');for(const name of ['Red','Green','Blue'])winInt(entry[name],name,0,255);if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);const slot=mapping===null?physicalSlot(WINDOWS_DEFAULTS[i]):mapping[i];if(slot!=null)['Red','Green','Blue'].forEach((name,offset)=>entry[name]=snapshot.colors[slot*3+offset]);});
   requireThat(new TextEncoder().encode(JSON.stringify(root)).length<=1_000_000,'导出的官方配置文件过大。');return root;
 }
@@ -442,7 +442,8 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');
-    p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winInt(l.MultiColor,'彩虹',0,1),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));}
+    p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winInt(l.MultiColor,'彩虹',0,1),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));
+    if(Object.hasOwn(l,'LightOpenFlag'))p.snapshot.parameters[21]=winInt(l.LightOpenFlag,'LightOpenFlag',0,255);}
   const groups=root.CustomLightMode?.LightColorInfo;if(root.CustomLightMode){requireThat(Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'逐键颜色组不匹配。');groups[0].forEach((c,i)=>{requireThat(c&&typeof c==='object'&&!Array.isArray(c),'逐键颜色记录结构无效。');const rgb=['Red','Green','Blue'].map(k=>winInt(c[k],k,0,255));if(Object.hasOwn(c,'Alpha'))winInt(c.Alpha,'Alpha',0,255);const slot=lightingSlots===null?physicalSlot(WINDOWS_DEFAULTS[i]):lightingSlots[i];if(slot!=null)p.snapshot.colors.splice(slot*3,3,...rgb);});}
   if(root.CustomLightMode)p.lightingColorEncoding='officialRGB';
   if(!equal(p.macroBindings,old)||imported.size)p.snapshot=resolveMacros(p);validateProfile(p);return p;
