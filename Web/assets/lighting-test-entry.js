@@ -37,6 +37,9 @@ async function persist(record){
 }
 async function operation(kind,body){
   if(busy)return;const revision=connectionRevision;
+  // Returning performs only fresh reads and delivery. Preserve its receipt on
+  // failure so reconnection can retry the fresh read without another write.
+  const retainedEditorRecord=kind==='return-editor'?clone(editorRecord):null;
   if(['load-file','load-editor-plan','connect','write','restore','retention','confirm-power-off'].includes(kind))editorRecord=null;
   pendingEditorRecord=null;busy=true;render();
   try{
@@ -44,7 +47,7 @@ async function operation(kind,body){
     if(pendingEditorRecord&&revision===connectionRevision&&!abort?.signal.aborted&&hid&&!hid.dead){
       reviewLightingEditorResult(pendingEditorRecord,editorReview);editorRecord=clone(pendingEditorRecord);
     }
-  }catch(error){editorRecord=null;status(error.message,true);}finally{pendingEditorRecord=null;abort=null;busy=false;render();}
+  }catch(error){editorRecord=retainedEditorRecord;status(error.message,true);}finally{pendingEditorRecord=null;abort=null;busy=false;render();}
 }
 async function loadInput(value,name){
   editorRecord=null;input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;

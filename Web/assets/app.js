@@ -169,23 +169,30 @@ function closeLightingReturnChannel(){lightingReturnChannel?.close();lightingRet
 function prepareLightingReturnChannel(id,review){
   closeLightingReturnChannel();requireThat(typeof BroadcastChannel==='function','浏览器不支持编辑器结果回传。');
   const channel=new BroadcastChannel(lightingResultChannelName(id));lightingReturnChannel=channel;
+  let acceptedRecord=null;
   lightingReturnTimer=setTimeout(closeLightingReturnChannel,7_200_000);
   channel.onmessage=event=>{
     const value=event.data;if(value?.kind!=='lighting-editor-result'||value.id!==id)return;
     let accepted=false,error='';
     try{
+      const current=reviewLightingEditorResult(value.record,review);
+      // A lost acknowledgement may be retried after the editor has moved on.
+      // Confirm the identical receipt without adopting it a second time.
+      if(acceptedRecord!==null){
+        requireThat(equal(value.record,acceptedRecord),'本计划已经接收了另一份结果，请重新准备灯效计划。');
+        channel.postMessage({kind:'lighting-editor-result-ack',id,accepted:true,error:''});return;
+      }
       requireThat(!busy&&!recorder,'编辑器正在操作，请稍后重试返回。');
       requireThat(!hid||hid.dead,'编辑器已有 USB 会话，请先断开再返回结果。');
       requireThat(equal(baseline,review.original),'编辑器读回基线已改变，请重新准备。');
-      const current=reviewLightingEditorResult(value.record,review);
       requireThat(equal(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
       // Keep all drafts, including official raw RGB. A new USB read is still
       // required before adopting this evidence as a connected baseline.
-      lightingReconnectSnapshot=current;accepted=true;
+      lightingReconnectSnapshot=current;acceptedRecord=clone(value.record);accepted=true;
       status('灯效结果已核对，全部编辑草稿保留。请重新连接并读取键盘，读回一致后继续。');
     }catch(failure){error=String(failure.message).slice(0,4096);status(error,true);}
     channel.postMessage({kind:'lighting-editor-result-ack',id,accepted,error});
-    if(accepted)closeLightingReturnChannel();
+    // Keep this bounded channel available to acknowledge the same receipt again.
     render();
   };
 }
