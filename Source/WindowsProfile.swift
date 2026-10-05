@@ -808,6 +808,33 @@ enum WindowsProfile {
         _ = try templateRoot(encoded);result.windowsTemplateJSON=String(decoding:encoded,as:UTF8.self)
         try result.validate();return result
     }
+    struct DefaultConfigurationReview:Codable {
+        var format="CherryMacDefaultConfigurationReview";var version=1;var hardwareReady=false
+        var original:HardwareSnapshot;var candidate:HardwareSnapshot
+        var officialTemplateJSON:String;var factoryKeymap:[UInt8]
+        var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
+        var changedParameterOffsets:[Int];var protectedChangedSlots:[Int]
+        var macroBindingSlots:[Int];var unsupportedFactorySlots:[Int]
+        var pendingSystemFields:[String];var retainedMacroStorage=true
+        var completeRestoreImplemented=false
+    }
+    // Offline candidate only. Neither this report nor read metadata grants IO.
+    static func reviewDefaultConfiguration(_ data:Data,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->DefaultConfigurationReview {
+        try baseline.validate();_ = try mapping.slots(for:baseline)
+        guard baseline.deviceInfo[6]==24,baseline.parameters[0]==0,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线。")}
+        let template=try extractDefaultTemplate(data)
+        let plan=try planOfficialLighting(template,baseline:baseline,lightingMapping:mapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        var candidate=try plan.expectedReadback(from:baseline)
+        candidate.keymap=mapping.factoryKeymap;try candidate.validate()
+        let changed=(0..<126).filter{slot in candidate.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
+        let protected=changed.filter{!KeymapWriteAuthorization.editableSlots.contains($0)}
+        let macros=changed.filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
+        let unsupported=changed.filter{slot in
+            let offset=slot*3,type=candidate.keymap[offset],usage=candidate.keymap[offset+2]
+            return !(type==0x30 || (type==0x20 && (usage==0 || (4..<224).contains(usage))))
+        }
+        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
+    }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot

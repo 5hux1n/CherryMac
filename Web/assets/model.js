@@ -495,6 +495,20 @@ export function importWindowsLightingDraft(profile,template){
   }else requireThat(mode!==8,'自定义模式缺少官方原始颜色表。');
   result.windowsTemplateJSON=JSON.stringify(root);validateProfile(result);return result;
 }
+// Compute a full candidate and unresolved scopes without authorizing USB IO.
+export function reviewDefaultConfiguration(text,baseline,mapping){
+  validateSnapshot(baseline,true);lightingMappingSlots(mapping,baseline);
+  requireThat(baseline.deviceInfo[6]===24&&baseline.parameters[0]===0,'默认恢复核对需要本型号配置 0 的完整读取基线。');
+  const template=extractOfficialDefaultTemplate(text);
+  const lightingPlan=planOfficialLighting(template,baseline,mapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
+  const candidate=officialLightingReadbackTarget(lightingPlan,baseline);
+  candidate.keymap=clone(mapping.factoryKeymap);validateSnapshot(candidate,true);
+  const changedKeySlots=Array.from({length:126},(_,slot)=>slot).filter(slot=>!equal(candidate.keymap.slice(slot*3,slot*3+3),baseline.keymap.slice(slot*3,slot*3+3)));
+  const protectedChangedSlots=changedKeySlots.filter(slot=>!editableSlots.has(slot));
+  const macroBindingSlots=changedKeySlots.filter(slot=>[0x70,0x71].includes(baseline.keymap[slot*3]));
+  const unsupportedFactorySlots=changedKeySlots.filter(slot=>{const [type,,usage]=candidate.keymap.slice(slot*3,slot*3+3);return !(type===0x30||type===0x20&&(usage===0||usage>=4&&usage<224));});
+  return {format:'CherryMacDefaultConfigurationReview',version:1,hardwareReady:false,original:clone(baseline),candidate,officialTemplateJSON:JSON.stringify(template),factoryKeymap:clone(mapping.factoryKeymap),lightingPlan,changedKeySlots,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>candidate.parameters[i]!==baseline.parameters[i]),protectedChangedSlots,macroBindingSlots,unsupportedFactorySlots,pendingSystemFields:['Repeat','RepeatDelay','Key6Flag','ReportSelectItem','RFReportSelectItem','WFlag','WinFlag'],retainedMacroStorage:true,completeRestoreImplemented:false};
+}
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo)&&typeof profile.windowsTemplateJSON==='string','请先读取键盘并导入本型号的 Windows 官方 JSON。');
