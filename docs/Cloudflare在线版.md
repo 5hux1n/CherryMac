@@ -4,6 +4,8 @@
 
 [项目官网](https://cherrymac.goforit.si/) 位于根路径，配置工具位于 `/app/`。两者由同一个 Cloudflare Worker 提供；原有 CNAME 保留，开启该子域名代理并绑定 `cherrymac.goforit.si/*` 路由。原 workers.dev 地址也采用相同目录布局。
 
+2026-10-05 按用户提供的正式地址完成部署：来源提交 `6cff1a836a3920442b2eaa3e88107c54f3726900`，Worker 版本标识 `eda0790d-7d4e-4ac2-9f5c-70f7294c2f2e`，应用版本仍为 0.29.0。根目录官网和 `/app/` 工具目录独立生成，首页按钮进入 `/app/`；`/app` 重定向到 `/app/`，旧 PHP 页面地址仍可使用。域名的 CNAME 目标仍为 `5hux1n.github.io`，Cloudflare 代理开启后由 Worker 路由提供内容。后续默认更新这个正式域名，而非让用户切换到 workers.dev 地址。
+
 2026-10-05 已发布 0.29.0，页面与脚本来源提交 `a3594f54ca82d480801f595dd684a8e50d8bb5bb`，Worker 版本标识 `f35d0a15-af0e-4a60-b579-43f24f517fa5`。线上 17 个页面／脚本文件哈希与清单一致；首页、`/index.php`、`/app/` 返回 200，HID 权限和缓存响应头已核对。没有打开浏览器或访问键盘，不计作功能或真机验收。
 
 随后统一了 PHP 预览 ZIP 与线上版的版本来源 `Web/preview-versions.json`。线上发布清单现同步为提交 `a98222931b3a5a46640850e73e366040deb078bc`，Worker 版本标识 `18971a6c-1dc4-4343-9ee5-c37a05a0f554`。页面与脚本没有变化，版本仍为 0.29.0；新增对未提交网页代码及未跟踪运行文件的部署拒绝检查。该提交生成的 PHP ZIP SHA-256 为 `0e5e2af5b1b8833fc902d55939c736c5a57d77791dde4806f5fcd6636c6c19fa`。更新发布工具不扩展硬件验收范围。
