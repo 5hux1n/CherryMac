@@ -442,6 +442,56 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
+def inspect_default_macro_semantics(pe):
+    """Distinguish JSON macro imports from default-path light-list locks."""
+    checks = {
+        0x47C788: "e8b39d0c00", 0x47C888: "05a8030000",
+        0x47C891: "e88a990c00", 0x47C8CC: "c28800",
+        0x4F9FB2: "81c1d8210000", 0x4F9FB8: "e8f3cefdff",
+        0x4F9FCA: "81c100400000", 0x4F9FD0: "e8fb2cf8ff",
+        0x4F9FE8: "81c118220000", 0x4F9FEE: "e8adaaffff",
+        0x4FA031: "81c1d8210000", 0x4FA043: "8b5014", 0x4FA046: "ffd2",
+        0x53F813: "81c1d8210000", 0x53F819: "e81216faff",
+        0x4E0E6C: "c70004706f00", 0x4D6EBE: "ff1570bc6e00",
+        0x4E0DDE: "ff156cbc6e00", 0x47CD35: "81c170040000",
+        0x47CDBF: "68345e7400", 0x47CEBC: "68745e7400",
+        0x47D275: "c20400",
+        0x4EBCB7: "683c8d7600", 0x4EBCE3: "e87831f7ff",
+        0x4EBCF8: "0f8516010000", 0x527B27: "68e4267700",
+        0x527B53: "e80873f3ff", 0x53B0B7: "68a84f7700",
+        0x53B0E3: "e8783df2ff", 0x53B0F8: "0f8516010000",
+    }
+    for address, encoded in checks.items():
+        value = bytes.fromhex(encoded)
+        if pe.at(address, len(value)) != value:
+            raise ValueError("Unexpected default macro semantics instruction")
+    if pe.pointer(0x6F7004 + 0x14) != 0x4E0DD0:
+        raise ValueError("Unexpected critical-section virtual method")
+    imports = {}
+    for slot, name in {0x6EBC70: "EnterCriticalSection", 0x6EBC6C: "LeaveCriticalSection"}.items():
+        value = (name + "\0").encode("ascii")
+        if pe.at(pe.base + pe.pointer(slot) + 2, len(value)) != value:
+            raise ValueError("Unexpected default refresh synchronization import")
+        imports[hex(slot)] = name
+    for address, name in {0x745E34: "LightInfo", 0x745E74: "LEDEffectList", 0x745E94: "LEDREGMode",
+                          0x768D3C: "MacroInfo", 0x7726E4: "MacroInfo", 0x774FA8: "MacroInfo"}.items():
+        value = (name + "\0").encode("ascii")
+        if pe.at(address, len(value)) != value:
+            raise ValueError("Unexpected default macro/light JSON field")
+    return {"instructionChecks": len(checks), "hardwareWriteAuthorized": False,
+            "deviceRowLoad": {"method": "0x47c700", "selectedJSONMember": "0x3a8", "copyReturn": "0x47c891"},
+            "defaultRefreshLightList": {"method": "0x4f9c10", "getter": "0x47ccd0", "getterSourceMember": "0x470",
+                "fields": ["LightInfo", "LEDEffectList", "LEDREGMode"], "getterSHA256": hashlib.sha256(pe.at(0x47CCD0, 0x47D278-0x47CCD0)).hexdigest(),
+                "destinationVector": "0x2218", "criticalSectionMember": "0x21d8", "criticalSectionConstructor": "0x4e0e30",
+                "vtable": "0x6f7004", "virtual14": "0x4e0dd0", "imports": imports,
+                "conclusion": "The refresh calls are Enter/LeaveCriticalSection around a light-effect list copy, not a macro-bank erase or a send inferred from virtual +0x14."},
+            "otherMacroJSONConsumers": {"methods": ["0x4ebc10", "0x527a80", "0x53b010"],
+                "copyMember": "0x2584", "copyHelper": "0x45ee60", "nullBranches": ["0x4ebcf8", "0x53b0f8"],
+                "model47DefaultAssociationProven": False},
+            "pendingMacroStorageSemantics": True,
+            "limits": "A null MacroInfo in a default JSON is not proof of hardware erasure. Other macro JSON consumers are separate paths whose model47/default association is unresolved. No execution, HID observation or persistence claim."}
+
+
 def inspect_default_configuration_path(pe, defaults_dir=None):
     """Audit the confirmed default-button branch, without authorizing reset."""
     checks = {
@@ -1133,13 +1183,14 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 24,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 25,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
+        "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
