@@ -52,6 +52,12 @@ struct HardwareSnapshot: Codable, Equatable {
     var colors: [UInt8]?
     var macroData: [UInt8]? = nil
     var createdAt = Date()
+    // Fresh USB reads have a new timestamp. Configuration identity includes
+    // every field except that capture time; encoded backup equality stays exact.
+    func hasSameConfiguration(as other:HardwareSnapshot)->Bool {
+        var normalized=self;normalized.createdAt=other.createdAt
+        return normalized==other
+    }
     func validate() throws {
         guard format == "CherryMacHardware", version == 1, vendorID == 0x046A,
               productID == 0x01CE, keymap.count == 378, deviceInfo.count == 34, parameters.count == 56,

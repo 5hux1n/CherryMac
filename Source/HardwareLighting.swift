@@ -213,9 +213,9 @@ extension HardwareWindowController {
                     let accepted:Bool
                     switch receipt.kind{
                     case .write:
-                        accepted=receipt.review?.original==original && receipt.review?.target==receipt.current && receipt.review?.plan==preparedReview?.plan && preparedReview?.target==receipt.current
+                        accepted=receipt.review?.original==original && receipt.review?.target.hasSameConfiguration(as:receipt.current)==true && receipt.review?.plan==preparedReview?.plan && preparedReview?.target.hasSameConfiguration(as:receipt.current)==true
                     case .restore:
-                        accepted=receipt.current==original
+                        accepted=receipt.current.hasSameConfiguration(as:original)
                     }
                     guard accepted else{throw HardwareError(message:"独立窗口结果与编辑区原计划不一致。")}
                     // Keep the official raw RGB draft; a firmware readback has
@@ -393,7 +393,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         guard !running,!attempted,let review,let selectedID=registryID,readback != nil,confirmation("写入所选灯效计划？") else{return}
         attempted=true;cycle=nil;writtenTarget=nil
         perform("lighting-acceptance-write",completed:{[weak self] current in
-            guard current==review.target else{return}
+            guard current.hasSameConfiguration(as:review.target) else{return}
             self?.editorResult=EditorResult(kind:.write,current:current,review:review)
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
@@ -423,7 +423,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         guard !running,let target=writtenTarget,let evidence=cycle,evidence.hasConfirmedPowerCycle,let reconnectedID=evidence.reconnectedRegistryID,registryID==reconnectedID,monitorFailure==nil else{return}
         let retainedReview=review
         perform("lighting-acceptance-retention",completed:{[weak self] current in
-            guard let retainedReview,current==retainedReview.target else{return}
+            guard let retainedReview,current.hasSameConfiguration(as:retainedReview.target) else{return}
             self?.editorResult=EditorResult(kind:.write,current:current,review:retainedReview)
         }){usb,log in
             guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"读回会话不是本轮记录的重连设备，请重新核对。")}
