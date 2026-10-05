@@ -927,6 +927,35 @@ def inspect_settings_window_messages(pe):
             "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
+def inspect_other_parameter_sender_classes(pe):
+    tables = {
+        0x77F050: (".?AVCEevisionHS6533Device@@", {0x2BC: 0x4ED810}),
+        0x77FA58: (".?AVCEevisionMouseDevice@@", {0x2B8: 0x52DFF0, 0x2BC: 0x52E060}),
+        0x77F604: (".?AVCEevisionKeyboardDevice@@", {0x2B8: 0x500360, 0x2BC: 0x500790}),
+    }
+    for table, (name, methods) in tables.items():
+        if pe.class_name(table) != name:
+            raise ValueError("Unexpected parameter sender RTTI class")
+        for offset, method in methods.items():
+            if pe.pointer(table + offset) != method:
+                raise ValueError("Unexpected parameter sender class method")
+    checks = {0x52E0DB: "0fb7881a1e0000", 0x52E0E2: "81f9bbbb0000",
+              0x52E0E8: "7524", 0x52E104: "e8b7070000",
+              0x4ED845: "81c148260000", 0x4ED84B: "e890d5f8ff",
+              0x4ED8EF: "6a15", 0x4ED907: "e834fdfeff"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected other-class parameter sender instruction")
+    return {"instructionChecks": len(checks),
+            "classes": [{"vtable": hex(table), "class": name,
+                         "methods": {hex(offset): hex(method) for offset, method in methods.items()}}
+                        for table, (name, methods) in tables.items()],
+            "mouseSpecialBranch": {"caller": "0x52e104", "product": 0xBBBB, "method": "0x52e8c0"},
+            "hs6533Structure": {"profileMember": "0x2648", "getter": "0x47ade0",
+                                "parameterWriteLength": 21},
+            "limits": "These named senders are associated with distinct RTTI classes. Mouse and HS6533 virtual methods are not the target keyboard's virtual dispatch and must not be copied as its settings protocol. Direct or indirect calls outside these inspected paths are not globally excluded."}
+
+
 def inspect_profile_selection_send(pe):
     checks = {
         0x48FB41: "6800d37400", 0x48FB84: "e8674dfaff",
@@ -1284,7 +1313,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 28,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 29,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1300,6 +1329,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
         "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
         "profileSelectionSend": inspect_profile_selection_send(pe),
+        "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
