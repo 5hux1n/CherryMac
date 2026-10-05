@@ -808,11 +808,19 @@ enum WindowsProfile {
         _ = try templateRoot(encoded);result.windowsTemplateJSON=String(decoding:encoded,as:UTF8.self)
         try result.validate();return result
     }
+    struct DefaultColorProposal:Codable {
+        var hardwareReady=false;var logicalEntryCountAssumption=126
+        var pendingObjectInitialization=true
+        var redLogicalIndices=[44,64,65,66,96,113,114,115]
+        var coefficient=255;var targetColors:[UInt8]
+        var mappedColorSlots:[Int];var changedColorSlots:[Int]
+    }
     struct DefaultConfigurationReview:Codable {
-        var format="CherryMacDefaultConfigurationReview";var version=2;var hardwareReady=false
+        var format="CherryMacDefaultConfigurationReview";var version=3;var hardwareReady=false
         var original:HardwareSnapshot;var candidate:HardwareSnapshot
         var officialTemplateJSON:String;var factoryKeymap:[UInt8]
         var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
+        var defaultColorProposal:DefaultColorProposal
         var changedParameterOffsets:[Int];var protectedChangedSlots:[Int]
         var macroBindingSlots:[Int];var unsupportedFactorySlots:[Int]
         var pendingSystemFields:[String];var retainedMacroStorage=true
@@ -821,12 +829,24 @@ enum WindowsProfile {
     }
     // Offline candidate only. Neither this report nor read metadata grants IO.
     static func reviewDefaultConfiguration(_ data:Data,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->DefaultConfigurationReview {
-        try baseline.validate();_ = try mapping.slots(for:baseline)
-        guard baseline.deviceInfo[6]==24,baseline.parameters[0]==0,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线。")}
+        try baseline.validate();let colorSlots=try mapping.slots(for:baseline)
+        guard baseline.deviceInfo[6]==24,baseline.parameters[0]==0,let originalColors=baseline.colors,baseline.macroData != nil else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线。")}
         let template=try extractDefaultTemplate(data)
         let plan=try planOfficialLighting(template,baseline:baseline,lightingMapping:mapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         var candidate=try plan.expectedReadback(from:baseline)
         candidate.keymap=mapping.factoryKeymap;try candidate.validate()
+        // Official 4FA0E0 fills an existing vector, then 501190 scales by
+        // alpha >> 8. Its live vector size is still unresolved: keep this
+        // conditional proposal separate from the candidate and write plan.
+        let red:Set<Int>=[44,64,65,66,96,113,114,115]
+        var proposedColors=[UInt8](repeating:0,count:378),mapped=Set<Int>()
+        for (logical,slot) in colorSlots.enumerated(){
+            guard let slot=slot else{continue};mapped.insert(slot)
+            proposedColors[slot*3]=254
+            proposedColors[slot*3+1]=red.contains(logical) ? 0:254
+            proposedColors[slot*3+2]=red.contains(logical) ? 0:254
+        }
+        let colorProposal=DefaultColorProposal(targetColors:proposedColors,mappedColorSlots:mapped.sorted(),changedColorSlots:(0..<126).filter{proposedColors[$0*3..<$0*3+3] != originalColors[$0*3..<$0*3+3]})
         let changed=(0..<126).filter{slot in candidate.keymap[slot*3..<slot*3+3] != baseline.keymap[slot*3..<slot*3+3]}
         let protected=changed.filter{!KeymapWriteAuthorization.editableSlots.contains($0)}
         let macros=changed.filter{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}
@@ -834,7 +854,7 @@ enum WindowsProfile {
             let offset=slot*3,type=candidate.keymap[offset],usage=candidate.keymap[offset+2]
             return !(type==0x30 || (type==0x20 && (usage==0 || (4..<224).contains(usage))))
         }
-        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
+        return .init(original:baseline,candidate:candidate,officialTemplateJSON:String(decoding:template,as:UTF8.self),factoryKeymap:mapping.factoryKeymap,lightingPlan:plan,changedKeySlots:changed,defaultColorProposal:colorProposal,changedParameterOffsets:(0..<56).filter{candidate.parameters[$0] != baseline.parameters[$0]},protectedChangedSlots:protected,macroBindingSlots:macros,unsupportedFactorySlots:unsupported,pendingSystemFields:systemStageFields)
     }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false

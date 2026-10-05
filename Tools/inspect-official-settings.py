@@ -479,6 +479,12 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x499943: "e8189d0a00", 0x49B8BD: "e89e7d0a00",
         0x49D333: "e828630a00", 0x49E5C2: "e899500a00",
         0x501210: "83b84022000000",
+        0x4F93AD: "8b9030020000", 0x4F93B3: "ffd2",
+        0x4F93B8: "e8230d0000", 0x4F93C6: "e8e520f3ff",
+        0x5013E9: "81fac7000000", 0x5013EF: "0f85f0030000",
+        0x5018F7: "8b5508", 0x5018FA: "c1e209",
+        0x50190A: "e8c1a7fbff", 0x50190F: "6bc003",
+        0x501926: "e8b5b4fdff",
 
 
 
@@ -487,7 +493,7 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         expected = bytes.fromhex(encoded)
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected default configuration instruction")
-    methods = {0x2A0: 0x4FEFB0, 0x290: 0x4F9320, 0x2A4: 0x4FE970, 0x2BC: 0x500790, 0x2C4: 0x501190}
+    methods = {0x230: 0x4F9C10, 0x2A0: 0x4FEFB0, 0x290: 0x4F9320, 0x2A4: 0x4FE970, 0x2BC: 0x500790, 0x2C4: 0x501190}
     for offset, target in methods.items():
         if pe.pointer(0x77F604 + offset) != target:
             raise ValueError("Unexpected model default configuration virtual target")
@@ -522,6 +528,22 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
                                          "callerSites": ["0x499943", "0x49b8bd", "0x49d333", "0x49e5c2"],
                                          "colorGuard": "0x501210 checks object member +0x2240",
                                          "limits": "Static registration, column transfer and color guard; actual selected object index, loaded color source and full restore ordering remain unverified. Not proof of a live color write or prior blackout root cause."}
+    # Whole bounded function fingerprint covers loop, mapping guards and both
+    # palette branches. The fixed EXE is read, never executed.
+    palette_hash = hashlib.sha256(pe.at(0x4FA0E0, 0x154)).hexdigest()
+    if palette_hash != "578c980f529151c8194e0b287521b0fcd45265b0f6745b1f5e4f857a8f66afc6":
+        raise ValueError("Unexpected default color palette function")
+    result["defaultColorPalette"] = {"method": "0x4fa0e0", "functionSHA256": palette_hash,
+        "logicalRedIndices": [44, 64, 65, 66, 96, 113, 114, 115],
+        "redRGBA": [255, 0, 0, 255], "otherMappedRGBA": [255, 255, 255, 255],
+        "vector": "object+0x2150; existing vector length from 0x422510",
+        "mapping": "object+0x2138 via 0x4bb8f0",
+        "guards": "signed mapping < 255 and mapping*3 <= 512; no lower bound added by this official method",
+        "callOrder": ["0x4f93b3 virtual+0x230 refresh", "0x4f93b8 palette initialization", "0x4f93da virtual+0x2c4 color processing"],
+        "colorConversion": "(component * 255) >> 8 => 254 for a 255 component; palette overwrites alpha, unlike ordinary brightness loading",
+        "model01CE": {"skipsPID00C7Overrides": True, "bankOffset": "profile index * 512", "sendLength": "mapping container size * 3", "sender": "0x4dcde0"},
+        "hardwareWriteAuthorized": False,
+        "limits": "Existing vector allocation/count and mapping container size initialization still require tracing. Offline proposal assumes 126 logical entries and the current 378-byte RGB bank, and remains separate from candidate/write plan. Not physical evidence or blackout root cause."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1065,7 +1087,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 19,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 20,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
