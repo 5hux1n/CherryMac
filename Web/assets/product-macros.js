@@ -1,16 +1,9 @@
 import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource,canonicalJSON} from './model.js?v=0.6.0';
 import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
+import {databaseOpener} from './database.js?v=0.6.0';
 
 // Names and recording preferences live locally; firmware stores event bytes.
-let database;
-function db(){
-  if(!database)database=new Promise((resolve,reject)=>{
-    const request=indexedDB.open('CherryMacWebMacros',1);
-    request.onupgradeneeded=()=>request.result.createObjectStore('records',{keyPath:'id'});
-    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
-    request.onblocked=()=>reject(new Error('宏数据库被其他页面占用。'));
-  });return database;
-}
+const db=databaseOpener('CherryMacWebMacros',1,value=>value.createObjectStore('records',{keyPath:'id'}),'宏数据库被其他页面占用。');
 async function record(mode,action){
   const database=await db();return new Promise((resolve,reject)=>{
     const transaction=database.transaction('records',mode),request=action(transaction.objectStore('records'));let value;

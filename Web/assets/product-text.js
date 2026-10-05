@@ -1,14 +1,7 @@
 import {clone,equal,requireThat,prepareHostTextInstallation,prepareHostTextBindings,validateProfile,validateSnapshot} from './model.js?v=0.6.0';
 
-let database;
-function db(){
-  if(!database)database=new Promise((resolve,reject)=>{
-    const request=indexedDB.open('CherryMacWebHostText',1);
-    request.onupgradeneeded=()=>request.result.createObjectStore('records',{keyPath:'id'});
-    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
-    request.onblocked=()=>reject(new Error('文本数据库被其他页面占用。'));
-  });return database;
-}
+import {databaseOpener} from './database.js?v=0.6.0';
+const db=databaseOpener('CherryMacWebHostText',1,value=>value.createObjectStore('records',{keyPath:'id'}),'文本数据库被其他页面占用。');
 const empty=()=>({format:'CherryMacHostTextStore',version:1,active:null,activeID:null,latest:null,records:[]});
 function definition(root){if(root!==null)prepareHostTextBindings(root,Array(378).fill(0),Array(378).fill(0));}
 function recordPlan(record){

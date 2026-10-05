@@ -22,7 +22,7 @@ RUNTIME_NAMES = ['index.php', 'README.md', 'start.command'] + [
     'assets/' + name for name in [
         'app.js', 'hid.js', 'layout.js', 'logs.js', 'model.js', 'safety.js',
         'page-operation.js', 'storage.js', 'style.css', 'tables.js', 'writer.js', 'macro-session.js',
-        'macro-stop.js', 'product-macros.js', 'product-text.js', 'text-bridge.js',
+        'macro-stop.js', 'product-macros.js', 'product-text.js', 'text-bridge.js', 'database.js',
     ]
 ]
 

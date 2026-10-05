@@ -1,7 +1,7 @@
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
-let database;
-function db(){if(!database)database=new Promise((resolve,reject)=>{const r=indexedDB.open('CherryMacWeb',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('备份数据库被其他页面占用。'));});return database;}
+import {databaseOpener} from './database.js?v=0.6.0';
+const db=databaseOpener('CherryMacWeb',1,value=>value.createObjectStore('backups',{keyPath:'id'}),'备份数据库被其他页面占用。');
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
 export async function saveBackup(snapshot,lightingMapping=null){validateSnapshot(snapshot,true);if(lightingMapping!=null)lightingMappingSlots(lightingMapping,snapshot);const database=await db(),record={id:`${Date.now()}-${crypto.randomUUID()}`,date:new Date().toISOString(),snapshot:clone(snapshot),...(lightingMapping!=null?{lightingMapping:clone(lightingMapping)}:{})};await transaction(database,'readwrite',s=>s.put(record));const read=await transaction(database,'readonly',s=>s.get(record.id));if(!equal(read,record))throw new Error('备份校验失败，停止写入。');return record;}
 export function backupConfiguration(record){
@@ -48,17 +48,10 @@ export function reviewLightingEditorResult(record,review){
 }
 
 // Separate append-only records: retain pending entries even after later replies.
-let defaultDatabase;
-function defaultDB(){
-  if(!defaultDatabase)defaultDatabase=new Promise((resolve,reject)=>{
-    const request=indexedDB.open('CherryMacDefaultTransactions',1);let abandoned=false;
-    const fail=error=>{abandoned=true;defaultDatabase=null;reject(error);};
-    request.onupgradeneeded=()=>{request.result.createObjectStore('backups',{keyPath:'operationID'});request.result.createObjectStore('records',{keyPath:'sequence',autoIncrement:true});};
-    request.onsuccess=()=>{const value=request.result;if(abandoned){value.close();return;}value.onversionchange=()=>{value.close();defaultDatabase=null;};resolve(value);};
-    request.onerror=()=>fail(request.error);request.onblocked=()=>fail(new Error('默认恢复数据库被其他页面占用。'));
-  });
-  return defaultDatabase;
-}
+const defaultDB=databaseOpener('CherryMacDefaultTransactions',1,value=>{
+  value.createObjectStore('backups',{keyPath:'operationID'});
+  value.createObjectStore('records',{keyPath:'sequence',autoIncrement:true});
+},'默认恢复数据库被其他页面占用。');
 export async function saveDefaultBackup(operationID,snapshot){
   requireThat(typeof operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(operationID),'默认恢复存储标识无效。');validateSnapshot(snapshot,true);
   const value={operationID,snapshot:clone(snapshot)},database=await defaultDB();
