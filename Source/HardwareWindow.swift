@@ -278,7 +278,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         selectedLabel.font = .systemFont(ofSize:19,weight:.semibold)
         place(selectedLabel,8,8,240,29,in:keys);place(recordLabel,8,48,235,62,in:keys)
         place(label("设置功能"),282,12,86,23,in:keys)
-        actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用","多媒体功能"])
+        actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用","多媒体功能","打开 Finder · Mac 快捷操作","打开邮件 · Mac 快捷操作","打开音乐 · Mac 快捷操作"])
         actionPicker.target=self;actionPicker.action=#selector(actionChanged);controls.append(actionPicker)
         place(actionPicker,378,8,235,28,in:keys)
         place(label("快捷键主键"),282,57,95,23,in:keys)
@@ -287,7 +287,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("多媒体功能"),650,12,125,23,in:keys)
         for index in WindowsProfile.visibleMediaIndices{mediaPicker.addItem(withTitle:WindowsProfile.mediaNames[index]);mediaPicker.lastItem?.tag=index}
         controls.append(mediaPicker);place(mediaPicker,650,48,245,28,in:keys)
-        place(label("媒体键的响应取决于系统与当前应用。\n启动系统计算器可用左侧快捷操作方案。",12),650,91,245,80,in:keys)
+        place(label("媒体键的响应取决于系统与当前应用。\n应用启动可安装 Mac 快捷操作，\n保存到编辑区后需单独写入键位。",12),650,91,245,80,in:keys)
+        place(button("安装并设置 Mac 启动",#selector(installApplicationShortcut)),650,182,245,30,in:keys)
         place(button("保存到编辑区",#selector(stageKey)),282,182,186,30,in:keys)
         place(button("安装计算器快捷操作",#selector(installCalculator)),8,161,230,30,in:keys)
         place(label("系统计算器使用 macOS 快捷操作。\n安装后可把计算器键设置为 ⌃⌥⌘C。",12),8,210,236,60,in:keys)
@@ -683,7 +684,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroPlayback.selectItem(at:playback.mode == .count ? 0:playback.mode == .held ? 1:2);macroRepeat.stringValue=String(playback.count);playbackChanged()
         let bytes=Array(profile.snapshot.keymap[slot*3..<slot*3+3])
         let presets:[[UInt8]]=[[0x20,13,6],[0x20,10,33],[0x20,8,21],[0x30,182,0],[0x30,205,0],[0x30,181,0],[0x20,0,0]]
-        if let preset=presets.firstIndex(of:bytes){actionPicker.selectItem(at:preset+2)}else{
+        if let preset=presets.firstIndex(of:bytes){actionPicker.selectItem(at:preset+2)}else if bytes==MacApplicationShortcut.finder.record{actionPicker.selectItem(at:10)}else if bytes==MacApplicationShortcut.mail.record{actionPicker.selectItem(at:11)}else if bytes==MacApplicationShortcut.music.record{actionPicker.selectItem(at:12)}else{
             actionPicker.selectItem(at:0)
             if bytes[0]==0x20 {
                 actionPicker.selectItem(at:1)
@@ -957,6 +958,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         case 9:
             guard let index=mediaPicker.selectedItem?.tag,WindowsProfile.visibleMediaIndices.contains(index)else{message.stringValue="请选择多媒体功能。";return}
             let code=WindowsProfile.mediaCodes[index];record=[0x30,UInt8(code&255),UInt8(code>>8)]
+        case 10:record=MacApplicationShortcut.finder.record
+        case 11:record=MacApplicationShortcut.mail.record
+        case 12:record=MacApplicationShortcut.music.record
         default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,shortcutKeys[max(0,keyPicker.indexOfSelectedItem)].1]
         }
         p.macroBindings?.removeValue(forKey:slot);p.macroModes?.removeValue(forKey:slot)
@@ -1201,7 +1205,24 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         suspendHostTextForConfiguration()
         #endif
     }
-    @objc func installCalculator(){do{try CalculatorService.install();message.stringValue="已安装系统快捷操作。把目标键设为“打开系统计算器”，保存到编辑区后点击“写入键位”。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func installApplicationShortcut(){
+        guard !busy,var draft=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),KeymapWriteAuthorization.editableSlots.contains(slot)else{message.stringValue="请选择可配置按键，完成当前操作后再安装。";return}
+        let shortcut:MacApplicationShortcut
+        switch actionPicker.indexOfSelectedItem {
+        case 2:shortcut = .calculator
+        case 10:shortcut = .finder
+        case 11:shortcut = .mail
+        case 12:shortcut = .music
+        case 9:
+            switch mediaPicker.selectedItem?.tag {case 0:shortcut = .music;case 15:shortcut = .finder;case 16:shortcut = .calculator;case 17:shortcut = .mail;default:message.stringValue="请选择计算器、我的电脑、邮件或媒体播放器。";return}
+        default:message.stringValue="请选择计算器、Finder、邮件或音乐的启动功能。";return
+        }
+        do{try ApplicationShortcutService.install(shortcut)
+            draft.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:shortcut.record);draft.macroBindings?.removeValue(forKey:slot);draft.macroModes?.removeValue(forKey:slot)
+            profile=draft;loadSelectedAssignment();update();message.stringValue="已安装打开\(shortcut.title)的系统快捷操作，并保存到编辑区。尚未写入键盘；请核对后点击写入键位。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    @objc func installCalculator(){guard !busy else{return};do{try CalculatorService.install();message.stringValue="已安装系统快捷操作。把目标键设为“打开系统计算器”，保存到编辑区后点击“写入键位”。"}catch{message.stringValue=error.localizedDescription}}
 }
 
 // An explicit sheet records AppKit events delivered to its focus area only.
