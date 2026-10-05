@@ -348,6 +348,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("载入官方默认草稿…",#selector(importDefaultTemplate)),8,401,260,32,in:files)
         place(label("选择 Windows 安装目录 DefaultData 中的 DefaultData0～4.json，载入本型号默认键位、灯效与文件设置。会替换编辑区；原始宏存储保留。这里只准备草稿，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
         place(button("核对并导出默认恢复计划…",#selector(exportDefaultReview)),8,451,260,32,in:files)
+        place(button("核对并导出默认撤回计划…",#selector(exportDefaultRecovery)),290,451,280,32,in:files)
         let device=tabs.tabViewItems[4].view!
         place(label("设备与诊断",20,.semibold),8,12,850,30,in:device)
         place(label("MX 3.0S Pokémon Wireless\n通过 USB 数据线连接，并切换到有线模式。",13),8,61,850,56,in:device)
@@ -1230,6 +1231,39 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
                 try self.loadImport(template)
                 self.message.stringValue="官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。"
+            }catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func exportDefaultRecovery(){
+        guard !busy,let current=baseline,let mapping=baselineLightingMapping,let parent=window else{message.stringValue="请先读取键盘，取得完整配置和固件默认键位表。";return}
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:parent){[weak self] response in
+            guard response == .OK,let url=panel.url,let self else{return}
+            do{
+                guard !self.busy,self.baseline==current,self.baselineLightingMapping==mapping else{throw HardwareError(message:"读取资料已改变，请重新核对。")}
+                let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
+                guard let size,size<=16_000_000 else{throw HardwareError(message:"默认恢复记录超过 16 MB。")}
+                let data=try Data(contentsOf:url)
+                let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+                let decoder=JSONDecoder();let plan:WindowsProfile.DefaultRecoveryPlan
+                switch root?["format"] as? String {
+                case "CherryMacDefaultRecoveryPlan":plan=try decoder.decode(WindowsProfile.DefaultRecoveryPlan.self,from:data)
+                case "CherryMacDefaultConfigurationReview":plan=try WindowsProfile.defaultRecoveryPlan(decoder.decode(WindowsProfile.DefaultConfigurationReview.self,from:data),current:current)
+                default:throw HardwareError(message:"请选择默认恢复核对计划或撤回计划。")
+                }
+                guard plan.sourceReview.lightingMapping==mapping else{throw HardwareError(message:"当前读取的映射与记录不一致，请使用同一台键盘的资料。")}
+                let progress=try WindowsProfile.reviewDefaultRecoveryProgress(plan,current:current)
+                let alert=NSAlert();alert.messageText="默认撤回计划核对"
+                let positions=progress.matchedDataPrefixes.map{String($0)}.joined(separator:" / ")
+                alert.informativeText="根据最近读取资料，匹配撤回数据包进度：\(positions)，共 \(progress.totalDataReports) 包。\n\(progress.configurationMatchesOriginal ? "配置与备份一致。":"已生成恢复原始参数、键位和颜色的撤回计划。")\n此核对不证明设备身份或断电保留，不发送报告，也不修改编辑区；完整恢复尚未开放。导出文件包含原始配置与宏。请保留同一份撤回计划供中断后继续核对。"
+                alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出撤回计划")
+                guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
+                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let output=try encoder.encode(plan)
+                let save=NSSavePanel();save.nameFieldStringValue="CherryMac-default-recovery-plan.json"
+                save.beginSheetModal(for:parent){[weak self] result in
+                    guard result == .OK,let target=save.url else{return}
+                    do{try output.write(to:target,options:.atomic);self?.message.stringValue="已导出默认撤回计划，未修改编辑区或写入键盘。"}catch{self?.message.stringValue=error.localizedDescription}
+                }
             }catch{self.message.stringValue=error.localizedDescription}
         }
     }

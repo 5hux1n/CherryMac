@@ -1,5 +1,5 @@
 import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -272,6 +272,23 @@ $('default-review-file').onchange=()=>operation(async()=>{
   $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，默认颜色差异 ${review.defaultColorPlan.changedColorSlots.length} 个，已纳入离线候选；颜色／键位恢复事务尚未接入。宏存储处理仍待核对。候选保留原始宏存储，完整恢复尚未开放。`;
   download(review,'CherryMac-default-review.json');
   status('已导出默认恢复核对计划，包含当前配置与宏；未修改编辑区或写入键盘。');
+},{localOnly:true});
+$('inspect-default-record').onclick=()=>{if(!busy)$('default-record-file').click();};
+$('default-record-file').onchange=()=>operation(async()=>{
+  const input=$('default-record-file'),file=input.files[0];input.value='';if(!file)return;
+  $('default-record-summary').textContent='正在核对本地记录，尚未生成撤回计划。';
+  const current=baseline,mapping=baselineLightingMapping;
+  requireThat(current&&mapping,'请先读取键盘，取得完整配置和固件默认键位表。');
+  requireThat(file.size<=16_000_000,'默认恢复记录超过 16 MB。');
+  const record=JSON.parse(await file.text());
+  requireThat(baseline===current&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
+  requireThat(['CherryMacDefaultConfigurationReview','CherryMacDefaultRecoveryPlan'].includes(record?.format),'请选择默认恢复核对计划或撤回计划。');
+  const plan=record.format==='CherryMacDefaultRecoveryPlan'?record:defaultRecoveryPlan(record,current);
+  requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(plan.sourceReview.lightingMapping?.[field],mapping[field])),'当前读取的映射与记录不一致，请使用同一台键盘的资料。');
+  const progress=reviewDefaultRecoveryProgress(plan,current);
+  $('default-record-summary').textContent=`根据最近读取资料，匹配撤回数据包进度 ${progress.matchedDataPrefixes.join(' / ')}，共 ${progress.totalDataReports} 包。${progress.configurationMatchesOriginal?'配置与备份一致。':'已生成恢复原始参数、键位和颜色的撤回计划。'}此核对不证明设备身份或断电保留，不会发送报告；完整恢复尚未开放。`;
+  download(plan,'CherryMac-default-recovery-plan.json');
+  status('已核对并导出默认撤回计划，包含原始配置与宏；未修改编辑区或写入键盘。');
 },{localOnly:true});
 $('import-default').onclick=()=>$('default-file').click();
 $('default-file').onchange=()=>operation(async()=>{
