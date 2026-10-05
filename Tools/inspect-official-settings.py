@@ -1078,6 +1078,101 @@ def inspect_settings_post_apply(pe):
             "limits": "Post-apply device-list path copies the lighting structure, then invokes save/refresh/parameter virtual methods. This named selection setter excludes 01CE; initialization is not proof of every later runtime value, and other possible setters or indirect paths are not excluded. This is not a seven-word settings transport or a hardware acceptance result."}
 
 
+def inspect_basic_apply_refresh(pe):
+    """Classify the named post-dialog refresh, without executing its call graph."""
+    checks = {
+        0x4B0045: "8b8230020000",
+        0x4B004B: "ffd0",
+        0x4F9C95: "81c100400000",
+        0x4F9C9B: "e84011f8ff",
+        0x4F9CB5: "81c75c210000",
+        0x4F9CC3: "f3a5",
+        0x4F9D95: "3b8d00ffffff",
+        0x4F9D9B: "0f8400010000",
+        0x4F9DAF: "8b904c030000",
+        0x4F9DF3: "ff248da4a04f00",
+        0x4F9EA7: "81c1f8210000",
+        0x4F9EAD: "e8fecffdff",
+        0x4F9EC5: "e89625f8ff",
+        0x4F9EDD: "81c124220000",
+        0x4F9F07: "e8a4f30000",
+        0x4F9F21: "e84af60000",
+        0x4F9F3B: "e880f90000",
+        0x5094D1: "81c150210000",
+        0x5094D7: "e81490f1ff",
+        0x5094DF: "8810",
+        0x5094F7: "884801",
+        0x509510: "884802",
+        0x509556: "885803",
+        0x47C4B7: "68205d7400",
+        0x47C4EA: "68145d7400",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected basic-settings refresh instruction")
+    for address in [0x745D14, 0x745D20]:
+        if pe.at(address, 10) != b"LightList\0":
+            raise ValueError("Unexpected refresh lighting-list name")
+    ranges = {
+        "0x4f9c10": {"end": "0x4fa0a4",
+                     "sha256": "36f8296ec612106b40301b54eac0267cc4b8e7ef231171d863ecb724a883744a"},
+        "0x5092b0": {"end": "0x509566",
+                     "sha256": "a10c2d7baf14c5f35a45daf388c267939d2988e34f64740b0cb2c834346bc041"},
+        "0x509570": {"end": "0x5098b5",
+                     "sha256": "f7ec3e2e4742c7e963b1e965e7057800dc52b7079961a5eee5cb1d0a730c1c27"},
+        "0x5098c0": {"end": "0x509b5a",
+                     "sha256": "fe6e85abc1f3a48c9be9978ff2251e48473c51a2cd288c4dba6560fe5a28d4f9"},
+    }
+    for start, item in ranges.items():
+        address, end = int(start, 16), int(item["end"], 16)
+        if hashlib.sha256(pe.at(address, end-address)).hexdigest() != item["sha256"]:
+            raise ValueError("Unexpected basic-settings refresh function bytes")
+    virtuals = {0x230: 0x4F9C10, 0x34C: 0x504130, 0x3D0: 0x508000,
+                0x3C8: 0x507E40, 0x370: 0x5051E0, 0x37C: 0x505650,
+                0x3A4: 0x506190, 0x388: 0x505900}
+    for offset, target in virtuals.items():
+        if pe.pointer(0x77F604+offset) != target:
+            raise ValueError("Unexpected basic-settings refresh virtual target")
+    return {"instructionChecks": len(checks), "functionByteRanges": ranges,
+            "dialogCall": "0x4b004b", "virtualOffset": "0x230", "method": "0x4f9c10",
+            "lightStructureSource": "JSON getter 0x47ade0, 47 bytes to device+0x215c",
+            "modeChangeBranch": "Compare previous and loaded device+0x3f71; only a changed lighting mode enters dispatch",
+            "modeVirtualTargets": {hex(k): hex(v) for k,v in virtuals.items() if k != 0x230},
+            "colorDefinitionSource": "LightList JSON getter 0x47c460 to device+0x2224",
+            "colorRefreshHelpers": ["0x5092b0", "0x509570", "0x5098c0"],
+            "colorRefreshDestination": "device+0x2150 vector; entries updated as four color bytes",
+            "limits": "Classifies these refresh inputs and helper destinations. The mode methods and indirect or nested calls are not an exhaustive transport audit; this does not prove that no other setting command exists. No program execution, device write or polling-rate acceptance."}
+
+
+def inspect_basic_apply_save(pe):
+    """Resolve the save virtuals separately from the following USB sender."""
+    checks = {
+        0x4B002F: "8b8200030000", 0x4FB2FA: "81c100400000",
+        0x4FB303: "8b9000400000", 0x4FB309: "8b4204",
+        0x4FB30C: "ffd0", 0x47CAEB: "83c008",
+        0x47CB13: "81c2a8030000", 0x47CB39: "8b4208",
+        0x47CB3C: "ffd0", 0x47C9DA: "81c1d8030000",
+        0x47C9E0: "e8ab8a0000", 0x47CA4F: "81c1d8030000",
+        0x47CA55: "e8d6880000",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected basic-settings save instruction")
+    for table, offset, target in [(0x77F604, 0x300, 0x4FB2F0),
+                                  (0x77D174, 4, 0x47CAC0),
+                                  (0x77D174, 8, 0x47C9A0)]:
+        if pe.pointer(table+offset) != target:
+            raise ValueError("Unexpected settings save virtual target")
+    return {"instructionChecks": len(checks), "dialogCall": "0x4b0035",
+            "deviceSaveMethod": "0x4fb2f0", "profileClass": "KeyboardProfiledata",
+            "profileSaveMethods": ["0x47cac0", "0x47c9a0"],
+            "profileObjectMember": "0x4000", "saveObjectMember": "0x3d8",
+            "configurationGetter": "0x485490", "configurationSetter": "0x485330",
+            "limits": "Resolves this save wrapper to profile configuration getter/setter calls, separately from the later +0x2bc parameter sender. Nested getter/setter storage internals are not exhaustively audited here; this does not establish firmware persistence or absence of alternate setting transports."}
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -1334,7 +1429,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 30,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 31,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1352,6 +1447,8 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "profileSelectionSend": inspect_profile_selection_send(pe),
         "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
+        "basicApplyRefresh": inspect_basic_apply_refresh(pe),
+        "basicApplySave": inspect_basic_apply_save(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
