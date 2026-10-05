@@ -442,6 +442,85 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
+def inspect_external_property_binding(pe, dll_path=None):
+    """Follow named dynamic bindings; optionally read the DLL's request tables."""
+    checks = {
+        0x472C12: "ff15a8bc6e00", 0x472C37: "6864f97300",
+        0x472C43: "ff15a0bc6e00", 0x472C49: "a348cc7c00",
+        0x472C65: "68a8f97300", 0x472C71: "ff15a0bc6e00",
+        0x472C77: "a338cc7c00", 0x472EF6: "685cfa7300",
+        0x472F19: "ff1538cc7c00", 0x4EC8B1: "68cc8e7600",
+        0x4EC8DC: "ff1538cc7c00", 0x4F204D: "6818947600",
+        0x4F2078: "ff1538cc7c00",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected external property binding instruction")
+    for address, name in {0x6EBCA8: "LoadLibraryExW", 0x6EBCA0: "GetProcAddress"}.items():
+        expected = (name + "\0").encode("ascii")
+        if pe.at(pe.base + pe.pointer(address) + 2, len(expected)) != expected:
+            raise ValueError("Unexpected external property binding import")
+    for address, name in {0x73F964: "ConfLibInit", 0x73F9A8: "PropertyControl"}.items():
+        expected = (name + "\0").encode("ascii")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected dynamic export name")
+    requests = {0x73FA5C: "GetSupportFeature", 0x768ECC: "GetMaxVol", 0x769418: "VolumeControl"}
+    for address, name in requests.items():
+        expected = (name + "\0").encode("utf-16-le")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected external property request name")
+    result = {"instructionChecks": len(checks), "binding": "LoadLibraryExW then GetProcAddress",
+              "propertyFunctionPointer": "0x7ccc38", "initializationFunctionPointer": "0x7ccc48",
+              "namedCalls": {"0x472f19": "GetSupportFeature", "0x4ec8dc": "GetMaxVol", "0x4f2078": "VolumeControl"},
+              "hardwareWriteAuthorized": False,
+              "limits": "Named calls only; no model47 binding, keyboard repeat setter, firmware command or absence of other settings paths is established. Generic device-specific requests may dispatch beyond this library."}
+    if dll_path is None:
+        return result
+    data = Path(dll_path).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != "b3997b03c2f842386af172cb96c2c63af4e5a69dfe07693646e5c23764a52127":
+        raise ValueError("osConfLib hash differs from the analyzed version")
+    dll = PE32(data)
+    dll_checks = {
+        0x10004C95: "e886d8ffff", 0x10004CA7: "3d00000100",
+        0x10004CD2: "e839060000", 0x10004CE5: "8b0485b875ff0f",
+        0x10004D0A: "ffd0", 0x10002523: "8b0c85a8710310",
+        0x10002560: "83f86f", 0x10002570: "8b04b568730310",
+        0x100025B0: "83fe5c", 0x10002563: "72be",
+        0x100025B3: "72bb", 0x100025BA: "8d8600000100",
+    }
+    for address, encoded in dll_checks.items():
+        expected = bytes.fromhex(encoded)
+        if dll.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected external property dispatch instruction")
+    tables = []
+    for address, count in ((0x100371A8, 111), (0x10037368, 92)):
+        names = []
+        for index in range(count):
+            target = dll.pointer(address + index * 4)
+            raw = bytearray()
+            for offset in range(0, 512, 2):
+                unit = dll.at(target + offset, 2)
+                if unit == b"\0\0":
+                    break
+                raw.extend(unit)
+            else:
+                raise ValueError("External property name exceeds bound")
+            name = raw.decode("utf-16-le")
+            if not name or name in names:
+                raise ValueError("Empty or duplicate external property name")
+            names.append(name)
+        tables.append({"address": hex(address), "count": count, "names": names})
+    if not all(name in tables[1]["names"] for name in requests.values()):
+        raise ValueError("Named main executable requests absent from library lookup")
+    result["library"] = {"sha256": digest, "lookupMethod": "0x10002520",
+                         "propertyMethod": "0x10004c70", "instructionChecks": len(dll_checks),
+                         "requestTables": tables,
+                         "limits": "Fixed bounded name tables contain audio and generic device controls; names alone do not prove handler effects or keyboard support."}
+    return result
+
+
 def inspect_settings_ui_control_actions(path):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -706,7 +785,7 @@ def inspect_macro_ui(pe, skin):
             "limits": "Static selected resource and one recorder branch; not proof against all indirect/hidden paths or firmware wheel capability"}
 
 
-def inspect(path, skin=None, macro_ui=False, ui_dll=None):
+def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != EXPECTED_SHA256:
@@ -827,12 +906,13 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 13,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 14,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
+        "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
@@ -872,9 +952,10 @@ def main():
     parser.add_argument("--skin", help="Optional extracted Skin directory; verifies target model resource without copying it")
     parser.add_argument("--macro-ui", action="store_true", help="Also audit the target macro resource, menu and recorder branch; requires --skin")
     parser.add_argument("--ui-dll", help="Optional extracted DuiLib.dll; read-only control action audit")
+    parser.add_argument("--osconf-dll", help="Optional extracted x86/vista/osConfLib.dll; read-only request table audit")
     args = parser.parse_args()
     try:
-        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui, args.ui_dll), ensure_ascii=False, indent=2))
+        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui, args.ui_dll, args.osconf_dll), ensure_ascii=False, indent=2))
     except (OSError, ValueError, struct.error, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
 
