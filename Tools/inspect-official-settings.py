@@ -442,6 +442,50 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
+def inspect_default_configuration_path(pe):
+    """Audit the confirmed default-button branch, without authorizing reset."""
+    checks = {
+        0x48E87C: "680cbb7500", 0x48E897: "e814be0100",
+        0x4AA6C7: "688cfb7500", 0x4AA6D5: "e8d6c8f9ff",
+        0x4AA6EB: "e830dffeff", 0x4AA701: "8b8290020000",
+        0x4AA720: "8b90a4020000", 0x4AA750: "8b82bc020000",
+        0x4F933C: "e8afb5f3ff", 0x4F9351: "e8ea910400",
+        0x4F9366: "e89533f8ff", 0x4F9398: "e873a60200",
+        0x4F93D4: "8b82c4020000", 0x4F93DA: "ffd0",
+        0x4FE98A: "e8a104f8ff", 0x4FE99E: "8b90a0020000",
+        0x5425AB: "e810010000", 0x5425ED: "68386a7700",
+        0x5425F9: "ff15c0b16e00", 0x542616: "ff15d0b66e00",
+        0x434903: "6880fb7200", 0x434949: "8b9140080000",
+        0x42B4BA: "8b80240b0000",
+    }
+    for address, encoded in checks.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected default configuration instruction")
+    methods = {0x290: 0x4F9320, 0x2A4: 0x4FE970, 0x2BC: 0x500790, 0x2C4: 0x501190}
+    for offset, target in methods.items():
+        if pe.pointer(0x77F604 + offset) != target:
+            raise ValueError("Unexpected model default configuration virtual target")
+    for address, name in {0x75BB0C: "default_btn", 0x75FB8C: "message_text_22",
+                          0x776A38: "DefaultData%d.json", 0x72FB80: "device_nprofile_combo"}.items():
+        expected = (name + "\0").encode("utf-16-le")
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected default configuration string")
+    imports = {0x6EB1C0: "?Format@CDuiString@DuiLib@@QAAHPB_WZZ",
+               0x6EB6D0: "??HCDuiString@DuiLib@@QBE?AV01@ABV01@@Z",
+               0x6EB3A4: "?FindSubControlByName@CPaintManagerUI@DuiLib@@QBEPAVCControlUI@2@PAV32@PB_W@Z"}
+    for address, name in imports.items():
+        expected = (name + "\0").encode("ascii")
+        if pe.at(pe.base + pe.pointer(address) + 2, len(expected)) != expected:
+            raise ValueError("Unexpected default configuration import")
+    return {"instructionChecks": len(checks), "button": "default_btn", "confirmation": "message_text_22",
+            "handler": "0x4aa6b0", "modelVirtualCalls": {hex(k): hex(v) for k, v in methods.items()},
+            "defaultFilePattern": "DefaultData%d.json", "defaultFilePathCompositionMethod": "0x542540",
+            "fileIndexControl": "device_nprofile_combo", "profileIndexGetter": "0x42b4b0",
+            "followingBindingDispatchOffset": "0x2a0", "hardwareWriteAuthorized": False,
+            "limits": "Confirmed button and model virtual targets only; default file index, complete model extraction, nested binding dispatch and physical effects remain unverified. This is not a standalone factory-reset report or product reset implementation."}
+
+
 def inspect_external_property_binding(pe, dll_path=None):
     """Follow named dynamic bindings; optionally read the DLL's request tables."""
     checks = {
@@ -932,12 +976,13 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 15,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 16,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
+        "defaultConfigurationPath": inspect_default_configuration_path(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
