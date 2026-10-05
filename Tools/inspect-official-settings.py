@@ -367,6 +367,81 @@ SETTINGS_WINDOW_MESSAGE_CHECKS = {
 }
 
 
+SETTINGS_STATUS_PREDICATE_CHECKS = {
+    0x4F92DA: "83b8840a000000", 0x4F92E1: "7428",
+    0x4F92E6: "83b9bc10000000", 0x4F92ED: "741c",
+    0x4F92F2: "81c1380a0000", 0x4F92F8: "e8534bfeff",
+    0x4F9302: "7407", 0x4F9304: "b801000000", 0x4F930B: "33c0",
+    0x4DDE69: "c645bc00", 0x4DDE6D: "6a3f", 0x4DDE6F: "6a00",
+    0x4DDE71: "8d45bd", 0x4DDE75: "e826941a00",
+    0x4DDE84: "b901000000", 0x4DDE89: "6bd100", 0x4DDE8C: "c64415bc04",
+    0x4DDE91: "b801000000", 0x4DDE96: "6bc803", 0x4DDE99: "c6440dbcaa",
+    0x4DDFAF: "8b9574ffffff", 0x4DDFB5: "83ba8406000000",
+    0x4DDFBC: "7507", 0x4DDFBE: "b001", 0x4DDFC0: "e9d1000000",
+    0x4DDFDD: "6a40", 0x4DDFDF: "8d8d7cffffff", 0x4DDFE6: "6a40",
+    0x4DDFE8: "8d55bc", 0x4DDFF2: "e889b3ffff",
+    0x4DE01A: "b901000000", 0x4DE01F: "c1e103",
+    0x4DE022: "0fb6940d7cffffff", 0x4DE02A: "81faff000000",
+    0x4DE030: "7509", 0x4DE032: "c6857bffffff01",
+    0x4DE03B: "c6857bffffff00", 0x4DE042: "83bd58ffffff01",
+    0x4DE049: "7407", 0x4DE04B: "c6857bffffff00",
+    0x4DE052: "b801000000", 0x4DE057: "6bc807",
+    0x4DE05A: "0fb6940d7cffffff", 0x4DE062: "81faff000000",
+    0x4DE068: "7507", 0x4DE06A: "c6857bffffff00",
+    0x4DE071: "b801000000", 0x4DE076: "6bc807",
+    0x4DE079: "0fb6940d7cffffff", 0x4DE081: "81fafe000000",
+    0x4DE087: "7507", 0x4DE089: "c6857bffffff00",
+    0x4DE090: "8a857bffffff",
+    0x4DE967: "837d0801", 0x4DE96B: "7519",
+    0x4DE970: "c7808406000000000000", 0x4DE97D: "c6819006000038",
+    0x4DE986: "837d0802", 0x4DE98A: "7519",
+    0x4DE98F: "c7828406000001000000", 0x4DE99C: "c6809006000037",
+    0x4DE9A5: "837d0803", 0x4DE9A9: "7519",
+    0x4DE9AE: "c7818406000001000000", 0x4DE9BB: "c6829006000018",
+    0x4DE9C7: "c7808406000000000000", 0x4DE9D4: "c6819006000038",
+    0x49A469: "8982bc100000", 0x49A475: "83b9bc10000000",
+    0x49A47C: "0f84aa000000", 0x49A482: "6a02",
+    0x49A48A: "81c1380a0000", 0x49A490: "e8cb440400",
+    0x49A4B4: "81c1380a0000", 0x49A4BA: "e891390400",
+    0x49A52C: "6a01", 0x49A534: "81c1380a0000", 0x49A53A: "e821440400",
+}
+
+
+def inspect_settings_status_predicate(pe):
+    if pe.pointer(0x77F604 + 0x280) != 0x4F92D0:
+        raise ValueError("Unexpected settings status predicate dispatch")
+    for address, encoded in SETTINGS_STATUS_PREDICATE_CHECKS.items():
+        expected = bytes.fromhex(encoded)
+        if pe.at(address, len(expected)) != expected:
+            raise ValueError("Unexpected settings status predicate instruction")
+    return {"instructionChecks": len(SETTINGS_STATUS_PREDICATE_CHECKS),
+            "virtualOffset": "0x280", "method": "0x4f92d0",
+            "guards": ["device+0xa84 != 0", "device+0x10bc != 0"],
+            "communicationMember": "0xa38", "helper": "0x4dde50",
+            "guardAlias": {"deviceMember": "0x10bc", "communicationMember": "0x684",
+                           "relationship": "0xa38 + 0x684 == 0x10bc",
+                           "limits": "The outer guard excludes the helper's no-exchange case if this shared field does not change between guard and call"},
+            "probe": {"reportID": 4, "commandByte": 3, "command": "0xaa",
+                      "requestLength": 64, "replyLength": 64, "exchange": "0x4d9380",
+                      "replyConditions": ["exchange result == 1", "reply[8] == 0xff",
+                                          "reply[7] != 0xff", "reply[7] != 0xfe"]},
+            "withoutExchange": {"condition": "communication+0x684 == 0", "returns": True},
+            "hostSelectorSetter": {"method": "0x4de960",
+                                   "cases": [{"argument": 1, "member684": 0, "byte690": 56},
+                                             {"argument": 2, "member684": 1, "byte690": 55},
+                                             {"argument": 3, "member684": 1, "byte690": 24},
+                                             {"argument": "other", "member684": 0, "byte690": 56}],
+                                   "limits": "Named host stores only; the physical transports and uses of byte690 are not classified here"},
+            "namedSelectorCalls": [{"call": "0x49a490", "argument": 2,
+                                    "followupProbe": "0x49a4ba"},
+                                   {"call": "0x49a53a", "argument": 1}],
+            "hardwareWriteAuthorized": False,
+            "limits": ["Named status predicate, not a settings write acknowledgement",
+                       "The physical meaning of reply[8] and selector arguments is not established",
+                       "The helper's no-exchange return is not reachable through the outer guard without a state change",
+                       "No live query or new product transport permission"]}
+
+
 def inspect_settings_window_messages(pe):
     for address, encoded in SETTINGS_WINDOW_MESSAGE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -384,7 +459,7 @@ def inspect_settings_window_messages(pe):
             "message": "0xc19", "firstWindowMember": "0x1f64",
             "relay": {"comparison": "0x493b81", "childWindowMember": "0x146c",
                       "forwardCall": "0x493bb3", "argumentsPreserved": ["wParam", "lParam"]},
-            "limits": "These calls send a Windows window message. The virtual predicate +0x280 and downstream child-window handling are not classified here; this does not establish or exclude a separate firmware settings command."}
+            "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; downstream child-window handling remains unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
 def inspect_system_device_paths(pe):
@@ -643,13 +718,14 @@ def inspect(path, skin=None, macro_ui=False):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 10,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 11,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
+        "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
