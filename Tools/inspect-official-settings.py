@@ -1680,6 +1680,51 @@ def inspect_macro_resources(skin):
                                for path, data in zip([device_path, control_path, menu_path], [device_data, control_data, menu_data])}}
 
 
+def inspect_macro_capacity_sender(pe):
+    """Audit byte-capacity accounting, count widths and the empty-bindings exit."""
+    if pe.pointer(0x77F604 + 0x2B4) != 0x4FF710:
+        raise ValueError("Unexpected target macro serializer dispatch")
+    checks = {
+        0x4FF925: "833800", 0x4FF928: "0f84b3000000",
+        0x4FFA28: "83bdc8fcffff00", 0x4FFA2F: "0f85b3000000",
+        0x4FFA35: "c78594fcffff00000000", 0x4FFAE3: "e956080000",
+        0x4FFAF4: "8d044a", 0x4FFB09: "8d048a",
+        0x4FFBDC: "e84f750400", 0x4FFBF3: "8d1481",
+        0x4FFC16: "83c010", 0x4FFC25: "0fb691fa1d0000",
+        0x4FFC2C: "c1e207", 0x4FFC2F: "3995d4fcffff",
+        0x4FFC35: "0f86fd000000", 0x4FFD3F: "e8a34f1900",
+        0x4FFE58: "66894202", 0x4FFE69: "66895104",
+        0x4FFF96: "e895710400", 0x4FFF9B: "668985ccfcffff",
+        0x4FFFB5: "881401", 0x4FFFCF: "88440a01",
+        0x500008: "0fb78dccfcffff", 0x50000F: "3bc1",
+        0x500011: "0f8dc1000000", 0x500054: "e8270bf8ff",
+        0x5000E6: "8d048a", 0x500240: "0fb688fa1d0000",
+        0x500247: "c1e107", 0x50024A: "0faf4d08",
+        0x500269: "e822bbfdff",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected macro capacity/count instruction")
+    digest = hashlib.sha256(pe.at(0x4FF710, 0x50035A - 0x4FF710)).hexdigest()
+    if digest != "b5173c2681529d65765d444cee70165257fdc75da27801063223b6f78bbd7967":
+        raise ValueError("Unexpected target macro serializer body")
+    return {"instructionChecks": len(checks), "virtualOffset": "0x2b4", "method": "0x4ff710",
+            "functionEndExclusive": "0x50035a", "functionSHA256": digest,
+            "capacityCheck": {"member": "byte(device+0x1dfa)", "multiplier": 128,
+                              "formula": "16 + 6 * collectedBindingCount + 4 * totalEventCount",
+                              "acceptsEqualNominalCapacity": True, "comparison": "0x4ffc2f"},
+            "countEncoding": {"bankMacroCountBits": 16, "macroEventCountBits": 16, "eventBytes": 4,
+                              "eventEncoder": "0x480b80", "eventLoopComparison": "0x50000f"},
+            "emptyCollectedBindings": {"branch": "0x4ffa2f", "returnJump": "0x4ffae3",
+                                       "result": 0, "sendsMacroBankFromThisMethod": False},
+            "transport": {"targetCall": "0x500269", "helper": "0x4dbd90",
+                          "profileBase": "byte(device+0x1dfa) * 128 * profileIndex"},
+            "productPolicyDistinction": "The named sender counts bytes and encodes word-sized counts; CherryMac's current 32-macro/256-event guards are not established as official UI or firmware limits by this evidence.",
+            "hardwareWriteAuthorized": False,
+            "limits": "Sender structure only. Does not establish official UI limits, firmware acceptance of larger counts, or readable/writable final capacity byte. Zero collected bindings means no bank send in this method, not whole-program or firmware erasure/retention proof."}
+
+
 def inspect_macro_mouse_search_bounds(pe):
     """Check named mouse-table search bounds and separate toolbar forwarding."""
     checks = {
@@ -1879,7 +1924,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 38,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 39,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1903,6 +1948,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplySave": inspect_basic_apply_save(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
+        "macroCapacitySender": inspect_macro_capacity_sender(pe),
         "customLightingJSON": inspect_custom_lighting_json(pe),
         "modeRefreshMemoryPaths": inspect_refresh_mode_memory(pe),
         "targetParameterSelector": inspect_target_parameter_branch(pe),
