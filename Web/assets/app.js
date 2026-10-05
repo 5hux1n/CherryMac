@@ -46,7 +46,7 @@ function render(){
   const online=hid&&!hid.dead&&baseline;$('connection').textContent=online?'● USB 已连接 · 已读取':'● 未连接 · 可编辑配置';$('connection').classList.toggle('connected',!!online);$('disconnect').hidden=!hid||hid.dead;$('device-status').textContent=online?(macroProduct?'已连接 · 可分别写入按键与宏':'已连接 · 配置已读取，可独立写入按键'):'尚未读取 · 可预览与编辑配置';
   $('change-title').textContent=tab==='keys'?'待写入按键':tab==='macros'&&macroProduct?'待写入宏':'编辑预览';$('changes').replaceChildren();
   for(const [name,value] of [['按键功能',`${c.keys} 键`],['逐键颜色',`${c.colors} 键`],['灯效参数',c.params?'已修改':'未修改'],['宏存储',c.macros?'已修改':'未修改']]){const line=document.createElement('div');line.className='change-line';const text=document.createElement('span'),v=document.createElement('b');text.textContent=name;v.textContent=value;line.append(text,v);$('changes').append(line);}
-  let keyPlan=null,keyError=null;if(baseline)try{keyPlan=tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(s,baseline);}catch(error){keyError=error.message;}
+  let keyPlan=null,keyError=null;if(baseline)try{keyPlan=tab==='macros'&&macroProduct?macroProductPlan(profile,baseline,baselineLightingMapping):makeKeymapPlan(s,baseline);}catch(error){keyError=error.message;}
   $('draft-note').textContent=tab==='lights'?($('open-lighting-acceptance')?'先准备灯效计划，再进入独立页面重新读取、备份和确认；本页不会直接发送。':'仅核对并导出灯效计划；普通版尚未开放灯效发送。'):tab==='macros'&&macroProduct?(keyError??'只更新宏库与宏绑定键；灯效和设备参数保留。普通键草稿保留，可在按键页面另行写入。'):tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
   let pollingWords=null;try{if(profile.windowsTemplateJSON)pollingWords=officialSystemStageWords(JSON.parse(profile.windowsTemplateJSON));}catch{}
@@ -292,7 +292,7 @@ $('import').onclick=()=>$('file').click();
 $('file').onchange=()=>operation(async()=>{
   const file=$('file').files[0];$('file').value='';if(!file)return;
   requireThat(file.size<=3_000_000,'配置文件超过 3 MB。');
-  const raw=await file.text(),p=parseProfile(raw,baseline,{deferHostText:textProduct,lightingMapping:profile.lightingMapping});
+  const raw=await file.text(),p=parseProfile(raw,baseline,{deferHostText:textProduct,lightingMapping:baselineLightingMapping});
   const mixed=adoptImportedProfile(p,file.name);
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
 });
@@ -335,7 +335,7 @@ $('default-file').onchange=()=>operation(async()=>{
   requireThat(baseline,'请先读取键盘，再载入官方默认草稿。');
   requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
   const root=extractOfficialDefaultTemplate(await file.text());
-  const next=parseProfile(JSON.stringify(root),baseline,{deferHostText:textProduct,lightingMapping:profile.lightingMapping});
+  const next=parseProfile(JSON.stringify(root),baseline,{deferHostText:textProduct,lightingMapping:baselineLightingMapping});
   if(!confirm('载入官方默认草稿会替换当前编辑区。请先导出需要保留的配置。默认键位、灯效与文件设置只载入草稿，原始宏存储保留；不会写入键盘，完整恢复默认尚未开放。')){status('已取消载入，编辑区保留。');return;}
   if(textProduct){textRoot=null;$('text-summary').textContent='默认草稿未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
   profile=next;refreshMacros();loadMacro();loadPlayback();syncLights();
@@ -353,7 +353,7 @@ $('diagnostics').onclick=()=>operation(async()=>{
   const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),...records,sessionLogs:clone(hid?.history??[]),pageFailures:clone(pageFailures),logError:storageErrors.usbLogs??storageErrors.sessionLogging??null,storageErrors,note:'包含可读取的本地备份与操作日志；storageErrors 非空表示对应资料不完整。未自动上传。'};
   download(evidence,'CherryMac-diagnostics.json');status(Object.keys(storageErrors).length?'排查资料已下载；部分本地记录无法读取，错误已写入文件，其余日志保留。':'排查资料已下载到本地，未上传。',Object.keys(storageErrors).length>0);
 },{localOnly:true});
-function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline):makeKeymapPlan(profile.snapshot,baseline);}
+function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline,baselineLightingMapping):makeKeymapPlan(profile.snapshot,baseline);}
 $('write').onclick=()=>{
   if(tab==='lights'){
     if(busy||recorder||!baseline)return;

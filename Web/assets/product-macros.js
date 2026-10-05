@@ -15,8 +15,9 @@ async function save(value){
   await record('readwrite',store=>store.put(clone(value)));
   requireThat(equal(await record('readonly',store=>store.get(value.id)),value),'宏资料保存校验失败，停止写入。');
 }
-export function macroProductPlan(profile,before){
+export function macroProductPlan(profile,before,mapping=null){
   validateProfile(profile);requireThat(equal(profile.snapshot.deviceInfo,before.deviceInfo),'配置来自不同固件，请重新读取。');
+  if(profile.macroStorageLayout==='officialBindings')requireThat(mapping&&equal(profile.lightingMapping,mapping),'宏草稿的默认映射与最近实际读取不同，请重新读取后重新导入配置。');
   const target=profile.macroStorageLayout==='officialBindings'?officialMacroReceipt(profile,before).expected:resolveMacros(profile);
   for(let slot=0;slot<126;slot++){
     const offset=slot*3;if(![0x70,0x71].includes(before.keymap[offset])&&![0x70,0x71].includes(target.keymap[offset]))target.keymap.splice(offset,3,...before.keymap.slice(offset,offset+3));

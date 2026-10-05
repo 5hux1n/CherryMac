@@ -869,6 +869,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard let draft=profile,let baseline else{throw HardwareError(message:"请先读取键盘。")}
         try draft.validate()
         guard draft.snapshot.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请重新读取。") }
+        if draft.macroStorageLayout == .officialBindings {
+            guard let mapping=baselineLightingMapping,draft.lightingMapping==mapping else{throw HardwareError(message:"宏草稿的默认映射与最近实际读取不同，请重新读取后重新导入配置。")}
+        }
         var target=try draft.macroStorageLayout == .officialBindings ? draft.officialMacroReceipt(before:baseline).expected:draft.resolvedMacros()
         guard target.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置固件信息与当前键盘不一致，请重新读取。")}
         target.parameters=baseline.parameters;target.colors=baseline.colors
@@ -1227,9 +1230,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         if WindowsProfile.isOfficial(data){
             guard let baseline else{throw HardwareError(message:"导入 Windows 配置前，请先读取当前 USB 键盘，以保留原配置和宏区。")}
             #if CHERRY_MACRO_PRODUCT
-            let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true,lightingMapping:profile?.lightingMapping)
+            let imported=try WindowsProfile.decode(data,baseline:baseline,deferHostText:true,lightingMapping:baselineLightingMapping)
             #else
-            let imported=try WindowsProfile.decode(data,baseline:baseline,lightingMapping:profile?.lightingMapping)
+            let imported=try WindowsProfile.decode(data,baseline:baseline,lightingMapping:baselineLightingMapping)
             #endif
             next=imported.profile;summary=imported.summary
         }else{next=try HardwareProfile.decode(data);summary="配置已载入编辑区，尚未写入键盘。"}
