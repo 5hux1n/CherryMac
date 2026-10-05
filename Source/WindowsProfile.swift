@@ -1025,9 +1025,9 @@ enum WindowsProfile {
         return result
     }
     struct DefaultTransactionRecord:Codable {
-        var format="CherryMacDefaultTransactionRecord";var version=1;var hardwareReady=false
+        var format="CherryMacDefaultTransactionRecord";var version=2;var hardwareReady=false
         var operationID:String;var direction:String;var sourceReview:DefaultConfigurationReview
-        var recovery:DefaultRecoveryPlan?;var trace:OfficialLightingPlan.Trace
+        var recovery:DefaultRecoveryPlan?;var started:HardwareSnapshot;var trace:OfficialLightingPlan.Trace
         var current:HardwareSnapshot?;var failure:String
         struct Assessment:Codable {
             var format="CherryMacDefaultTransactionAssessment";var version=1;var hardwareReady=false
@@ -1036,17 +1036,19 @@ enum WindowsProfile {
         }
         func assess()throws->Assessment {
             let allowed=CharacterSet(charactersIn:"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
-            guard format=="CherryMacDefaultTransactionRecord",version==1,!hardwareReady,!operationID.isEmpty,operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}),["forward","recovery"].contains(direction),failure.utf8.count<=4096 else{throw HardwareError(message:"默认恢复事务记录格式无效。")}
+            guard format=="CherryMacDefaultTransactionRecord",version==2,!hardwareReady,!operationID.isEmpty,operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}),["forward","recovery"].contains(direction),failure.utf8.count<=4096 else{throw HardwareError(message:"默认恢复事务记录格式无效。")}
             let reports:[OfficialLightingPlan.Report],target:HardwareSnapshot
             if direction=="forward" {
                 guard recovery==nil else{throw HardwareError(message:"前向记录不能混入撤回计划。")}
                 reports=try WindowsProfile.defaultConfigurationReports(sourceReview);target=sourceReview.candidate
+                try started.validate();guard started.colors != nil,started.macroData != nil,WindowsProfile.sameDefaultConfiguration(started,sourceReview.original) else{throw HardwareError(message:"前向事务起始配置与基线不一致。")}
             }else{
                 guard let recovery else{throw HardwareError(message:"撤回记录缺少原始撤回计划。")}
                 _ = try WindowsProfile.reviewDefaultRecoveryProgress(recovery,current:recovery.before)
                 let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
                 guard try encoder.encode(sourceReview)==encoder.encode(recovery.sourceReview) else{throw HardwareError(message:"撤回记录的来源不一致。")}
-                reports=recovery.reports;target=recovery.expected
+                let initial=try WindowsProfile.reviewDefaultRecoveryProgress(recovery,current:started)
+                reports=initial.configurationMatchesOriginal ? []:recovery.reports;target=recovery.expected
             }
             let reviewed=try WindowsProfile.reviewDefaultTrace(trace,reports:reports,deviceInfo:sourceReview.original.deviceInfo)
             var matches=false,recoveryStatus="unavailable",prefixes:[Int]=[]
@@ -1061,6 +1063,49 @@ enum WindowsProfile {
             let status = !failure.isEmpty || reviewed.status=="failed" ? "failed":reviewed.status != "complete" ? "incomplete":current==nil ? "readbackMissing":matches ? "readbackMatched":"readbackMismatch"
             return .init(operationID:operationID,direction:direction,status:status,traceReview:reviewed,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedDataPrefixes:prefixes)
         }
+    }
+    private static func sameDefaultConfiguration(_ a:HardwareSnapshot,_ b:HardwareSnapshot)->Bool {
+        a.deviceInfo==b.deviceInfo && a.keymap==b.keymap && a.parameters==b.parameters && a.colors==b.colors && a.macroData==b.macroData
+    }
+    // Injectable transaction only. No USB sender, UI write permission or retry.
+    static func executeDefaultTransaction(review:DefaultConfigurationReview,recovery:DefaultRecoveryPlan?=nil,
+        source:String,operationID:String=UUID().uuidString,assertCurrent:()throws->Void,cancelled:()->Bool,
+        read:()throws->HardwareSnapshot,backup:(HardwareSnapshot)throws->Void,persist:(DefaultTransactionRecord)throws->Void,
+        clock:()->Int,wait:(Int)throws->Void,exchange:([UInt8])throws->[UInt8])throws->DefaultTransactionRecord {
+        let direction=recovery==nil ? "forward":"recovery"
+        var record=DefaultTransactionRecord(operationID:operationID,direction:direction,sourceReview:review,recovery:recovery,started:recovery?.before ?? review.original,trace:.init(format:"CherryMacDefaultTrace",version:1,source:source,entries:[]),failure:"")
+        _ = try record.assess()
+        func check()throws{try assertCurrent();guard !cancelled() else{throw HardwareError(message:"默认恢复流程已取消。")}}
+        func describe(_ error:Error)->String {
+            let text=error.localizedDescription.trimmingCharacters(in:.whitespacesAndNewlines)
+            return text.isEmpty ? "默认恢复操作失败。":String(decoding:text.utf8.prefix(4000),as:UTF8.self)
+        }
+        try check();record.started=try read();try assertCurrent();_ = try record.assess()
+        let reports:[OfficialLightingPlan.Report]
+        if let recovery {
+            let progress=try reviewDefaultRecoveryProgress(recovery,current:record.started)
+            reports=progress.configurationMatchesOriginal ? []:recovery.reports
+        }else{reports=try defaultConfigurationReports(review)}
+        try backup(record.started);try persist(record)
+        do{
+            try check();let verified=try read();try verified.validate();try assertCurrent()
+            guard verified.colors != nil,verified.macroData != nil,sameDefaultConfiguration(verified,record.started) else{throw HardwareError(message:"备份后配置发生变化，未发送默认恢复指令。")}
+        }catch{record.failure=describe(error);_ = try record.assess();try persist(record);return record}
+        for packet in reports {
+            do{try check();try wait(packet.delayMilliseconds);try check()}catch{record.failure=describe(error);break}
+            let index=record.trace.entries.count
+            record.trace.entries.append(.init(request:packet.request,sentMilliseconds:clock()))
+            _ = try record.assess();try persist(record)
+            do{try check();let reply=try exchange(packet.request);try assertCurrent();record.trace.entries[index].reply=reply}catch{record.trace.entries[index].error=describe(error)}
+            record.trace.entries[index].endedMilliseconds=clock()
+            let assessment=try record.assess();try persist(record)
+            if assessment.traceReview.status=="failed"{record.failure=record.trace.entries[index].error ?? "默认恢复回复校验失败。";break}
+        }
+        do{try assertCurrent();let value=try read();try value.validate();guard value.colors != nil,value.macroData != nil else{throw HardwareError(message:"默认恢复读回不完整。")};try assertCurrent();record.current=value}
+        catch{if record.failure.isEmpty{record.failure=describe(error)}}
+        let final=try record.assess()
+        if record.failure.isEmpty && !final.readbackMatches{record.failure="默认恢复读回与目标不一致。"}
+        _ = try record.assess();try persist(record);return record
     }
     struct LightingDraftReview:Codable {
         var format="CherryMacLightingDraftReview";var version=1;var hardwareReady=false

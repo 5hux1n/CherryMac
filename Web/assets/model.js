@@ -604,15 +604,16 @@ function reviewDefaultTrace(trace,reports,deviceInfo){
   return result;
 }
 export function assessDefaultTransactionRecord(record){
-  requireThat(record?.format==='CherryMacDefaultTransactionRecord'&&record.version===1&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&['forward','recovery'].includes(record.direction)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'默认恢复事务记录格式无效。');
+  requireThat(record?.format==='CherryMacDefaultTransactionRecord'&&record.version===2&&record.hardwareReady===false&&typeof record.operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(record.operationID)&&['forward','recovery'].includes(record.direction)&&typeof record.failure==='string'&&new TextEncoder().encode(record.failure).length<=4096,'默认恢复事务记录格式无效。');
   let reports,target;
   if(record.direction==='forward'){
     requireThat(record.recovery==null,'前向记录不能混入撤回计划。');reports=defaultConfigurationReports(record.sourceReview);target=record.sourceReview.candidate;
+    validateSnapshot(record.started,true);requireThat(sameDefaultConfiguration(record.started,record.sourceReview.original),'前向事务起始配置与基线不一致。');
   }else{
     requireThat(record.recovery!=null,'撤回记录缺少原始撤回计划。');reviewDefaultRecoveryProgress(record.recovery,record.recovery.before);
     const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
     requireThat(JSON.stringify(canonical(record.sourceReview))===JSON.stringify(canonical(record.recovery.sourceReview)),'撤回记录的来源不一致。');
-    reports=record.recovery.reports;target=record.recovery.expected;
+    const initial=reviewDefaultRecoveryProgress(record.recovery,record.started);reports=initial.configurationMatchesOriginal?[]:record.recovery.reports;target=record.recovery.expected;
   }
   const traceReview=reviewDefaultTrace(record.trace,reports,record.sourceReview.original.deviceInfo);
   let readbackMatches=false,recoveryStatus='unavailable',matchedDataPrefixes=[];
@@ -622,6 +623,33 @@ export function assessDefaultTransactionRecord(record){
   }
   const status=record.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':record.current==null?'readbackMissing':readbackMatches?'readbackMatched':'readbackMismatch';
   return {format:'CherryMacDefaultTransactionAssessment',version:1,hardwareReady:false,operationID:record.operationID,direction:record.direction,status,traceReview,readbackMatches,recoveryStatus,matchedDataPrefixes};
+}
+const sameDefaultConfiguration=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+// Injectable transaction only; no WebHID import, write permission or retry.
+export async function executeDefaultTransaction(review,{recovery=null,source,operationID=globalThis.crypto.randomUUID(),assertCurrent,cancelled,read,backup,persist,clock,wait,exchange}){
+  review=clone(review);recovery=clone(recovery);
+  const record={format:'CherryMacDefaultTransactionRecord',version:2,hardwareReady:false,operationID,direction:recovery?'recovery':'forward',sourceReview:review,recovery,started:clone(recovery?.before??review.original),trace:{format:'CherryMacDefaultTrace',version:1,source,entries:[]},current:null,failure:''};
+  assessDefaultTransactionRecord(record);
+  const describe=error=>{const text=String(error?.message??error).trim()||'默认恢复操作失败。';return new TextDecoder().decode(new TextEncoder().encode(text).slice(0,4000));};
+  const check=async()=>{await assertCurrent();requireThat(!cancelled(),'默认恢复流程已取消。');};
+  await check();record.started=clone(await read());await assertCurrent();assessDefaultTransactionRecord(record);
+  const reports=recovery?(reviewDefaultRecoveryProgress(recovery,record.started).configurationMatchesOriginal?[]:clone(recovery.reports)):defaultConfigurationReports(review);
+  await backup(clone(record.started));await persist(clone(record));
+  try{
+    await check();const verified=clone(await read());validateSnapshot(verified,true);await assertCurrent();
+    requireThat(sameDefaultConfiguration(verified,record.started),'备份后配置发生变化，未发送默认恢复指令。');
+  }catch(error){record.failure=describe(error);assessDefaultTransactionRecord(record);await persist(clone(record));return record;}
+  for(const report of reports){
+    try{await check();await wait(report.delayMilliseconds);await check();}catch(error){record.failure=describe(error);break;}
+    const entry={request:clone(report.request),sentMilliseconds:clock()};record.trace.entries.push(entry);
+    assessDefaultTransactionRecord(record);await persist(clone(record));
+    try{await check();const reply=Array.from(await exchange(clone(report.request)));await assertCurrent();entry.reply=reply;}catch(error){entry.error=describe(error);}
+    entry.endedMilliseconds=clock();const assessment=assessDefaultTransactionRecord(record);await persist(clone(record));
+    if(assessment.traceReview.status==='failed'){record.failure=entry.error||'默认恢复回复校验失败。';break;}
+  }
+  try{await assertCurrent();const current=clone(await read());validateSnapshot(current,true);await assertCurrent();record.current=clone(current);}catch(error){if(!record.failure)record.failure=describe(error);}
+  if(!record.failure&&!assessDefaultTransactionRecord(record).readbackMatches)record.failure='默认恢复读回与目标不一致。';
+  assessDefaultTransactionRecord(record);await persist(clone(record));return record;
 }
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
