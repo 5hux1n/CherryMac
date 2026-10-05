@@ -552,6 +552,56 @@ def inspect_default_final_refresh(pe):
             "limits":"Class-specific virtual dispatch and named JSON/UI inputs only. Do not treat common member +0x2584 as one data type across classes. Nested callbacks, key sender branches, implicit firmware side effects and the full program remain outside this conclusion; no macro-bank erase/retention, runtime or persistence proof."}
 
 
+
+def inspect_default_control_refresh(pe):
+    """Keep per-key display state apart from the keyboard's USB configuration."""
+    virtuals = {0x2EC: 0x540C60, 0x38C: 0x505AB0}
+    for offset, target in virtuals.items():
+        if pe.pointer(0x77F604 + offset) != target:
+            raise ValueError("Unexpected default control-refresh dispatch")
+    checks = {
+        0x4FB008: "81f9ce010000", 0x4FB00E: "7519",
+        0x4FB018: "8b90ec020000", 0x4FB01E: "ffd2",
+        0x4FB020: "83f801", 0x4FB023: "0f84a6010000",
+        0x4FB2B1: "0fb6915c210000", 0x4FB2B8: "83fa15",
+        0x4FB2BB: "7514", 0x4FB2BD: "6a01",
+        0x4FB2C7: "8b828c030000", 0x4FB2CD: "ffd0",
+        0x4FB2D1: "6a00", 0x4FB2DB: "8b828c030000", 0x4FB2E1: "ffd0",
+        0x505ACE: "81c124210000", 0x505AD4: "e837caf1ff",
+        0x505AE9: "81c124210000", 0x505AEF: "e8fcc9f1ff",
+        0x505AF6: "e8e5f6feff",
+        0x4F51ED: "8988240d0000", 0x4F51F6: "ff15dcb36e00",
+        0x540C6A: "8b8014210000",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError(f"Unexpected default control-refresh instruction at {address:#x}")
+    name = "?Invalidate@CControlUI@DuiLib@@QAEXXZ"
+    if pe.at(pe.base + pe.pointer(0x6EB3DC) + 2, len(name) + 1) != (name + "\0").encode("ascii"):
+        raise ValueError("Unexpected control invalidation import")
+    bodies = {
+        0x4FAA50: (0x4FB2E9, "0d048e10f5665239c040f279c8fd55be32863d4429b8afb8bb65a41c710bdde5"),
+        0x505AB0: (0x505B03, "1f6cc3cef9f48564e68b00048b464653f1187983eda9de2ffd7b2f38dff59b31"),
+        0x4F51E0: (0x4F5202, "4de35f155029793068580baaeb3cf4bcd157f952d3b537b5931f77ed3da2f601"),
+        0x540C60: (0x540C74, "4d0fc410e63150863f20be276a07066074886f21004b44d9cf5013611c204e95"),
+    }
+    for address, (end, expected) in bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
+            raise ValueError("Unexpected default control-refresh function body")
+    return {"instructionChecks": len(checks),
+            "virtualTargets": {hex(k): hex(v) for k, v in virtuals.items()},
+            "functionSHA256": {hex(k): v[1] for k, v in bodies.items()},
+            "targetPredicate": {"productID": 0x01CE, "member": "0x2114", "compare": 1,
+                                "controlsBlock": "0x4fb1cf"},
+            "modeDisplay": {"mode": 21, "virtualOffset": "0x38c", "memberVector": "0x2124",
+                            "elementMethod": "0x4f51e0", "elementMember": "0xd24",
+                            "import": name, "modeArgument": "1 for 21, otherwise 0"},
+            "hardwareWriteAuthorized": False,
+            "conclusion": "The resolved +0x38c path updates each host key-control member and invokes CControlUI::Invalidate; the resolved +0x2ec predicate only returns a host member. Neither resolved method sends a keyboard report.",
+            "pendingMacroStorageSemantics": True,
+            "limits": "The containing refresh method has additional UI callbacks not all classified here. No claim about the full program, implicit firmware effects, macro erase or persistence; no execution or device access."}
+
 def inspect_default_key_action_branch(pe):
     """Distinguish factory-record copying from action binding serialization."""
     virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
@@ -2022,7 +2072,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 41,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 42,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2031,6 +2081,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
+        "defaultControlRefresh": inspect_default_control_refresh(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
