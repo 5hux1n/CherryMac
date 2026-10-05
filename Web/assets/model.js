@@ -1070,12 +1070,16 @@ export function validateRawLightingMetadata(value){
   const draft={format:'CherryMacProfile',version:1,snapshot:clone(value.snapshot),macros:[],lightingMapping:clone(value.lightingMapping),lightingColorEncoding:'officialRGB'};
   draft.snapshot.colors=clone(value.rawColors);
   const plan=planCustomLighting(draft,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
-  requireThat(lightingConfigurationEqual(officialLightingReadbackTarget(plan,value.snapshot),value.snapshot),'本地原始配色与保存的硬件颜色不一致。');
+  requireThat(equal(officialLightingReadbackTarget(plan,value.snapshot).colors,value.snapshot.colors),'本地原始配色与保存的硬件颜色不一致。');
 }
 export function captureRawLightingMetadata(profile,current){
   validateProfile(profile);validateSnapshot(current,true);
   if(profile.lightingColorEncoding!=='officialRGB'||current.parameters[1]!==8||profile.lightingMapping==null)return null;
-  if(!lightingConfigurationEqual(reviewLightingDraft(profile,current).target,current))return null;
+  // Matching local editor provenance is separate from authorizing a write;
+  // do not require an unrelated firmware commit marker to have value 1.
+  if(!equal(profile.snapshot.deviceInfo,current.deviceInfo)||![0,1,2,3,4,5,6,7,8,21].every(offset=>profile.snapshot.parameters[offset]===current.parameters[offset]))return null;
+  const plan=planCustomLighting(profile,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
+  if(!equal(officialLightingReadbackTarget(plan,current).colors,current.colors))return null;
   const value={format:'CherryMacRawLightingMetadata',version:1,snapshot:clone(current),rawColors:clone(profile.snapshot.colors),lightingMapping:clone(profile.lightingMapping)};
   validateRawLightingMetadata(value);return value;
 }

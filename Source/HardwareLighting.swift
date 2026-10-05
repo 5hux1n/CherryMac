@@ -1,14 +1,16 @@
 import AppKit
 
 extension HardwareWindowController {
-    func rememberRawLighting(_ draft:HardwareProfile,current:HardwareSnapshot)throws {
-        guard let value=try RawLightingMetadata.capture(draft,current:current) else{return}
+    @discardableResult
+    func rememberRawLighting(_ draft:HardwareProfile,current:HardwareSnapshot)throws->Bool {
+        guard let value=try RawLightingMetadata.capture(draft,current:current) else{return false}
         let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
         let data=try encoder.encode(value)
         try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true)
         let url=backupDirectory.appendingPathComponent("LightingMetadata-\(UUID().uuidString).json")
         try data.write(to:url,options:.atomic)
         guard try Data(contentsOf:url)==data else{throw HardwareError(message:"原始配色资料保存校验失败，请导出当前草稿保存。")}
+        return true
     }
     func recalledRawLighting(_ profile:HardwareProfile)->HardwareProfile? {
         guard profile.lightingMapping != nil else{return nil}
@@ -20,6 +22,14 @@ extension HardwareWindowController {
                   let next=try? value.adopting(into:profile) else{continue}
             return next
         };return nil
+    }
+    @objc func saveRawLightingDraft(){
+        guard !busy,baselineWasRead,let baseline,let draft=profile else{message.stringValue="请先读取键盘。";return}
+        do{
+            guard let mapping=baselineLightingMapping,draft.lightingMapping==mapping else{throw HardwareError(message:"请先读取实际 LED 映射；导入的映射资料不能替代本次读取。")}
+            guard try rememberRawLighting(draft,current:baseline) else{throw HardwareError(message:"当前原始配色或灯效参数与最近读回不一致。尚未写入的草稿请在配置与备份中导出 JSON 保存。")}
+            message.stringValue="已将与最近读回一致的原始配色保存到本机；下次读取并核对一致后可继续编辑。未写入键盘。"
+        }catch{message.stringValue=error.localizedDescription}
     }
     @objc func newCustomLightingDraft(){
         guard !busy,baselineWasRead,baseline != nil,let current=profile else{message.stringValue="请先读取键盘，取得完整配置和 LED 映射。";return}
@@ -137,6 +147,8 @@ extension HardwareWindowController {
         place(button("应用到所选键",#selector(stageColor)),8,158,192,30,in:colors)
         place(button("熄灭所选键",#selector(stageLightOff)),218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
+        let savePalette=button("保存本机配色",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的原始 RGB；未写入草稿请导出 JSON。不会写入键盘。"
+        place(savePalette,708,158,156,30,in:colors)
         place(label("新建配色从全部熄灭开始。⌘ 点击可多选；逐键配色为静态。",12),8,206,866,27,in:colors)
         chooseLightTab(lightTabButtons[0])
     }

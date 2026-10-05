@@ -305,14 +305,20 @@ struct RawLightingMetadata:Codable {
         var draft=HardwareProfile(snapshot:snapshot,lightingMapping:lightingMapping,lightingColorEncoding:.officialRGB)
         draft.snapshot.colors=rawColors
         let plan=try WindowsProfile.planCustomLighting(draft,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
-        guard try plan.expectedReadback(from:snapshot).hasSameConfiguration(as:snapshot) else{throw HardwareError(message:"本地原始配色与保存的硬件颜色不一致。")}
+        guard try plan.expectedReadback(from:snapshot).colors==snapshot.colors else{throw HardwareError(message:"本地原始配色与保存的硬件颜色不一致。")}
     }
     static func capture(_ draft:HardwareProfile,current:HardwareSnapshot)throws->RawLightingMetadata? {
         try draft.validate();try current.validate()
         guard draft.lightingColorEncoding == .officialRGB,current.parameters[1]==8,
               let mapping=draft.lightingMapping,let colors=draft.snapshot.colors else{return nil}
-        let target=try WindowsProfile.reviewLightingDraft(draft,baseline:current).target
-        guard target.hasSameConfiguration(as:current) else{return nil}
+        // A local palette does not require a firmware transaction's commit
+        // flag. Match actual lighting controls and colors, preserving all
+        // current hardware parameters in the provenance snapshot.
+        let offsets=Array(0...8)+[21]
+        guard draft.snapshot.deviceInfo==current.deviceInfo,
+              offsets.allSatisfy({draft.snapshot.parameters[$0]==current.parameters[$0]}) else{return nil}
+        let plan=try WindowsProfile.planCustomLighting(draft,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        guard try plan.expectedReadback(from:current).colors==current.colors else{return nil}
         let value=RawLightingMetadata(snapshot:current,rawColors:colors,lightingMapping:mapping)
         try value.validate();return value
     }
