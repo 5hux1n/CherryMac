@@ -35,6 +35,22 @@ enum CherryLighting {
     // Official DefaultLightName entry 47 for the supplied Pokémon model.
     // Names/codes come from the mode table, not this device's previous mode.
     static let modes:[(String,UInt8)] = [("自定义逐键颜色",8),("波纹",0),("光谱",1),("呼吸",2),("霓虹",10),("曲线",12),("折返",15),("放射",18),("扩散",19),("单点亮",21),("常亮",3),("闪电",23)]
+    struct ModeOptions {
+        let speed:Bool;let direction:Bool;let rainbow:Bool;let color:Bool
+    }
+    // Model47 DefaultLightName index -> hardware code, paired with layout 1
+    // (443E50) UI branches. Inactive parameters remain in the draft unchanged.
+    static func options(for code:UInt8)->ModeOptions? {
+        switch code {
+        case 0,10,12,18:return .init(speed:true,direction:true,rainbow:true,color:true)
+        case 2,19,21:return .init(speed:true,direction:false,rainbow:true,color:true)
+        case 15:return .init(speed:false,direction:false,rainbow:true,color:true)
+        case 1:return .init(speed:true,direction:false,rainbow:false,color:false)
+        case 3,23:return .init(speed:false,direction:false,rainbow:false,color:true)
+        case 8:return .init(speed:false,direction:false,rainbow:false,color:false)
+        default:return nil
+        }
+    }
     // Fixed Utility loading paths 505900 / 5059F0 and color method 501190.
     // Use with raw draft RGB only. A read-back bank may already be scaled.
     static let officialBrightnessCoefficients=[0,65,135,195,255]

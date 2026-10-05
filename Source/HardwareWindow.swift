@@ -174,6 +174,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let lightMultiple = NSButton(checkboxWithTitle:"多选",target:nil,action:nil)
     let lightRegion = NSPopUpButton()
     let lightPattern = NSPopUpButton()
+    let lightModeHelp = NSTextField(wrappingLabelWithString:"")
+    var globalLightColorButton:NSButton?
     let lightDirection = NSPopUpButton()
     let lightRainbow = NSPopUpButton()
     var lightSelection:Set<String> = ["calculator"]
@@ -712,6 +714,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         actionChanged()
     }
     func update(){
+        updateLightingOptions()
         playbackChanged()
         macroCancellationButton?.isHidden=currentMacroOperation==nil
         macroCancellationButton?.isEnabled=busy && currentMacroOperation?.isCancelled==false

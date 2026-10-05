@@ -52,7 +52,7 @@ manifest = {'format': 'CherryMacOnlineRelease', 'version': version, 'sourceCommi
             'hardwareAcceptance': 'pending',
             'features': {'macroProduct': True, 'officialMacroStorage': True,
                          'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'textProduct': True,
-                         'lightingWrite': False, 'defaultResetWrite': False, 'defaultTransactionFileInspection': True},
+                         'lightingModeOptions': True, 'lightingWrite': False, 'defaultResetWrite': False, 'defaultTransactionFileInspection': True},
             'files': {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in sorted(out.rglob('*')) if p.is_file()}}
 (out / 'release.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')

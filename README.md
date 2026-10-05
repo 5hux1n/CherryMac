@@ -2,7 +2,7 @@
 
 为 **CHERRY MX 3.0S 宝可梦无线键盘**提供 Mac 客户端和网页版。点选键盘图，设置按键、编辑宏与配色，备份和迁移配置。
 
-[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.46.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.46.0) · [PHP 0.45.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.45.0)
+[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.47.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.47.0) · [PHP 0.46.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.46.0)
 
 **当前是开发预览，完整复刻仍未完成。** USB 有线模式下提供按键、宏和文本触发键的独立写入、备份与读回核对。灯效可以编辑、保存和导出计划，普通版未开放灯效发送。新版两端仍待统一真机验收；旧网页灯效故障根因尚未确认。[各功能的实际验收范围](docs/当前功能与验收状态.md)
 
@@ -61,3 +61,5 @@ CHERRY_MACRO_PRODUCT=1 CHERRY_TEXT_PRODUCT=1 php -S 127.0.0.1:8770 -t .
 本项目与 CHERRY 官方无关联。公开包不包含官方软件、用户原始配置或真机日志。
 
 在“配置与备份”点击“检查默认配置操作记录”，可离线检查 CherryMac 默认配置事务 JSON，并导出原始备份和分析资料；无需连接键盘。记录有完整、可识别的读回时才能另行导出撤回计划。备份包含原始宏区，不补造宏名称；导入只载入草稿。记录读回不是当前键盘状态，也不能证明实体输出或断电保留；实际恢复仍需重新读取和核对。完整恢复默认写入尚未开放。
+
+内置灯效选项按本型号官方模式分别开放：不适用的速度、方向、单色／彩虹切换或内置单色会禁用，保存时保留这些参数原值。例如常亮不调速度，光谱不调单色；逐键颜色在逐键配色页设置。这是编辑选项对齐，灯效写入和外观仍待统一验收。

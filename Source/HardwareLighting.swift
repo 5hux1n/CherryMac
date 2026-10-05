@@ -115,7 +115,7 @@ extension HardwareWindowController {
         #endif
         let builtins=tabs.tabViewItems[0].view!
         place(label("模式"),8,12,72,24,in:builtins)
-        modePicker.addItems(withTitles:modes.map{$0.0});controls.append(modePicker);place(modePicker,92,8,277,28,in:builtins)
+        modePicker.addItems(withTitles:modes.map{$0.0});modePicker.target=self;modePicker.action=#selector(lightModeChanged);controls.append(modePicker);place(modePicker,92,8,277,28,in:builtins)
         place(label("亮度"),8,57,72,24,in:builtins);place(brightness,92,53,277,28,in:builtins)
         place(label("慢 ← 速度 → 快",12),8,103,125,24,in:builtins);place(speed,151,99,218,28,in:builtins)
         for slider in [brightness,speed]{slider.numberOfTickMarks=5;slider.allowsTickMarkValuesOnly=true;controls.append(slider)}
@@ -124,10 +124,10 @@ extension HardwareWindowController {
         place(label("颜色选项"),431,57,95,24,in:builtins)
         lightRainbow.addItems(withTitles:["保留颜色选项","单色","彩虹"]);controls.append(lightRainbow);place(lightRainbow,549,53,215,28,in:builtins)
         place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)
-        place(button("使用此颜色",#selector(stageGlobalLightColor)),625,99,139,30,in:builtins)
+        let colorButton=button("使用此颜色",#selector(stageGlobalLightColor));globalLightColorButton=colorButton;place(colorButton,625,99,139,30,in:builtins)
         place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
-        place(label("内置灯效读取后即可核对，无需导入文件。不同模式可能忽略速度、方向或颜色。",12),8,206,832,27,in:builtins)
+        lightModeHelp.font = .systemFont(ofSize:12);place(lightModeHelp,8,199,832,40,in:builtins)
         let colors=tabs.tabViewItems[1].view!
         place(button("新建逐键配色…",#selector(newCustomLightingDraft)),630,4,234,28,in:colors)
         controls.append(lightMultiple);place(lightMultiple,8,7,76,25,in:colors)
@@ -212,19 +212,41 @@ extension HardwareWindowController {
             message.stringValue="已将所选 \(lightSelection.count) 键设为熄灭。编辑仅用于预览，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
+    @objc func lightModeChanged(){updateLightingOptions()}
+    func selectedLightingOptions()->CherryLighting.ModeOptions? {
+        let index=modePicker.indexOfSelectedItem
+        guard modes.indices.contains(index) else{return nil}
+        return CherryLighting.options(for:modes[index].1)
+    }
+    func updateLightingOptions(){
+        let options=selectedLightingOptions()
+        speed.isEnabled = !busy && options?.speed==true
+        lightDirection.isEnabled = !busy && options?.direction==true
+        lightRainbow.isEnabled = !busy && options?.rainbow==true
+        globalLightColor.isEnabled = !busy && options?.color==true
+        globalLightColorButton?.isEnabled = !busy && options?.color==true
+        guard let options else{lightModeHelp.stringValue="当前模式的可调选项尚未确认；保留速度、方向及颜色参数。";return}
+        var unavailable:[String]=[]
+        if !options.speed{unavailable.append("速度")};if !options.direction{unavailable.append("方向")}
+        if !options.rainbow{unavailable.append("单色／彩虹切换")};if !options.color{unavailable.append("内置单色")}
+        lightModeHelp.stringValue=unavailable.isEmpty ? "可调整速度、方向和颜色。保存到编辑区后再核对灯效计划。":"本模式不提供："+unavailable.joined(separator:"、")+"。保存时保留这些参数原值；逐键颜色请在逐键配色页编辑。"
+    }
     @objc func stageLights(){
         guard !busy,var draft=profile,(0..<modes.count).contains(modePicker.indexOfSelectedItem)else{message.stringValue="请先读取键盘。";return}
         draft.snapshot.parameters[1]=modes[modePicker.indexOfSelectedItem].1
         draft.snapshot.parameters[2]=UInt8(Int(brightness.doubleValue.rounded()))
-        draft.snapshot.parameters[3]=UInt8(4-Int(speed.doubleValue.rounded()))
-        if lightDirection.indexOfSelectedItem>0{draft.snapshot.parameters[4]=UInt8(lightDirection.indexOfSelectedItem-1)}
-        if lightRainbow.indexOfSelectedItem>0{draft.snapshot.parameters[5]=UInt8(lightRainbow.indexOfSelectedItem-1)}
-        profile=draft;message.stringValue="已加入模式、亮度和速度设置。编辑仅用于预览，尚未写入键盘。";update()
+        let options=selectedLightingOptions()
+        if options?.speed==true{draft.snapshot.parameters[3]=UInt8(4-Int(speed.doubleValue.rounded()))}
+        if options?.direction==true,lightDirection.indexOfSelectedItem>0{draft.snapshot.parameters[4]=UInt8(lightDirection.indexOfSelectedItem-1)}
+        if options?.rainbow==true,lightRainbow.indexOfSelectedItem>0{draft.snapshot.parameters[5]=UInt8(lightRainbow.indexOfSelectedItem-1)}
+        profile=draft;message.stringValue="已保存此模式的可调参数，不适用的参数保留原值；尚未写入键盘。";update()
     }
     @objc func stageGlobalLightColor(){
         guard !busy,var draft=profile else{message.stringValue="请先读取键盘。";return}
-        let value=rgb(globalLightColor.color);draft.snapshot.parameters.replaceSubrange(6..<9,with:value.bytes);draft.snapshot.parameters[5]=0
-        profile=draft;lightRainbow.selectItem(at:1);message.stringValue="已把内置灯效颜色保存到编辑区，尚未写入。"
+        guard let options=selectedLightingOptions(),options.color else{message.stringValue="此模式不提供内置单色调整。";return}
+        let value=rgb(globalLightColor.color);draft.snapshot.parameters.replaceSubrange(6..<9,with:value.bytes)
+        if options.rainbow{draft.snapshot.parameters[5]=0;lightRainbow.selectItem(at:1)}
+        profile=draft;message.stringValue="已把内置灯效颜色保存到编辑区，尚未写入。"
     }
 }
 

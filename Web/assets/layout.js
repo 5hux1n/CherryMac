@@ -45,3 +45,14 @@ export function demoSnapshot(){
   for(const k of keys){let b=k.page===12?[0x30,k.usage&255,k.usage>>8]:[0x20,mods[k.slot]??0,k.usage??(k.id==='caps'?57:0)];if([6,71].includes(k.slot))b=[0xa0,k.slot===6?3:1,0];s.keymap.splice(k.slot*3,3,...b);s.colors.splice(k.slot*3,3,255,214,0);}
   return s;
 }
+
+// Model47 visible mode indices mapped to wire codes; official layout 1 UI.
+export function lightingOptions(code){
+  if([0,10,12,18].includes(code))return {speed:true,direction:true,rainbow:true,color:true};
+  if([2,19,21].includes(code))return {speed:true,direction:false,rainbow:true,color:true};
+  if(code===15)return {speed:false,direction:false,rainbow:true,color:true};
+  if(code===1)return {speed:true,direction:false,rainbow:false,color:false};
+  if([3,23].includes(code))return {speed:false,direction:false,rainbow:false,color:true};
+  if(code===8)return {speed:false,direction:false,rainbow:false,color:false};
+  return null;
+}

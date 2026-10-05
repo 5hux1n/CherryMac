@@ -748,6 +748,87 @@ def inspect_default_mode_visibility(pe):
             "limits": "The target constructor initializes layout 1 and the named initialization copies it to the light control. This narrows the next capability audit to 0x443e50; later member changes, live control types, all branch effects and callbacks remain separate work. Function hashes exclude adjacent jump-table data. No firmware macro retention, complete no-write or persistence claim."}
 
 
+def inspect_default_mode_options(pe, defaults_dir=None):
+    """Fixed instruction sites for model47 layout-1 editor capabilities."""
+    checks = {
+        0x442c51: "0fb65508",
+        0x442c5c: "e8ff000000",
+        0x442f31: "8b4d08",
+        0x443f8f: "6a01",
+        0x443f99: "8b8224010000",
+        0x443f9f: "ffd0",
+        0x443fdf: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444037: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x44405b: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x444084: "6a008b4df48b118b4df48b8224010000ffd0",
+        0x4440df: "6a008b4dec8b118b4dec8b8224010000ffd0",
+        0x4440f1: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x444115: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x444148: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x4441a0: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x4441b2: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x4441d6: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x44457b: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x4445d6: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x4445fa: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x4446da: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444732: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444756: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x4448cc: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444924: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444936: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x44495a: "6a008b4de48b118b4de48b8218010000ffd0",
+        0x444b0d: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444b65: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444b89: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x444bb2: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444c0a: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444c1c: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x444c40: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x444d20: "6a018b4df48b118b4df48b8224010000ffd0",
+        0x444d78: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444d8a: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x444dae: "6a018b4de48b118b4de48b8218010000ffd0",
+        0x444e1d: "6a008b4df48b118b4df48b8224010000ffd0",
+        0x444e2f: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x444e41: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x444e65: "6a008b4de48b118b4de48b8218010000ffd0",
+        0x444ea2: "6a008b4df48b118b4df48b8224010000ffd0",
+        0x444ee3: "6a008b4dec8b118b4dec8b8224010000ffd0",
+        0x444ef5: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x444f5f: "6a008b4de48b118b4de48b8218010000ffd0",
+        0x44509e: "6a008b4df48b118b4df48b8224010000ffd0",
+        0x4450b0: "6a018b4dec8b118b4dec8b8224010000ffd0",
+        0x4450c2: "6a008b4ddc8b118b4ddc8b8224010000ffd0",
+        0x4450e6: "6a008b4de48b118b4de48b8218010000ffd0",
+        0x47ae9c: "686c507400",
+        0x47aeb0: "8845c0",
+        0x4faa82: "81c65c210000",
+        0x4faa92: "f3a5",
+    }
+    for address, encoded in checks.items():
+        expected=bytes.fromhex(encoded)
+        if pe.at(address,len(expected))!=expected:
+            raise ValueError(f"Unexpected model47 mode option instruction at {address:#x}")
+    if pe.at(0x74506C,11)!=b"SelectItem\0":
+        raise ValueError("Unexpected lighting selector field")
+    entries = [(0, 0, True, True, True, True), (1, 1, True, False, False, False), (2, 2, True, False, True, True), (8, 10, True, True, True, True), (10, 12, True, True, True, True), (13, 15, False, False, True, True), (16, 18, True, True, True, True), (17, 19, True, False, True, True), (19, 21, True, False, True, True), (20, 3, False, False, False, True), (21, 8, False, False, False, False), (23, 23, False, False, False, True)]
+    rows=[dict(zip(["officialIndex","hardwareCode","speed","direction","rainbow","color"],entry)) for entry in entries]
+    result={"instructionChecks":len(checks),"hardwareWriteAuthorized":False,"modes":rows,
+            "selectorOrigin":"LightInfo.SelectItem stored at getter structure byte 0; 4FAA50 copies device+215C into 442C00, which forwards that byte through 442D60 to the layout helper.",
+            "directionDefault":"443F8F/443F9F enables the direction layout before the mode switch; listed cases explicitly disable it.",
+            "colorMeaning":"colorpallet_layout enabled state; not an assertion that every mode uses a single RGB color or supports per-key animation.",
+            "limits":"Fixed official UI option rules for the visible model47 modes, paired with its retained mapping. No firmware visual behavior, persistence, transport expansion or complete notification-chain assertion."}
+    if defaults_dir is not None:
+        path=Path(defaults_dir)/"default_light.json";raw=path.read_bytes()
+        if len(raw)>16*1024*1024:raise ValueError("Default lighting resource exceeds analysis bound")
+        modes=json.loads(raw.decode("utf-8-sig"))["DefaultLightName"][47]
+        if [i for i,v in enumerate(modes) if v["visible"]]!=[v["officialIndex"] for v in rows] or any(modes[v["officialIndex"]]["value"]!=v["hardwareCode"] for v in rows):
+            raise ValueError("Model47 visible mode mapping differs")
+        result["modeResourceSHA256"]=hashlib.sha256(raw).hexdigest()
+    return result
+
+
 def inspect_default_key_action_branch(pe):
     """Distinguish factory-record copying from action binding serialization."""
     virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
@@ -2260,7 +2341,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 45,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 46,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2272,6 +2353,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultControlRefresh": inspect_default_control_refresh(pe),
         "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
+        "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
