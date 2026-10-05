@@ -267,6 +267,47 @@ final class CherryUSB: CherryHardwareAccess {
     private var lightingAuthorization:WindowsProfile.OfficialLightingPlan.CandidateAuthorization?
     private var lightingLog:HardwareOperationLog?
     private var macroAuthorization:MacroWriteAuthorization?
+    private var defaultRunToken:UUID?
+    private var defaultAuthorization:WindowsProfile.DefaultCandidateAuthorization?
+    private var defaultLog:HardwareOperationLog?
+    private var defaultCancelled:(()->Bool)?
+    #if CHERRY_DEFAULT_TEST
+    // No product/UI caller: compile explicitly for future default acceptance.
+    func applyDefaultCandidate(_ review:WindowsProfile.DefaultConfigurationReview,recovery:WindowsProfile.DefaultRecoveryPlan?=nil,
+        store:WindowsProfile.DefaultTransactionStore,log:HardwareOperationLog,cancelled:@escaping ()->Bool,
+        confirmStopped:(HardwareSnapshot)throws->Void)throws->WindowsProfile.DefaultTransactionRecord {
+        guard !transportDead,let selectedDevice=device,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"默认恢复需要空闲的有效 USB 会话。")}
+        var selectedID:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(selectedDevice),&selectedID)==KERN_SUCCESS else{throw HardwareError(message:"无法绑定默认恢复的 USB 设备标识。")}
+        let token=UUID(),previousTrace=trace
+        try log.requireHealthy();stopHostTextObservation();defaultRunToken=token;defaultLog=log;defaultCancelled=cancelled;trace=log.trace
+        defer{defaultAuthorization?.invalidate();defaultAuthorization=nil;defaultRunToken=nil;defaultLog=nil;defaultCancelled=nil;trace=previousTrace}
+        func check()throws {
+            guard !transportDead,let current=device,current===selectedDevice,defaultRunToken==token else{throw HardwareError(message:"默认恢复 USB 会话已改变。")}
+            var currentID:UInt64=0
+            guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(current),&currentID)==KERN_SUCCESS,currentID==selectedID else{throw HardwareError(message:"默认恢复 USB 设备标识已改变。")}
+            try log.requireHealthy()
+        }
+        return try store.execute(review:review,recovery:recovery,source:"usbTrace",assertCurrent:check,cancelled:cancelled,read:{
+            try check();let snapshot=try self.completeSnapshot();try check()
+            if self.defaultAuthorization==nil {
+                let mapping=try self.readLightingMapping(snapshot);try check()
+                guard mapping==review.lightingMapping else{throw HardwareError(message:"默认恢复的实际映射与计划不一致。")}
+                try confirmStopped(snapshot);try check()
+                if let recovery{self.defaultAuthorization=try WindowsProfile.DefaultCandidateAuthorization(recovery:recovery,started:snapshot)}
+                else{self.defaultAuthorization=try WindowsProfile.DefaultCandidateAuthorization(review:review,started:snapshot)}
+            }
+            return snapshot
+        },clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
+            if milliseconds>0{Thread.sleep(forTimeInterval:Double(milliseconds)/1000)}
+        },exchange:{request in
+            guard let scope=self.defaultAuthorization else{throw HardwareError(message:"默认恢复授权尚未准备。")}
+            do{try check();try scope.begin(request);let reply=try self.exchange(request);try check();try scope.accept(reply,request:request);return reply}
+            catch{scope.invalidate();self.transportDead=true;throw error}
+        })
+    }
+    #endif
+
     #if CHERRY_LIGHTING_TEST
     func lightingRegistryID()throws->UInt64 {
         guard !transportDead,let device else{throw HardwareError(message:"灯效 USB 会话已失效。")}
@@ -277,7 +318,7 @@ final class CherryUSB: CherryHardwareAccess {
     func restoreLightingCandidate(_ recovery:WindowsProfile.OfficialLightingPlan.RecoveryPlan,
                                   cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                   persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
-        guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
+        guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
         let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(recovery:recovery)
         stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log;defer{lightingAuthorization=nil;lightingLog=nil}
@@ -293,7 +334,7 @@ final class CherryUSB: CherryHardwareAccess {
     func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                 persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
-        guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
+        guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
         let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:plan,baseline:baseline)
         stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log
@@ -320,7 +361,7 @@ final class CherryUSB: CherryHardwareAccess {
     private let runLoop = CFRunLoopGetCurrent()!
     var trace: ((String) -> Void)?
     var observedReport: ((UInt32,[UInt8]) -> Void)?
-    private var transportDead=false {didSet{if transportDead{stopHostTextObservation();lightingAuthorization?.invalidate()}}}
+    private var transportDead=false {didSet{if transportDead{stopHostTextObservation();lightingAuthorization?.invalidate();defaultAuthorization?.invalidate()}}}
     private var hostTextGeneration=UUID()
     private var hostTextRouting:WindowsProfile.HostTextBindings?
     private var hostTextSink:((WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void)?
@@ -336,7 +377,7 @@ final class CherryUSB: CherryHardwareAccess {
     // Opt-in preparation on this session's hardware queue. No Unicode output
     // is sent here. A consumer must check the token when executing later.
     func startHostTextObservation(officialJSON:Data,onBinding:@escaping (WindowsProfile.HostTextBinding,WindowsProfile.HostTextTicket)->Void)throws {
-        guard lightingAuthorization==nil else{throw HardwareError(message:"灯效事务期间不能启动文本服务。")}
+        guard lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"灯效事务期间不能启动文本服务。")}
         stopHostTextObservation()
         guard !transportDead,device != nil else{throw HardwareError(message:"USB 会话已失效，请重新连接。")}
         let generation=hostTextGeneration
@@ -353,7 +394,7 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #if CHERRY_MACRO_PRODUCT
     func applyHostTextInstallation(_ plan:WindowsProfile.HostTextInstallation,log:HardwareOperationLog,saveHostConfiguration:(Data)throws->Void)throws->HardwareSnapshot {
-        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能安装文本绑定。")}
+        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"已有写入事务，不能安装文本绑定。")}
         stopHostTextObservation();try log.requireHealthy()
         let fresh=try readHostTextInstallation(officialJSON:plan.officialJSON,baseline:plan.before)
         guard fresh.factoryKeymap==plan.factoryKeymap,fresh.expected==plan.expected else{throw HardwareError(message:"文本安装默认表或目标变化，请重新准备。")}
@@ -364,7 +405,7 @@ final class CherryUSB: CherryHardwareAccess {
         return try applyAuthorizedKeymap(authorization,log:log)
     }
     func recoverHostTextInstallation(_ plan:WindowsProfile.HostTextInstallation,log:HardwareOperationLog)throws->HardwareSnapshot {
-        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能恢复文本安装。")}
+        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"已有写入事务，不能恢复文本安装。")}
         stopHostTextObservation();try log.requireHealthy()
         guard try read(7,count:378)==plan.factoryKeymap else{throw HardwareError(message:"恢复时固件默认表不同，停止发送。")}
         let original=try HostTextWriteAuthorization(officialJSON:plan.officialJSON,factoryKeymap:plan.factoryKeymap,baseline:plan.before)
@@ -374,7 +415,7 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #endif
     private func applyAuthorizedKeymap(_ authorization:KeymapTransactionAuthorization,log:HardwareOperationLog)throws->HardwareSnapshot {
-        guard lightingAuthorization==nil else{throw HardwareError(message:"灯效事务尚未结束。")}
+        guard lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"灯效事务尚未结束。")}
         let baseline=authorization.before,keymap=authorization.expected.keymap
         guard keymapAuthorization==nil else{throw HardwareError(message:"此会话已经用于键位写入，不能更换目标。")}
         #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
@@ -392,7 +433,7 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
     func recoverMacro(_ authorization:MacroWriteAuthorization,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
-        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能开始恢复。")}
+        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"已有写入事务，不能开始恢复。")}
         if !authorization.beforeCompletion.repeatingBindings.isEmpty || !authorization.targetCompletion.repeatingBindings.isEmpty{try MacroPhysicalStopController.requireAccess(beforeWrite:true)}
         try log.requireHealthy();macroAuthorization=authorization;keymapLog=log;trace=log.trace
         defer{macroAuthorization=nil;keymapLog=nil;trace=nil}
@@ -401,7 +442,7 @@ final class CherryUSB: CherryHardwareAccess {
         catch{log.record("phase","reconnect-recovery-failed");log.record("error",error.localizedDescription);throw error}
     }
     func applyMacro(_ target:HardwareSnapshot,baseline:HardwareSnapshot,log:HardwareOperationLog,confirmStopped:((MacroStopRequest)throws->Void)? = nil)throws->HardwareSnapshot {
-        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
+        guard keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"已有写入事务，不能更换目标。")}
         let authorization=try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:confirmStopped != nil)
         // Check before installing a repeating target: recovery must remain
         // available even when the original configuration contains no macro.
@@ -416,7 +457,7 @@ final class CherryUSB: CherryHardwareAccess {
     #if CHERRY_CALCULATOR_TEST
     private var calculatorTestAuthorization:CalculatorKeyTestAuthorization?
     func authorizeCalculatorTest(baseline:HardwareSnapshot) throws {
-        guard calculatorTestAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"此 USB 测试会话已经授权或灯效事务尚未结束。")}
+        guard calculatorTestAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"此 USB 测试会话已经授权或灯效事务尚未结束。")}
         calculatorTestAuthorization=try CalculatorKeyTestAuthorization(baseline:baseline)
     }
     #endif
@@ -478,7 +519,11 @@ final class CherryUSB: CherryHardwareAccess {
         guard !transportDead else{throw HardwareError(message:"USB 会话已失效，停止发送。命令可能已执行，请重新连接并读取后恢复。")}
         let scopedWrite=try validateMacroResearchPacket(request)
         let lightingWrite=request.count==64 && [UInt8(1),2,6,0x0B].contains(request[3]) && lightingAuthorization != nil
-        if lightingWrite {
+        let defaultWrite=request.count==64 && [UInt8(1),2,6,9,0x0B].contains(request[3]) && defaultRunToken != nil
+        if defaultWrite {
+            guard let authorization=defaultAuthorization else{throw HardwareError(message:"默认恢复写入没有精确授权。")}
+            try authorization.validate(request);try defaultLog?.requireHealthy();try waitUntilKeysReleased();try defaultLog?.requireHealthy()
+        }else if lightingWrite {
             try lightingAuthorization!.validate(request);try lightingLog?.requireHealthy();try waitUntilKeysReleased();try lightingLog?.requireHealthy()
         }else if scopedWrite{
             try keymapLog?.requireHealthy()
@@ -503,6 +548,11 @@ final class CherryUSB: CherryHardwareAccess {
         guard !transportDead,let device, request.count == 64 else { throw HardwareError(message: "USB 会话已关闭。") }
         received.removeAll()
         trace?("OUT " + request.map { String(format: "%02x", $0) }.joined())
+        if defaultWrite{
+            try defaultLog?.requireHealthy()
+            guard defaultCancelled?()==false else{throw HardwareError(message:"默认恢复已取消，停止发送。")}
+            try defaultAuthorization?.validate(request)
+        }
         if lightingWrite{try lightingLog?.requireHealthy()}
         if scopedWrite || (request[3]==9 && keymapAuthorization != nil){try keymapLog?.requireHealthy();lastKeyWriteAt=ProcessInfo.processInfo.systemUptime}
         let result = request.withUnsafeBufferPointer { IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 4, $0.baseAddress!, 64) }

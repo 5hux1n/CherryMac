@@ -1,6 +1,7 @@
-import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingMapping,requireThat,validateSnapshot} from './model.js?v=0.6.0';
+import {executeStoredDefaultTransaction} from './storage.js?v=0.6.0';
+import {executeLightingRestore,executeOfficialLightingCandidate,captureLightingMapping,equal,requireThat,validateSnapshot} from './model.js?v=0.6.0';
 import {prepareHostTextBindings,prepareHostTextInstallation,officialHostTextEvent} from './model.js?v=0.6.0';
-import {assertReadOnlyRequest,LightingCandidateAuthorization,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
+import {assertReadOnlyRequest,DefaultCandidateAuthorization,LightingCandidateAuthorization,KeymapWriteAuthorization,MacroWriteAuthorization,HostTextWriteAuthorization} from './safety.js?v=0.6.0';
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Start the picker in the original click task, before awaited host-service
 // shutdown. Consume its result only after the configuration operation gates
@@ -36,14 +37,15 @@ export function supportsDevice(device){
 }
 export class CherryHID{
   #openTask=null;#closeTask=null;#closeError=null;
-  #keyAuthorization=null;#macroAuthorization=null;#lightingAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
+  #keyAuthorization=null;#macroAuthorization=null;#lightingAuthorization=null;#defaultRun=null;#defaultAuthorization=null;#writeGate=null;#lastKeyWriteAt=null;
   #configurationGeneration=0;
   #hostTextObservation=null;#hostTextObservationGeneration=0;
-  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false,textProduct=false,lightingResearch=false}={}){
+  constructor(device,{timeout=2000,onDisconnect=()=>{},progress=()=>{},log=()=>{},macroResearch=false,macroProduct=false,textProduct=false,lightingResearch=false,defaultResearch=false}={}){
     requireThat(supportsDevice(device),'浏览器没有提供这把键盘的 63 字节厂商配置接口。请确认 USB 有线模式。');
     this.device=device;this.timeout=timeout;this.progress=progress;this.onDisconnect=onDisconnect;this.tail=Promise.resolve();this.dead=false;this.pending=null;
     // Both entries use the same immutable packet authorization. Product
     // preview is explicitly gated by the PHP deployment environment.
+    if(defaultResearch===true)this.applyDefaultCandidate=(review,options)=>this.#applyDefaultCandidate(review,options);
     if(lightingResearch===true){
       this.applyLightingCandidate=(plan,baseline,options)=>this.#applyLightingCandidate(plan,baseline,options);
       this.restoreLightingCandidate=(recovery,options)=>this.#restoreLightingCandidate(recovery,options);
@@ -82,7 +84,7 @@ export class CherryHID{
   record(entry){const copy=structuredClone(entry);this.logTasks=this.logTasks.then(()=>this.log(copy)).catch(error=>{this.loggingError=error.message;});}
   finish(error,result){const p=this.pending;if(!p)return;this.pending=null;clearTimeout(p.timer);p.entry.durationMs=performance.now()-p.start;p.entry.status=error?'error':'ok';p.entry.error=error?.message??null;this.record(p.entry);if(error)p.reject(error);else p.resolve(result);}
   poison(error){
-    if(this.dead)return;this.#lightingAuthorization?.invalidate();this.stopHostTextObservation();this.dead=true;this.finish(error);
+    if(this.dead)return;this.#lightingAuthorization?.invalidate();this.#defaultAuthorization?.invalidate();this.stopHostTextObservation();this.dead=true;this.finish(error);
     this.device.removeEventListener('inputreport',this.input);globalThis.navigator?.hid?.removeEventListener('disconnect',this.disconnected);
     // Stop report delivery immediately, then wait for any pending open before
     // closing. A handoff must await actual close, including after poisoning.
@@ -99,25 +101,45 @@ export class CherryHID{
   }
   async flushLogs(){await this.logTasks;requireThat(!this.loggingError,`操作日志保存失败，停止写入：${this.loggingError}`);}
   async withKeymapAuthorization(authorization,gate,body){
-    requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
+    requireThat(authorization instanceof KeymapWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun&&gate&&typeof gate.check==='function','键位写入授权或按键释放确认无效。');
     this.#keyAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
   }
   async #withHostTextAuthorization(authorization,gate,body){
-    requireThat(authorization instanceof HostTextWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&gate&&typeof gate.check==='function'&&typeof body==='function','文本安装授权或按键释放确认无效。');
+    requireThat(authorization instanceof HostTextWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun&&gate&&typeof gate.check==='function'&&typeof body==='function','文本安装授权或按键释放确认无效。');
     this.#keyAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#keyAuthorization=null;this.#writeGate=null;}
   }
   async #withMacroAuthorization(authorization,gate,body){
-    requireThat(authorization instanceof MacroWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&gate&&typeof gate.check==='function'&&typeof body==='function','宏事务授权或释放检查无效。');
+    requireThat(authorization instanceof MacroWriteAuthorization&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun&&gate&&typeof gate.check==='function'&&typeof body==='function','宏事务授权或释放检查无效。');
     this.#macroAuthorization=authorization;this.#writeGate=gate;
     try{return await body();}finally{this.#macroAuthorization=null;this.#writeGate=null;}
+  }
+  // Explicit constructor opt-in only; no ordinary page passes this switch.
+  async #applyDefaultCandidate(review,options){
+    options={...options};review=structuredClone(review);const recovery=structuredClone(options.recovery??null),device=this.device,run={device,cancelled:options.cancelled};
+    requireThat(options.gate&&typeof options.gate.check==='function'&&typeof options.cancelled==='function'&&typeof options.confirmStopped==='function','默认恢复需要释放确认、取消和宏停止接口。');
+    await this.tail;
+    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun,'默认恢复需要空闲的有效 USB 会话。');
+    this.stopHostTextObservation();this.#defaultRun=run;this.#writeGate=options.gate;
+    const check=async()=>{requireThat(!this.dead&&device.opened&&this.device===device&&this.#defaultRun===run,'默认恢复 USB 会话已改变。');await this.flushLogs();};
+    try{return await executeStoredDefaultTransaction(review,{recovery,source:'usbTrace',operationID:options.operationID,cancelled:options.cancelled,assertCurrent:check,
+      read:async()=>{
+        await check();const snapshot=await this.snapshot();await check();
+        if(!this.#defaultAuthorization){const mapping=await this.readLightingMapping(snapshot);await check();requireThat(['deviceInfo','factoryKeymap','ledIndices'].every(field=>equal(mapping[field],review.lightingMapping[field])),'默认恢复的实际映射与计划不一致。');await options.confirmStopped(structuredClone(snapshot));await check();this.#defaultAuthorization=recovery?DefaultCandidateAuthorization.recovery(recovery,snapshot):new DefaultCandidateAuthorization(review,snapshot);}
+        return snapshot;
+      },clock:()=>Math.floor(performance.now()),wait:sleep,exchange:async request=>{
+        const scope=this.#defaultAuthorization;requireThat(scope,'默认恢复授权尚未准备。');
+        try{await check();scope.begin(request);const reply=await this.exchange(request);await check();scope.accept(reply,request);return reply;}
+        catch(error){scope.invalidate();this.poison(error);throw error;}
+      }
+    });}finally{this.#defaultAuthorization?.invalidate();this.#defaultAuthorization=null;this.#defaultRun=null;this.#writeGate=null;}
   }
   async #restoreLightingCandidate(recovery,{gate,cancelled,backup,persist}){
     recovery=structuredClone(recovery);const authorization=LightingCandidateAuthorization.recovery(recovery),device=this.device;
     requireThat(gate&&typeof gate.check==='function'&&[cancelled,backup,persist].every(fn=>typeof fn==='function'),'恢复需要释放确认、取消、备份与日志接口。');
     await this.tail;
-    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization,'恢复需要可用的新 USB 会话。');
+    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun,'恢复需要可用的新 USB 会话。');
     this.stopHostTextObservation();this.#lightingAuthorization=authorization;this.#writeGate=gate;
     try{return await executeLightingRestore(recovery,{source:'usbTrace',cancelled,backup,persist,
       assertCurrent:()=>requireThat(!this.dead&&device.opened&&this.device===device&&this.#lightingAuthorization===authorization,'恢复 USB 会话已经改变。'),
@@ -129,7 +151,7 @@ export class CherryHID{
     const authorization=new LightingCandidateAuthorization(plan,baseline),device=this.device;
     requireThat(gate&&typeof gate.check==='function'&&[cancelled,backup,persist].every(fn=>typeof fn==='function'),'灯效研究需要释放确认、取消、备份与日志接口。');
     await this.tail;
-    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization,'USB 会话不可用或已有配置事务。');
+    requireThat(!this.dead&&device.opened&&this.device===device&&!this.#keyAuthorization&&!this.#macroAuthorization&&!this.#lightingAuthorization&&!this.#defaultRun,'USB 会话不可用或已有配置事务。');
     this.stopHostTextObservation();this.#lightingAuthorization=authorization;this.#writeGate=gate;
     try{return await executeOfficialLightingCandidate(plan,baseline,{source:'usbTrace',cancelled,backup,persist,
       assertCurrent:()=>requireThat(!this.dead&&device.opened&&this.device===device&&this.#lightingAuthorization===authorization,'灯效 USB 会话已经改变。'),
@@ -145,22 +167,25 @@ export class CherryHID{
     const task=this.tail.then(async()=>{
       requireThat(request.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'USB 包包含无效字节。');
       const lighting=[1,2,6,11].includes(request[3])&&this.#lightingAuthorization;
-      const authorization=lighting||(request[3]===9&&this.#keyAuthorization)||([9,0x15].includes(request[3])&&this.#macroAuthorization);
+      const defaults=[1,2,6,9,11].includes(request[3])&&this.#defaultRun?this.#defaultAuthorization:null;
+      if([1,2,6,9,11].includes(request[3])&&this.#defaultRun)requireThat(defaults,'默认恢复写入没有精确授权。');
+      const authorization=defaults||lighting||(request[3]===9&&this.#keyAuthorization)||([9,0x15].includes(request[3])&&this.#macroAuthorization);
       const writing=Boolean(authorization);
       if(writing)authorization.validate(request);else assertReadOnlyRequest(request);
       requireThat(!this.dead&&this.device.opened,'USB 连接已失效，请重新连接。');
       if(writing){
-        if(!lighting&&this.#lastKeyWriteAt!=null)await sleep(Math.max(0,1500-(performance.now()-this.#lastKeyWriteAt)));
+        if(!lighting&&!defaults&&this.#lastKeyWriteAt!=null)await sleep(Math.max(0,1500-(performance.now()-this.#lastKeyWriteAt)));
         await this.#writeGate.check();await this.flushLogs();
       }
       const entry={id:crypto.randomUUID(),operationId:this.operationId??null,at:new Date().toISOString(),command:request[3],offset:request[5]|request[6]<<8,length:request[4],request:Array.from(request),reply:null,status:'pending',durationMs:null,error:null};
       this.history.push(entry);this.record(entry);
       if(this.history.length>300)this.history.shift();
       if(writing){try{await this.flushLogs();await this.#writeGate.check();requireThat(!this.dead&&this.device.opened,'键盘已经断开，停止写入。');}catch(error){entry.status='blocked';entry.error=error.message;this.record(entry);throw error;}}
+      if(defaults){requireThat(this.device===this.#defaultRun.device,'默认恢复 USB 设备已改变，停止发送。');requireThat(!this.#defaultRun.cancelled(),'默认恢复已取消，停止发送。');defaults.validate(request);}
       return new Promise((resolve,reject)=>{
         this.pending={request,resolve,reject,entry,start:performance.now(),timer:setTimeout(()=>this.poison(new Error('USB 回复超时；命令可能已执行。已停止发送，请重新连接并读取。')),this.timeout)};
         // WebHID receives the ID separately: 4 + 63 bytes, never a duplicated ID.
-        if(writing&&!lighting){this.keyWritesSent++;this.#lastKeyWriteAt=performance.now();}
+        if(writing&&!lighting&&!defaults){this.keyWritesSent++;this.#lastKeyWriteAt=performance.now();}
         this.device.sendReport(4,Uint8Array.from(request.slice(1))).catch(error=>this.poison(error));
       }).then(reply=>{if(lighting){try{lighting.accept(reply,request);}catch(error){this.poison(error);throw error;}}return reply;});
     });this.tail=task.catch(()=>{});return task;
@@ -189,7 +214,7 @@ export class CherryHID{
   }
   stopHostTextObservation(){this.#hostTextObservation=null;this.#hostTextObservationGeneration++;}
   async startHostTextObservation(root,{onBinding,onError}={}){
-    requireThat(!this.#lightingAuthorization,'灯效事务期间不能启动文本服务。');
+    requireThat(!this.#lightingAuthorization&&!this.#defaultRun,'灯效事务期间不能启动文本服务。');
     requireThat(typeof onBinding==='function'&&typeof onError==='function','文本监听需要事件和错误处理器。');
     this.stopHostTextObservation();const generation=this.#hostTextObservationGeneration;
     const resolve=await this.readHostTextBindings(root);
