@@ -47,6 +47,8 @@ Fn、CHERRY 内部键与隐藏位置保留原功能。当前禁止新增、移�
 
 ## 使用网页版：PHP，无需构建
 
+[直接打开 Cloudflare 在线开发预览](https://cherrymac.11195666.workers.dev/)：无需下载或启动本地服务器。在线版包含宏与文本预览，尚待统一真机验收；灯效写入未开放。后续网页更新同步部署，App 继续单独打包。[在线版与更新说明](docs/Cloudflare在线版.md)
+
 解压网页 ZIP，双击 `start.command`，用 Chrome 或 Edge 打开 <http://localhost:8768/>。也可在解压目录运行：
 
 ```sh
