@@ -1187,6 +1187,45 @@ def inspect_system_device_paths(pe):
             "limits": "Only the named paths are audited; not proof that all settings are host-only, unsupported or writable on 01CE."}
 
 
+
+def inspect_custom_lighting_json(pe):
+    # Fixed-byte provenance for the actual RGBA reader and writer, not a
+    # guessed schema generated from a similarly named device's defaults.
+    checks = {
+        0x48349E: "68108d7400", 0x4834AB: "68148d7400", 0x4834B0: "68ec8c7400",
+        0x483480: "0fb600", 0x4834F6: "0fb65001", 0x48356D: "0fb64802", 0x4835E6: "0fb64803",
+        0x483614: "68748d740068848d7400" ,
+        0x4836C5: "68bc8d740068948d7400", 0x4836ED: "e8ae480c00",
+        0x4836F7: "0f84e4010000", 0x483712: "3b4510", 0x483715: "0f8dc1010000",
+        0x4838BB: "c645e000c645e100c645e200c645e300",
+        0x4838D2: "e879edffff", 0x4838D7: "e92afeffff",
+        0x483C51: "e86aebffff", 0x483C63: "e8f8edffff",
+        0x505948: "e8c3cbf1ff", 0x50594D: "50", 0x505951: "52", 0x50595F: "e81cddf7ff",
+    }
+    for address, encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw)) != raw:
+            raise ValueError("Unexpected custom-light JSON instruction")
+    strings={0x748CEC:"CustomLightMode",0x748D14:"LightColorInfo",0x748D10:"Red",
+             0x748D54:"Green",0x748D5C:"Blue",0x748DA4:"Alpha"}
+    for address, value in strings.items():
+        if pe.at(address,len(value)+1) != value.encode("ascii")+b"\0":
+            raise ValueError("Unexpected custom-light JSON field")
+    hashes={"setter":(0x483410,0x483678,"ab32e966c387929315e3e923c1cace83db9df24f9224f2b370f67377cb1adc12"),
+            "getter":(0x483680,0x483C96,"b844424081910efd7655865852b7b220b7915fb6f0b76c9d647690de947c01a7")}
+    for start,end,digest in hashes.values():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Unexpected custom-light JSON function body")
+    return {"instructionChecks":len(checks),"fieldChecks":len(strings),
+            "functionBodies":{name:{"start":hex(a),"endExclusive":hex(b),"sha256":h} for name,(a,b,h) in hashes.items()},
+            "path":["CustomLightMode","LightColorInfo","group","logicalIndex"],
+            "recordByteOrder":["Red","Green","Blue","Alpha"],
+            "missingGroupFallback":"0x4836f7 -> 0x4838e1 branches around the zero-initialization loop; the other branch creates RGBA-zero entries up to the supplied count before reading the list",
+            "setterBehavior":"0x483410 writes four byte-valued fields at the supplied group and logical index; it does not require CustomLightModeGroupIndex",
+            "loaderCount":"0x505948 takes existing +0x2150 list size, pushed at 0x50594d; not a hard-coded 126 in this function",
+            "limits":"Static JSON construction/read paths only; no Windows runtime import, USB writes, visible lighting or persistence acceptance. Model47's separate logical layout establishes 126 entries."}
+
+
 def inspect_settings_resources(skin):
     path = Path(skin) / "XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
     data = path.read_bytes()
@@ -1429,7 +1468,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 31,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 32,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1449,6 +1488,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
+        "customLightingJSON": inspect_custom_lighting_json(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",

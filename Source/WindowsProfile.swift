@@ -1352,11 +1352,21 @@ enum WindowsProfile {
     // Product exports must never reinterpret brightness-scaled readback RGB as raw RGB.
     static func encodeProfileLightingDraft(_ profile:HardwareProfile,template:Data)throws->Data {
         try profile.validate();var root=try templateRoot(template)
-        if profile.lightingColorEncoding == .officialRGB,root["CustomLightMode"] is [String:Any] {
-            return try encodeLightingDraft(profile.snapshot,template:template,lightingMapping:profile.lightingMapping)
+        if profile.lightingColorEncoding == .officialRGB {
+            // 0x483410 serializes RGBA into LightColorInfo without requiring
+            // group-selection metadata. Initialize only a missing/null object;
+            // existing malformed tables remain errors, unknown fields survive.
+            if root["CustomLightMode"] == nil || root["CustomLightMode"] is NSNull {
+                guard let mapping=profile.lightingMapping else{throw HardwareError(message:"新建官方逐键颜色表前，请读取本键盘 LED 映射。")}
+                _ = try mapping.slots(for:profile.snapshot)
+                let entries=(0..<126).map{_ in ["Red":0,"Green":0,"Blue":0,"Alpha":0]}
+                root["CustomLightMode"]=["LightColorInfo":[entries]]
+            }
+            let prepared=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys])
+            return try encodeLightingDraft(profile.snapshot,template:prepared,lightingMapping:profile.lightingMapping)
         }
         let p=profile.snapshot.parameters
-        guard p[1] != 8 else{throw HardwareError(message:"自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。")}
+        guard p[1] != 8 else{throw HardwareError(message:"自定义配色需要新建或导入原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。")}
         guard var light=root["LightInfo"] as? [String:Any],CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数或官方模板无效，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
         light["LightOpenFlag"]=Int(p[21])

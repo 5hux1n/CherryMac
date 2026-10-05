@@ -396,8 +396,17 @@ export function officialPollingDraft(template,index){
 }
 export function exportProfileWindowsLightingDraft(profile,template){
   validateProfile(profile);const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);
-  if(profile.lightingColorEncoding==='officialRGB'&&root.CustomLightMode!=null)return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
-  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'自定义配色需要先导入 Windows 官方原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。');
+  if(profile.lightingColorEncoding==='officialRGB'){
+    // The official 0x483410 setter creates just LightColorInfo's RGBA array.
+    // Only a genuinely absent table may be initialized; malformed imported
+    // tables stay errors, and an existing template's extra fields survive.
+    if(root.CustomLightMode==null){
+      lightingMappingSlots(profile.lightingMapping,profile.snapshot);
+      root.CustomLightMode={LightColorInfo:[Array.from({length:126},()=>({Red:0,Green:0,Blue:0,Alpha:0}))]};
+    }
+    return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
+  }
+  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'自定义配色需要新建或导入原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。');
   const light=root.LightInfo,selected=MODE_CODES.indexOf(p[1]);
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数或官方模板无效，不能导出。');
   Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8],LightOpenFlag:p[21]});
