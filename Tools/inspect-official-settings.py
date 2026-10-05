@@ -927,6 +927,36 @@ def inspect_settings_window_messages(pe):
             "limits": "These calls send a Windows window message. The named +0x280 predicate is separately audited as a status query; the normalized child polling handler is separately audited; indirect callbacks remain unclassified. This does not establish or exclude a separate firmware settings command."}
 
 
+def inspect_profile_selection_send(pe):
+    checks = {
+        0x48FB41: "6800d37400", 0x48FB84: "e8674dfaff",
+        0x48FBAA: "e8c1b50100", 0x4AB1CC: "8b4508",
+        0x4AB1D9: "e82294f8ff", 0x4AB249: "8b4508",
+        0x4AB255: "8b82b8020000", 0x500371: "8a5508",
+        0x500374: "88540dff", 0x5004CF: "7527",
+        0x5004F8: "6a00", 0x5004FA: "6a01",
+        0x500504: "8d4415ff", 0x500512: "e829d1fdff",
+        0x500522: "e8b99bfdff", 0x4B6A1E: "6a00",
+        0x4B6A23: "e84847ffff",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected profile selection send instruction")
+    label = "device_nprofile_combo".encode("utf-16le") + b"\0\0"
+    if pe.at(0x74D300, len(label)) != label or pe.pointer(0x77F604 + 0x2B8) != 0x500360:
+        raise ValueError("Unexpected profile selection control or virtual target")
+    return {"instructionChecks": len(checks), "control": "device_nprofile_combo",
+            "selectedIndexGetter": "0x4348f0", "dispatch": "0x4ab170",
+            "deviceVirtualOffset": "0x2b8", "targetVirtualMethod": "0x500360",
+            "fallbackReport": {"helper": "0x4dd640", "offset": 0, "length": 1,
+                               "payload": "low byte of requested profile index"},
+            "otherBranchProducts": [0x1DE, 0x1E0, 0x1E2, 0x1E4, 0x1DA, 0x1DB,
+                                    0x1E6, 0x1E8, 0x1F7, 0x1F9, 0x1EF, 0x1F1,
+                                    0x1FB, 0x1FD, 0x14C, 0x14E],
+            "otherBranchIncludesTarget": False,
+            "limits": "This named one-byte path selects a configuration profile, not a seven-word system setting. It does not establish the target's usable profile count, successful firmware persistence, or authorize a product write entry. Other parameter helper callers remain separately classified."}
+
+
 def inspect_parameter_sender_lengths(pe):
     checks = {
         0x500A77: "e88426f8ff", 0x500A82: "889525ffffff",
@@ -1254,7 +1284,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 27,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 28,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1269,6 +1299,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
         "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
+        "profileSelectionSend": inspect_profile_selection_send(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
