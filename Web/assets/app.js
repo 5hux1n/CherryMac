@@ -2,7 +2,7 @@ import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} 
 import {assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
-import {listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
 import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
@@ -125,8 +125,19 @@ async function read(){
     baseline=null;throw new Error('新读回的灯光映射与保留草稿不同；草稿保留，未写入。请保存配置并核对映射。');
   }
   baseline=clone(s);baselineLightingMapping=clone(mapping);
-  if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}}
-  else{validateProfile(profile);lightingReconnectSnapshot=null;}if(mapping)profile.lightingMapping=mapping;else if(!keepLightingDraft)delete profile.lightingMapping;refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status(mappingError?'按键、灯效和宏配置已读取并备份；灯光映射未取得：'+mappingError:'已读取完整配置和灯光映射并保存本地备份。编辑后点击“写入按键”才会修改键盘。',!!mappingError);}
+  const metadataWarnings=[];
+  if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){metadataWarnings.push('本地宏名称无法读取：'+error.message);}}
+  else{validateProfile(profile);lightingReconnectSnapshot=null;}
+  if(mapping)profile.lightingMapping=mapping;else if(!keepLightingDraft)delete profile.lightingMapping;
+  if(mapping){try{
+    if(keepLightingDraft)await rememberRawLightingMetadata(profile,s);
+    else profile=await recalledRawLightingMetadata(profile)??profile;
+  }catch(error){metadataWarnings.push('本机原始配色资料无法保存或读取：'+error.message);}}
+  refreshMacros();loadMacro();loadPlayback();syncLights();
+  try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}
+  if(mappingError)metadataWarnings.push('灯光映射未取得：'+mappingError);
+  status('已读取完整配置并保存本地备份。'+(profile.lightingColorEncoding==='officialRGB'?'原始配色与硬件一致，已保留可编辑 RGB。':'编辑后点击“写入按键”才会修改键盘。')+(metadataWarnings.length?' '+metadataWarnings.join('；'):''),metadataWarnings.length>0);
+}
 async function operation(fn,{localOnly=false}={}){
   if(busy)return;const action=document.activeElement?.id??'page-operation';busy=true;render();
   try{await runPageOperation(fn,{localOnly,stopObservation:()=>hid?.stopHostTextObservation(),invalidateText:()=>{if(textProduct){textFactory=null;$('text-editor').hidden=true;}},suspendHostText:async()=>{if(textBridge?.paired)await textBridge.suspend();}});}
@@ -328,7 +339,7 @@ $('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTempl
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(backupConfiguration(record),`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>operation(()=>{const next=parseProfile(JSON.stringify(backupConfiguration(record)));adoptImportedProfile(next,'键盘备份');switchTab('keys');status('备份已导入编辑区，原文本草稿已清除，输入服务保持关闭。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
 $('diagnostics').onclick=()=>operation(async()=>{
   await Promise.all([hid?.logTasks,pageLogTasks]);
-  const results=await Promise.allSettled([listLogs(),listBackups(),macroLocalRecords(),listDefaultTransactions()]),names=['usbLogs','backups','macroLocalRecords','defaultTransactions'],records={},storageErrors={};
+  const results=await Promise.allSettled([listLogs(),listBackups(),macroLocalRecords(),listDefaultTransactions(),listRawLightingMetadata()]),names=['usbLogs','backups','macroLocalRecords','defaultTransactions','rawLightingMetadata'],records={},storageErrors={};
   results.forEach((result,i)=>{records[names[i]]=result.status==='fulfilled'?result.value:[];if(result.status==='rejected')storageErrors[names[i]]=result.reason?.message??String(result.reason);});
   if(hid?.loggingError)storageErrors.sessionLogging=hid.loggingError;
   if(pageFailures.some(entry=>entry.persistenceError))storageErrors.pageLogging='部分页面错误未能保存到数据库，现有页面记录已附在 pageFailures。';

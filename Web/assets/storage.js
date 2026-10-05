@@ -1,5 +1,5 @@
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
-import {executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
+import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 import {databaseOpener} from './database.js?v=0.6.0';
 const db=databaseOpener('CherryMacWeb',1,value=>value.createObjectStore('backups',{keyPath:'id'}),'备份数据库被其他页面占用。');
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
@@ -108,4 +108,36 @@ export async function executeStoredDefaultTransaction(review,options){
       catch(error){authorization.invalidate();throw error;}
     }
   });}finally{authorization?.invalidate();}
+}
+
+const rawLightingDB=databaseOpener('CherryMacRawLighting',1,value=>{
+  const store=value.createObjectStore('palettes',{keyPath:'id'});store.createIndex('date','date');
+},'原始配色数据库被其他页面占用。');
+export async function rememberRawLightingMetadata(profile,current){
+  const metadata=captureRawLightingMetadata(profile,current);if(metadata===null)return false;
+  const record={id:crypto.randomUUID(),date:new Date().toISOString(),metadata},database=await rawLightingDB();
+  await new Promise((resolve,reject)=>{
+    const t=database.transaction('palettes','readwrite'),store=t.objectStore('palettes');let verified=false;
+    store.put(record).onsuccess=()=>{
+      const request=store.get(record.id);request.onsuccess=()=>{
+        if(!equal(request.result,record)){t.abort();return;}verified=true;
+      };
+    };
+    t.oncomplete=()=>verified?resolve():reject(new Error('原始配色保存未核对。'));
+    t.onerror=()=>reject(t.error??new Error('原始配色保存失败。'));t.onabort=()=>reject(t.error??new Error('原始配色保存校验失败。'));
+  });return true;
+}
+export async function listRawLightingMetadata(){
+  const database=await rawLightingDB();
+  return new Promise((resolve,reject)=>{
+    const t=database.transaction('palettes','readonly'),request=t.objectStore('palettes').index('date').openCursor(null,'prev'),rows=[];
+    request.onsuccess=()=>{const cursor=request.result;if(cursor&&rows.length<128){rows.push(cursor.value);cursor.continue();}};
+    t.oncomplete=()=>resolve(rows);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('原始配色读取失败。'));
+  });
+}
+export async function recalledRawLightingMetadata(profile){
+  if(profile.lightingMapping==null)return null;
+  for(const record of await listRawLightingMetadata()){
+    try{validateRawLightingMetadata(record.metadata);const next=adoptRawLightingMetadata(profile,record.metadata);if(next!==null)return next;}catch{}
+  }return null;
 }

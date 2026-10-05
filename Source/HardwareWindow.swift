@@ -812,11 +812,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     let snapshot=read.snapshot
                     self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
                     self.profile?.lightingMapping=read.mapping;self.baselineLightingMapping=read.mapping
+                    if let current=self.profile,let saved=self.recalledRawLighting(current){self.profile=saved}
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
                         let url=self.backupDirectory.appendingPathComponent("USB-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
-                        try self.profile!.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
+                        var backup=self.profile!;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB
+                        try backup.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
                     if let error=read.mappingError{self.message.stringValue += "\n灯光映射未取得：\(error) 按键和宏读取结果已保留。"}
                     self.loadSelectedAssignment();self.update()

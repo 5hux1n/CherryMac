@@ -1061,3 +1061,26 @@ export function clearMacros(profile){
   for(const slot of Object.keys(p.macroBindings))p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);
   p.macros=[];p.macroBindings={};p.macroModes={};p.snapshot=resolveMacros(p);return p;
 }
+
+// Editor-only raw RGB provenance, separate from verified hardware backups.
+export function validateRawLightingMetadata(value){
+  requireThat(value?.format==='CherryMacRawLightingMetadata'&&value.version===1&&bytes(value.rawColors,378),'本地原始配色资料无效。');
+  validateSnapshot(value.snapshot,true);lightingMappingSlots(value.lightingMapping,value.snapshot);
+  requireThat(value.snapshot.parameters[1]===8,'本地配色资料不是逐键模式。');
+  const draft={format:'CherryMacProfile',version:1,snapshot:clone(value.snapshot),macros:[],lightingMapping:clone(value.lightingMapping),lightingColorEncoding:'officialRGB'};
+  draft.snapshot.colors=clone(value.rawColors);
+  const plan=planCustomLighting(draft,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
+  requireThat(lightingConfigurationEqual(officialLightingReadbackTarget(plan,value.snapshot),value.snapshot),'本地原始配色与保存的硬件颜色不一致。');
+}
+export function captureRawLightingMetadata(profile,current){
+  validateProfile(profile);validateSnapshot(current,true);
+  if(profile.lightingColorEncoding!=='officialRGB'||current.parameters[1]!==8||profile.lightingMapping==null)return null;
+  if(!lightingConfigurationEqual(reviewLightingDraft(profile,current).target,current))return null;
+  const value={format:'CherryMacRawLightingMetadata',version:1,snapshot:clone(current),rawColors:clone(profile.snapshot.colors),lightingMapping:clone(profile.lightingMapping)};
+  validateRawLightingMetadata(value);return value;
+}
+export function adoptRawLightingMetadata(profile,value){
+  validateRawLightingMetadata(value);validateProfile(profile);
+  if(!equal(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
+  const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding='officialRGB';validateProfile(next);return next;
+}

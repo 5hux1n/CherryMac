@@ -290,3 +290,37 @@ enum CherryMatrix {
         return bytes.map{String(format:"%02X",$0)}.joined(separator:" ")
     }
 }
+
+// Local editor provenance, never a device-write authorization. Keep the raw
+// palette separate from the verified, brightness-scaled hardware snapshot.
+struct RawLightingMetadata:Codable {
+    var format="CherryMacRawLightingMetadata"
+    var version=1
+    let snapshot:HardwareSnapshot
+    let rawColors:[UInt8]
+    let lightingMapping:LightingMappingContext
+    func validate()throws {
+        try snapshot.validate();_ = try lightingMapping.slots(for:snapshot)
+        guard format=="CherryMacRawLightingMetadata",version==1,rawColors.count==378,snapshot.parameters[1]==8 else{throw HardwareError(message:"本地原始配色资料无效。")}
+        var draft=HardwareProfile(snapshot:snapshot,lightingMapping:lightingMapping,lightingColorEncoding:.officialRGB)
+        draft.snapshot.colors=rawColors
+        let plan=try WindowsProfile.planCustomLighting(draft,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        guard try plan.expectedReadback(from:snapshot).hasSameConfiguration(as:snapshot) else{throw HardwareError(message:"本地原始配色与保存的硬件颜色不一致。")}
+    }
+    static func capture(_ draft:HardwareProfile,current:HardwareSnapshot)throws->RawLightingMetadata? {
+        try draft.validate();try current.validate()
+        guard draft.lightingColorEncoding == .officialRGB,current.parameters[1]==8,
+              let mapping=draft.lightingMapping,let colors=draft.snapshot.colors else{return nil}
+        let target=try WindowsProfile.reviewLightingDraft(draft,baseline:current).target
+        guard target.hasSameConfiguration(as:current) else{return nil}
+        let value=RawLightingMetadata(snapshot:current,rawColors:colors,lightingMapping:mapping)
+        try value.validate();return value
+    }
+    func adopting(into profile:HardwareProfile)throws->HardwareProfile? {
+        try validate();try profile.validate()
+        guard profile.lightingMapping==lightingMapping,profile.snapshot.deviceInfo==snapshot.deviceInfo,
+              profile.snapshot.parameters==snapshot.parameters,profile.snapshot.colors==snapshot.colors else{return nil}
+        var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = .officialRGB
+        try next.validate();return next
+    }
+}

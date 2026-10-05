@@ -1,6 +1,26 @@
 import AppKit
 
 extension HardwareWindowController {
+    func rememberRawLighting(_ draft:HardwareProfile,current:HardwareSnapshot)throws {
+        guard let value=try RawLightingMetadata.capture(draft,current:current) else{return}
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        let data=try encoder.encode(value)
+        try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true)
+        let url=backupDirectory.appendingPathComponent("LightingMetadata-\(UUID().uuidString).json")
+        try data.write(to:url,options:.atomic)
+        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"原始配色资料保存校验失败，请导出当前草稿保存。")}
+    }
+    func recalledRawLighting(_ profile:HardwareProfile)->HardwareProfile? {
+        guard profile.lightingMapping != nil else{return nil}
+        let files=(try? FileManager.default.contentsOfDirectory(at:backupDirectory,includingPropertiesForKeys:[.contentModificationDateKey,.fileSizeKey])) ?? []
+        let candidates=files.filter{$0.lastPathComponent.hasPrefix("LightingMetadata-") && $0.pathExtension=="json"}.sorted{((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)}
+        for url in candidates.prefix(128){
+            guard let size=try? url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=100_000,
+                  let data=try? Data(contentsOf:url),let value=try? JSONDecoder().decode(RawLightingMetadata.self,from:data),
+                  let next=try? value.adopting(into:profile) else{continue}
+            return next
+        };return nil
+    }
     @objc func newCustomLightingDraft(){
         guard !busy,baselineWasRead,baseline != nil,let current=profile else{message.stringValue="请先读取键盘，取得完整配置和 LED 映射。";return}
         do{
@@ -234,6 +254,10 @@ extension HardwareWindowController {
                     // already had brightness applied and must not replace it.
                     self.profile=draft;self.baseline=receipt.current;self.baselineWasRead=true
                     self.message.stringValue=receipt.kind == .write ? "灯效写入结果已接回编辑区，完整读回一致；未发送的键位、宏与文本草稿保留。外观与断电保存尚待验收。":"灯效恢复结果已接回编辑区，原始读回一致；所有未发送草稿保留。"
+                    if receipt.kind == .write {
+                        do{try self.rememberRawLighting(draft,current:receipt.current)}
+                        catch{self.message.stringValue += "\n读回已核对，但本机原始配色资料保存失败：\(error.localizedDescription)"}
+                    }
                 }catch{self.message.stringValue="灯效窗口已关闭，草稿保留；\(error.localizedDescription) 请重新读取键盘。"}
             }
             self.loadLighting();self.loadSelectedAssignment();self.update()
