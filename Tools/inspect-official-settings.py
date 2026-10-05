@@ -492,6 +492,66 @@ def inspect_default_macro_semantics(pe):
             "limits": "A null MacroInfo in a default JSON is not proof of hardware erasure. Other macro JSON consumers are separate paths whose model47/default association is unresolved. No execution, HID observation or persistence claim."}
 
 
+
+def inspect_default_final_refresh(pe):
+    """Resolve class-specific +2cc before interpreting repeated member offsets."""
+    classes={
+        0x77F050:(".?AVCEevisionHS6533Device@@",0x4EBC10),
+        0x77FA58:(".?AVCEevisionMouseDevice@@",0x527A80),
+        0x77FDE0:(".?AVCEevisionMousePadDevice@@",0x53B010),
+        0x77F604:(".?AVCEevisionKeyboardDevice@@",0x4FA240),
+    }
+    for table,(name,target) in classes.items():
+        if pe.class_name(table)!=name or pe.pointer(table+0x2CC)!=target:
+            raise ValueError("Unexpected default refresh class dispatch")
+    virtuals={0x28C:0x4FAA50,0x2CC:0x4FA240}
+    for offset,target in virtuals.items():
+        if pe.pointer(0x77F604+offset)!=target:
+            raise ValueError("Unexpected target final-refresh dispatch")
+    checks={
+        0x4F9427:"8b828c020000",0x4F942D:"ffd0",
+        0x4FAA63:"8b82cc020000",0x4FAA69:"ffd0",0x4FAA6E:"e80d320100",
+        0x4FA28A:"81c184250000",0x4FA290:"e8cb4bf6ff",
+        0x4FA2A2:"7441",0x4FA2D5:"e8b6aaffff",
+        0x4FA30D:"68f8dc7600",0x4FA382:"81c18b210000",0x4FA388:"e803b1f8ff",
+        0x4FA3B4:"68e4dc7600",0x4FA7D1:"68b0dd7600",0x4FA879:"680cde7600",
+        0x50DCB2:"68b8e77600",0x50DCC7:"ff15a4b36e00",
+        0x50DCD9:"81c2c83f0000",0x50DCE6:"e84511f7ff",
+        0x5425ED:"68386a7700",0x5425F9:"ff15c0b16e00",
+    }
+    for address,encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:
+            raise ValueError("Unexpected default final-refresh instruction")
+    strings={0x76DCF8:("default_light.json","utf-16-le"),0x76DCE4:("DefaultLightName","ascii"),
+             0x76DE0C:("AreaLightName","ascii"),0x76E7B8:("text_test","utf-16-le"),
+             0x776A38:("DefaultData%d.json","utf-16-le")}
+    for address,(name,encoding) in strings.items():
+        raw=(name+"\0").encode(encoding)
+        if pe.at(address,len(raw))!=raw:
+            raise ValueError("Unexpected default final-refresh resource name")
+    bodies={
+        0x4F9320:(0x4F943D,"74e956decaf29bba242c477440ab95efb0ce9ce58171cd95e38d96770af42be5"),
+        0x4FAA50:(0x4FB2E9,"0d048e10f5665239c040f279c8fd55be32863d4429b8afb8bb65a41c710bdde5"),
+        0x4FA240:(0x4FAA44,"21e907a44ec5a64672e8282748b0993dc3e07e590b537cd059899a142ec14543"),
+        0x50DC80:(0x50EC58,"bb2832973fc8218a1a9a5ad893c3da57abf18d6ffe62bde2cf66a90d47f73583"),
+        0x542540:(0x5426B5,"5d5cf8ed145527df368cf1adb296c9273bf82960097e292fb84717310c0758d1"),
+    }
+    for start,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Unexpected default final-refresh function body")
+    return {"instructionChecks":len(checks),"resourceNameChecks":len(strings),
+            "classDispatch":{hex(table):{"class":name,"virtual2cc":hex(target)} for table,(name,target) in classes.items()},
+            "targetFinalCalls":["0x4f9320 -> virtual +0x28c / 0x4faa50","0x4faa50 -> virtual +0x2cc / 0x4fa240","0x4faa50 -> 0x50dc80"],
+            "target2ccInput":"default_light.json via configuration member +0x218b, with DefaultLightName and AreaLightName fields",
+            "keyLabelRefresh":"0x50dc80 copies device+0x3fc8 key definitions and locates text_test using the DuiLib control lookup import",
+            "defaultRowSource":"0x542540 formats DefaultData%d.json using its supplied index; separate from default_light.json",
+            "functionBodies":{hex(a):{"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+            "macroConsumerClassAssociation":"The three previously found MacroInfo consumers are +0x2cc methods of HS6533, mouse and mouse-pad classes. Target keyboard +0x2cc is a different method.",
+            "pendingMacroStorageSemantics":True,
+            "limits":"Class-specific virtual dispatch and named JSON/UI inputs only. Do not treat common member +0x2584 as one data type across classes. Nested callbacks, key sender branches, implicit firmware side effects and the full program remain outside this conclusion; no macro-bank erase/retention, runtime or persistence proof."}
+
+
 def inspect_default_configuration_path(pe, defaults_dir=None):
     """Audit the confirmed default-button branch, without authorizing reset."""
     checks = {
@@ -1629,7 +1689,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 34,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 35,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1637,6 +1697,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
+        "defaultFinalRefresh": inspect_default_final_refresh(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
