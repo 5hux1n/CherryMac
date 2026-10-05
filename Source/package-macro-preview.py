@@ -40,7 +40,7 @@ manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True}, 'files': files}
+            'features': {'macros': True, 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'officialPollingDraft': True}, 'files': files}
 if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
@@ -93,6 +93,7 @@ if lighting_acceptance:
 
 “打开本轮资料”显示完整备份、读取快照、操作日志、power-events.json 和独立恢复记录，无需手工抓包。记录可在网页端导入核对，文件不上传。不含官方 EXE、用户配置或既有真机日志。普通配置页仍不提供灯效写入，只有独立研究窗口提供实际发送入口。
 '''.encode()
+readme += '\n灯效页可使用“仅导入官方灯效”，单独载入本型号官方 JSON 的灯效和原始配色，保留已有键位、宏、文本及设备设置草稿。此前没有模板时，不载入该文件的设备设置。LightOpenFlag 已在导入、草稿和导出之间同步；尚未确定其物理开关含义，没有新增开／关控件。此版本只编译与打包，未运行测试或访问键盘。\n'.encode()
 with tempfile.TemporaryDirectory(prefix='.native-preview-', dir=output_dir) as temp:
     package = pathlib.Path(temp) / prefix
     package.mkdir()
