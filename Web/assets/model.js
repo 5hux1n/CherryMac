@@ -188,14 +188,15 @@ export function encodeBank(macros,headerReserved=[]){
     bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
   });if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);cursor+=4+m.steps.length*4;});return bank;
 }
-export function decodeBank(bank){
+export function decodeBank(bank){return decodeBankWithin(bank,32,256);}
+function decodeBankWithin(bank,maximumRecords,maximumEvents){
   requireThat(bytes(bank,3071),'宏区长度无效。');if(bank.every(x=>x===0)||bank.every(x=>x===255))return [];
   const word=o=>bank[o]|bank[o+1]<<8;const length=word(2),count=word(4);
-  requireThat(bank[0]===0xaa&&bank[1]===0x55&&count<=32&&length>=16+count*2&&length<=3071,'宏头部尚未识别，原始数据仍保留。');
+  requireThat(bank[0]===0xaa&&bank[1]===0x55&&count<=maximumRecords&&length>=16+count*2&&length<=3071,'宏头部尚未识别，原始数据仍保留。');
   let cursor=16+count*2;const macros=[];
   for(let i=0;i<count;i++){
     const start=word(16+i*2);requireThat(start>=cursor&&start+4<=length,'宏偏移重叠或越界。');
-    const n=word(start),end=start+4+n*4;requireThat(n>0&&n<=256&&end<=length,'宏事件越界。');
+    const n=word(start),end=start+4+n*4;requireThat(n>0&&n<=maximumEvents&&end<=length,'宏事件越界。');
     const m={name:`硬件宏 ${i+1}`,steps:[]};
     const reserved=bank.slice(start+2,start+4);if(reserved.some(b=>b!==0))m.hardwareReserved=reserved;
     for(let o=start+4;o<end;o+=4){const kind=bank[o+2]&127,code=bank[o+3];let usage;
@@ -205,7 +206,7 @@ export function decodeBank(bank){
       else throw new Error('宏包含尚未支持的事件，原始数据仍保留。');
       m.steps.push({usage,pressed:!!(bank[o+2]&128),delayMilliseconds:word(o),...(kind===1?{kind:'mouse'}:{})});
     }
-    validateMacro(m);macros.push(m);cursor=end;
+    validateMacroWithin(m,maximumEvents);macros.push(m);cursor=end;
   }return macros;
 }
 export function validatePlayback(p){
@@ -1127,4 +1128,33 @@ export function prepareOfficialMacroStorage({macros,bindings,modes={},factoryKey
     records.push({logicalIndex:logicalBySlot.get(slot),physicalSlot:slot,libraryIndex,ordinal,offset:cursor,eventCount:m.steps.length,binding});cursor+=4+m.steps.length*4;
   });
   return {hardwareReady:false,editorEventLimit,usedBytes:total,records,bank};
+}
+
+// This record preserves names and unbound drafts across per-binding storage.
+// It is neither a HID authorization nor proof of an actual device transaction.
+export function prepareOfficialMacroDraftReceipt({before,factoryKeymap,macros,bindings,modes={}}){
+  validateSnapshot(before);requireThat(bytes(before.macroData,3071),'保存宏草稿对应关系需要完整原始宏区。');
+  const headerReserved=before.macroData[0]===0xaa&&before.macroData[1]===0x55?before.macroData.slice(6,16):[];
+  const layout=prepareOfficialMacroStorage({macros,bindings,modes,factoryKeymap,deviceInfo:before.deviceInfo,headerReserved}),expected=clone(before);
+  for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(before.keymap[slot*3])&&!Object.hasOwn(bindings,slot)){
+    requireThat(![6,71].includes(slot),'原宏覆盖内部键，停止转换。');expected.keymap.splice(slot*3,3,0x20,0,0);
+  }
+  for(const r of layout.records)expected.keymap.splice(r.physicalSlot*3,3,...r.binding);
+  if(layout.bank!==null)expected.macroData=clone(layout.bank);
+  return clone({format:'CherryMacOfficialMacroDraftReceipt',version:1,hardwareReady:false,before,factoryKeymap,macros,bindings,modes,layout,expected});
+}
+export function validateOfficialMacroDraftReceipt(receipt){
+  requireThat(receipt?.format==='CherryMacOfficialMacroDraftReceipt'&&receipt.version===1&&receipt.hardwareReady===false,'官方宏草稿记录格式或版本无效。');
+  const rebuilt=prepareOfficialMacroDraftReceipt(receipt);
+  requireThat(canonicalJSON(rebuilt)===canonicalJSON(receipt),'宏草稿记录与重新生成的绑定、存储数据不一致。');
+}
+export function reconcileOfficialMacroDraftReceipt(receipt,observed,factoryKeymap){
+  validateOfficialMacroDraftReceipt(receipt);validateSnapshot(observed);
+  requireThat(equal(factoryKeymap,receipt.factoryKeymap)&&equal(observed.deviceInfo,receipt.expected.deviceInfo)&&equal(observed.keymap,receipt.expected.keymap)&&equal(observed.macroData,receipt.expected.macroData),'读回配置与官方宏草稿记录不一致，未采用宏名称或合并草稿。');
+  if(receipt.layout.bank!==null){
+    const decoded=decodeBankWithin(observed.macroData,126,receipt.layout.editorEventLimit);
+    requireThat(decoded.length===receipt.layout.records.length,'宏读回记录数量不一致。');
+    decoded.forEach((m,index)=>{const source=receipt.macros[receipt.layout.records[index].libraryIndex];const events=steps=>steps.map(s=>[s.usage,s.pressed,s.delayMilliseconds,s.kind??null]);requireThat(equal(events(m.steps),events(source.steps))&&equal(m.hardwareReserved??[0,0],source.hardwareReserved??[0,0]),'宏事件或保留数据读回不一致。');});
+  }
+  return clone({hardwareReady:false,configurationMatches:true,snapshot:observed,macros:receipt.macros,bindings:receipt.bindings,modes:receipt.modes,records:receipt.layout.records});
 }

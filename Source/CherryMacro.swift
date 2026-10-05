@@ -25,8 +25,8 @@ enum CherryMacroCodec {
             return [UInt8(step.delayMilliseconds & 255),UInt8(step.delayMilliseconds >> 8),kind | (step.pressed ? 0x80:0),code]
         }
     }
-    static func decodeEvents(_ bytes:[UInt8],name:String) throws -> KeyboardMacro {
-        guard !bytes.isEmpty,bytes.count % 4==0,bytes.count<=1024 else{throw HardwareError(message:"硬件宏事件长度无效。")}
+    static func decodeEvents(_ bytes:[UInt8],name:String,maximumEvents:Int = 256) throws -> KeyboardMacro {
+        guard !bytes.isEmpty,bytes.count % 4==0,(1...762).contains(maximumEvents),bytes.count<=maximumEvents*4 else{throw HardwareError(message:"硬件宏事件长度无效。")}
         let steps=try stride(from:0,to:bytes.count,by:4).map{index -> KeyboardMacro.Step in
             let kind=bytes[index+2] & 0x7F;let code=bytes[index+3];let usage:UInt8
             if kind==1 {
@@ -38,7 +38,7 @@ enum CherryMacroCodec {
             }else{throw HardwareError(message:"硬件宏包含尚未支持的事件类型 \(kind)。原始备份仍保留。")}
             return .init(usage:usage,pressed:bytes[index+2] & 0x80 != 0,delayMilliseconds:Int(bytes[index]) | Int(bytes[index+1])<<8,kind:kind==1 ? .mouse:nil)
         }
-        let macro=KeyboardMacro(name:name,steps:steps);try macro.validate();return macro
+        let macro=KeyboardMacro(name:name,steps:steps);try macro.validate(maximumEvents:maximumEvents);return macro
     }
     static func encode(_ macros:[KeyboardMacro],headerReserved:[UInt8] = []) throws -> [UInt8] {
         guard headerReserved.isEmpty || headerReserved.count==10 else{throw HardwareError(message:"宏头部保留数据长度无效。")}
@@ -59,20 +59,21 @@ enum CherryMacroCodec {
         }
         return bank
     }
-    static func decode(_ bytes:[UInt8]) throws -> [KeyboardMacro] {
+    static func decode(_ bytes:[UInt8],maximumRecords:Int = 32,maximumEvents:Int = 256) throws -> [KeyboardMacro] {
+        guard (1...126).contains(maximumRecords),(1...762).contains(maximumEvents) else{throw HardwareError(message:"宏解析范围无效。")}
         guard bytes.count==accessibleSize else{throw HardwareError(message:"宏备份长度与目标固件不符。")}
         if bytes.allSatisfy({$0==0}) || bytes.allSatisfy({$0==255}){return []}
         func word(_ offset:Int)->Int{Int(bytes[offset]) | Int(bytes[offset+1])<<8}
         guard bytes[0]==0xAA,bytes[1]==0x55 else{throw HardwareError(message:"宏存储头部尚未识别。原始备份仍保留。")}
         let length=word(2),count=word(4)
-        guard count<=32,length>=16+count*2,length<=bytes.count else{throw HardwareError(message:"宏头部数量或长度无效。")}
+        guard count<=maximumRecords,length>=16+count*2,length<=bytes.count else{throw HardwareError(message:"宏头部数量或长度无效。")}
         var cursor=16+count*2;var macros:[KeyboardMacro]=[]
         for index in 0..<count {
             let start=word(16+index*2)
             guard start>=cursor,start+4<=length else{throw HardwareError(message:"宏偏移重叠或越界。")}
             let steps=word(start),end=start+4+steps*4
-            guard steps>0,steps<=256,end<=length else{throw HardwareError(message:"宏事件越界或数量无效。")}
-            var macro=try decodeEvents(Array(bytes[start+4..<end]),name:"硬件宏 \(index+1)")
+            guard steps>0,steps<=maximumEvents,end<=length else{throw HardwareError(message:"宏事件越界或数量无效。")}
+            var macro=try decodeEvents(Array(bytes[start+4..<end]),name:"硬件宏 \(index+1)",maximumEvents:maximumEvents)
             let reserved=Array(bytes[start+2..<start+4]);if reserved.contains(where:{$0 != 0}){macro.hardwareReserved=reserved}
             macros.append(macro);cursor=end
         }
@@ -339,6 +340,17 @@ struct OfficialMacroStorageLayout:Codable,Equatable {
     let records:[Record]
     // nil means the official sender would return without sending a macro bank.
     let bank:[UInt8]?
+    enum CodingKeys:String,CodingKey {case hardwareReady,editorEventLimit,usedBytes,records,bank}
+    func encode(to encoder:Encoder)throws {
+        var container=encoder.container(keyedBy:CodingKeys.self)
+        try container.encode(hardwareReady,forKey:.hardwareReady)
+        try container.encode(editorEventLimit,forKey:.editorEventLimit)
+        try container.encode(usedBytes,forKey:.usedBytes)
+        try container.encode(records,forKey:.records)
+        // Match Web's explicit null: it means no macro-bank send, not omission
+        // of an unknown bank or a request to clear the original storage.
+        if let bank{try container.encode(bank,forKey:.bank)}else{try container.encodeNil(forKey:.bank)}
+    }
     static func prepare(macros:[KeyboardMacro],bindings:[Int:String],modes:[Int:MacroPlayback],
                         factoryKeymap:[UInt8],deviceInfo:[UInt8],headerReserved:[UInt8]=[])throws->Self {
         guard factoryKeymap.count==378,deviceInfo.count==34,deviceInfo[6]==24,
@@ -386,5 +398,74 @@ struct OfficialMacroStorageLayout:Codable,Equatable {
             cursor += 4+eventBytes.count
         }
         return .init(hardwareReady:false,editorEventLimit:editorLimit,usedBytes:total,records:records,bank:bank)
+    }
+}
+
+// Portable draft identity. Strict comparison is configuration matching only;
+// callers still need an actual USB transaction, backup and physical acceptance.
+struct OfficialMacroDraftReceipt:Codable,Equatable {
+    let format:String
+    let version:Int
+    let hardwareReady:Bool
+    let before:HardwareSnapshot
+    let factoryKeymap:[UInt8]
+    let macros:[KeyboardMacro]
+    let bindings:[Int:String]
+    let modes:[Int:MacroPlayback]
+    let layout:OfficialMacroStorageLayout
+    let expected:HardwareSnapshot
+    static func prepare(before:HardwareSnapshot,factoryKeymap:[UInt8],macros:[KeyboardMacro],
+                        bindings:[Int:String],modes:[Int:MacroPlayback])throws->Self {
+        try before.validate()
+        guard let originalBank=before.macroData else{throw HardwareError(message:"保存宏草稿对应关系需要完整原始宏区。")}
+        let header=originalBank[0]==0xAA && originalBank[1]==0x55 ? Array(originalBank[6..<16]):[]
+        let layout=try OfficialMacroStorageLayout.prepare(macros:macros,bindings:bindings,modes:modes,
+            factoryKeymap:factoryKeymap,deviceInfo:before.deviceInfo,headerReserved:header)
+        var expected=before
+        // Explicitly removed macro bindings become disabled keys. Ordinary
+        // keys remain the baseline; this is a macro-only target, not all drafts.
+        for slot in 0..<126 where [UInt8(0x70),0x71].contains(before.keymap[slot*3]) && bindings[slot]==nil {
+            guard ![6,71].contains(slot) else{throw HardwareError(message:"原宏覆盖内部键，停止转换。")}
+            expected.keymap.replaceSubrange(slot*3..<slot*3+3,with:[UInt8(0x20),0,0])
+        }
+        for record in layout.records {
+            expected.keymap.replaceSubrange(record.physicalSlot*3..<record.physicalSlot*3+3,with:record.binding)
+        }
+        if let bank=layout.bank{expected.macroData=bank}
+        return .init(format:"CherryMacOfficialMacroDraftReceipt",version:1,hardwareReady:false,
+            before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes,layout:layout,expected:expected)
+    }
+    func validate()throws {
+        guard format=="CherryMacOfficialMacroDraftReceipt",version==1,!hardwareReady else{throw HardwareError(message:"官方宏草稿记录格式或版本无效。")}
+        let rebuilt=try Self.prepare(before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes)
+        guard rebuilt==self else{throw HardwareError(message:"宏草稿记录与重新生成的绑定、存储数据不一致。")}
+    }
+    struct Readback:Codable,Equatable {
+        let hardwareReady:Bool
+        let configurationMatches:Bool
+        let snapshot:HardwareSnapshot
+        let macros:[KeyboardMacro]
+        let bindings:[Int:String]
+        let modes:[Int:MacroPlayback]
+        let records:[OfficialMacroStorageLayout.Record]
+    }
+    func reconcile(observed:HardwareSnapshot,factoryKeymap observedFactory:[UInt8])throws->Readback {
+        try validate();try observed.validate()
+        guard observedFactory==factoryKeymap,observed.deviceInfo==expected.deviceInfo,
+              observed.keymap==expected.keymap,observed.macroData==expected.macroData else {
+            throw HardwareError(message:"读回配置与官方宏草稿记录不一致，未采用宏名称或合并草稿。")
+        }
+        if layout.bank != nil {
+            let decoded=try CherryMacroCodec.decode(observed.macroData!,maximumRecords:126,maximumEvents:layout.editorEventLimit)
+            guard decoded.count==layout.records.count else{throw HardwareError(message:"宏读回记录数量不一致。")}
+            for (index,record) in layout.records.enumerated() {
+                guard decoded[index].steps==macros[record.libraryIndex].steps,
+                      (decoded[index].hardwareReserved ?? [0,0])==(macros[record.libraryIndex].hardwareReserved ?? [0,0]) else {
+                    throw HardwareError(message:"宏事件或保留数据读回不一致。")
+                }
+            }
+        }
+        return .init(hardwareReady:false,configurationMatches:true,snapshot:observed,macros:macros,
+            bindings:bindings,modes:modes,records:layout.records)
     }
 }
