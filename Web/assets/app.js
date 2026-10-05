@@ -2,7 +2,7 @@ import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} 
 import {importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
-import {saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
 import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
@@ -13,6 +13,7 @@ const pageFailures=[];let pageLogTasks=Promise.resolve(),mediaSelectionRecord=nu
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
+let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
@@ -26,8 +27,11 @@ function status(message,error=false){$('status').textContent=message;$('status')
 function safeProfile(s){try{return fromHardware(s);}catch(error){status(`配置已读取；${error.message} 键位和灯效仍可编辑。`);return {format:'CherryMacProfile',version:1,snapshot:clone(s),macros:[]};}}
 function counts(s,original){return {keys:keys.filter(k=>!equal(s.keymap.slice(k.slot*3,k.slot*3+3),original.keymap.slice(k.slot*3,k.slot*3+3))).length,colors:keys.filter(k=>{const slot=lightingColorSlot(profile,k.slot);return slot!=null&&!equal(s.colors?.slice(slot*3,slot*3+3),original.colors?.slice(slot*3,slot*3+3));}).length,params:!equal(s.parameters,original.parameters),macros:!equal(s.macroData,original.macroData)};}
 function render(){
-  const s=profile.snapshot,base=baseline??demo,c=counts(s,base),changed=c.keys+c.colors+Number(c.params)+Number(c.macros);
-  for(const k of keys){const b=document.querySelector(`.key[data-id="${k.id}"]`);b.setAttribute('aria-pressed',String(selection.has(k.id)));const slot=lightingColorSlot(profile,k.slot);b.classList.toggle('changed',tab==='lights'?slot!=null&&!equal(s.colors?.slice(slot*3,slot*3+3),base.colors?.slice(slot*3,slot*3+3)):!equal(s.keymap.slice(k.slot*3,k.slot*3+3),base.keymap.slice(k.slot*3,k.slot*3+3)));
+  const s=profile.snapshot,base=baseline??demo,c=counts(s,base);
+  let lightingTarget=s;if(baseline&&profile.lightingColorEncoding==='officialRGB')try{lightingTarget=reviewLightingDraft(profile,baseline).target;}catch{}
+  if(lightingTarget!==s){c.colors=counts(lightingTarget,base).colors;c.params=!equal(lightingTarget.parameters,base.parameters);}
+  const changed=c.keys+c.colors+Number(c.params)+Number(c.macros);
+  for(const k of keys){const b=document.querySelector(`.key[data-id="${k.id}"]`);b.setAttribute('aria-pressed',String(selection.has(k.id)));const slot=lightingColorSlot(profile,k.slot);b.classList.toggle('changed',tab==='lights'?slot!=null&&!equal(lightingTarget.colors?.slice(slot*3,slot*3+3),base.colors?.slice(slot*3,slot*3+3)):!equal(s.keymap.slice(k.slot*3,k.slot*3+3),base.keymap.slice(k.slot*3,k.slot*3+3)));
     const colorSlot=lightingColorSlot(profile,k.slot),color=colorSlot==null?null:s.colors?.slice(colorSlot*3,colorSlot*3+3);if(tab==='lights'&&color?.length===3){b.style.background=hex(color);b.style.color=color[0]*.2126+color[1]*.7152+color[2]*.0722>140?'#151515':'#fff';}else{b.style.background='';b.style.color='';}
     b.title=`${k.label} · ${describe(s.keymap.slice(k.slot*3,k.slot*3+3))}`;
   }
@@ -49,6 +53,7 @@ function render(){
   $('polling-draft-summary').textContent=pollingWords?`当前官方草稿：${[125,250,500,1000][pollingWords[3]]?`${[125,250,500,1000][pollingWords[3]]} Hz`:`原始索引 ${pollingWords[3]}（尚未核对）`}；尚未写入键盘。`:'请先导入包含设备设置的官方配置。';
   $('save-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
+  $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
   if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
@@ -104,7 +109,16 @@ function renderSteps(){
   });renderMacroSummary();}
 function stageRecord(record){const key=keys.find(k=>k.id===selected);requireThat(editableSlots.has(key.slot),'内部功能键不能改写。');const p=clone(profile);p.snapshot.keymap.splice(key.slot*3,3,...record);if(p.macroBindings)delete p.macroBindings[key.slot];if(p.macroModes)delete p.macroModes[key.slot];validateProfile(p);profile=p;status(`已为 ${key.label} 设置 ${describe(record)}，尚未写入。`);}
 async function act(fn){if(busy)return;try{await fn();render();}catch(error){status(error.message,true);render();}}
-async function read(){const s=await hid.snapshot();let mapping=null,mappingError=null;try{mapping=await hid.readLightingMapping(s);}catch(error){mappingError=error.message;}baseline=clone(s);baselineLightingMapping=clone(mapping);profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}if(mapping)profile.lightingMapping=mapping;else delete profile.lightingMapping;refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status(mappingError?'按键、灯效和宏配置已读取并备份；灯光映射未取得：'+mappingError:'已读取完整配置和灯光映射并保存本地备份。编辑后点击“写入按键”才会修改键盘。',!!mappingError);}
+async function read(){const s=await hid.snapshot();let mapping=null,mappingError=null;try{mapping=await hid.readLightingMapping(s);}catch(error){mappingError=error.message;}const keepLightingDraft=lightingReconnectSnapshot!==null;
+  if(keepLightingDraft&&!sameSnapshot(s,lightingReconnectSnapshot)){
+    baseline=null;throw new Error('新读回与返回的灯效结果不同；编辑区草稿保留，未写入。请保存草稿并核对键盘配置。');
+  }
+  if(keepLightingDraft&&mapping&&profile.lightingMapping&&!equal(mapping,profile.lightingMapping)){
+    baseline=null;throw new Error('新读回的灯光映射与保留草稿不同；草稿保留，未写入。请保存配置并核对映射。');
+  }
+  baseline=clone(s);baselineLightingMapping=clone(mapping);
+  if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s)??profile;}catch(error){status('配置已读取，但本地宏名称无法读取：'+error.message,true);}}
+  else{validateProfile(profile);lightingReconnectSnapshot=null;}if(mapping)profile.lightingMapping=mapping;else if(!keepLightingDraft)delete profile.lightingMapping;refreshMacros();loadMacro();loadPlayback();syncLights();try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}status(mappingError?'按键、灯效和宏配置已读取并备份；灯光映射未取得：'+mappingError:'已读取完整配置和灯光映射并保存本地备份。编辑后点击“写入按键”才会修改键盘。',!!mappingError);}
 async function operation(fn,{localOnly=false}={}){
   if(busy)return;const action=document.activeElement?.id??'page-operation';busy=true;render();
   try{await runPageOperation(fn,{localOnly,stopObservation:()=>hid?.stopHostTextObservation(),invalidateText:()=>{if(textProduct){textFactory=null;$('text-editor').hidden=true;}},suspendHostText:async()=>{if(textBridge?.paired)await textBridge.suspend();}});}
@@ -144,8 +158,34 @@ $('save-polling-draft').onclick=()=>act(()=>{
   const value=$('polling-draft').value;requireThat(value!=='','请选择回报率，或保留原草稿。');
   const output=officialPollingDraft(JSON.parse(profile.windowsTemplateJSON),Number(value));profile.windowsTemplateJSON=JSON.stringify(output);validateProfile(profile);status('回报率已保存到官方配置草稿，尚未写入键盘。请在配置与备份导出。');
 });
+function closeLightingReturnChannel(){lightingReturnChannel?.close();lightingReturnChannel=null;clearTimeout(lightingReturnTimer);lightingReturnTimer=null;}
+function prepareLightingReturnChannel(id,review){
+  closeLightingReturnChannel();requireThat(typeof BroadcastChannel==='function','浏览器不支持编辑器结果回传。');
+  const channel=new BroadcastChannel(lightingResultChannelName(id));lightingReturnChannel=channel;
+  lightingReturnTimer=setTimeout(closeLightingReturnChannel,7_200_000);
+  channel.onmessage=event=>{
+    const value=event.data;if(value?.kind!=='lighting-editor-result'||value.id!==id)return;
+    let accepted=false,error='';
+    try{
+      requireThat(!busy&&!recorder,'编辑器正在操作，请稍后重试返回。');
+      requireThat(!hid||hid.dead,'编辑器已有 USB 会话，请先断开再返回结果。');
+      requireThat(equal(baseline,review.original),'编辑器读回基线已改变，请重新准备。');
+      const current=reviewLightingEditorResult(value.record,review);
+      requireThat(equal(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
+      // Keep all drafts, including official raw RGB. A new USB read is still
+      // required before adopting this evidence as a connected baseline.
+      lightingReconnectSnapshot=current;accepted=true;
+      status('灯效结果已核对，全部编辑草稿保留。请重新连接并读取键盘，读回一致后继续。');
+    }catch(failure){error=String(failure.message).slice(0,4096);status(error,true);}
+    channel.postMessage({kind:'lighting-editor-result-ack',id,accepted,error});
+    if(accepted)closeLightingReturnChannel();
+    render();
+  };
+}
+window.addEventListener('beforeunload',closeLightingReturnChannel);
 if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>{
   if(busy||!baseline)return;
+  if(lightingReconnectSnapshot){status('请先重新连接核对已返回的结果，再准备新的灯效计划。',true);return;}
   // Open during the click so popup blockers do not lose an async navigation.
   const view=window.open('about:blank','_blank');if(!view){status('请允许本网站打开新页面，再试一次。',true);return;}
   let sent=false;void operation(async()=>{
@@ -153,11 +193,17 @@ if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>{
       const review=reviewLightingDraft(profile,baseline),id=crypto.randomUUID();
       if(hid)await hid.close();hid=null;gate.invalidate();
       requireThat(!view.closed,'验收页面已关闭，请重新准备。');
-      view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);view.opener=null;
+      view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);prepareLightingReturnChannel(id,review);view.opener=null;
       view.location.replace(`lighting-test.php?plan=${encodeURIComponent(id)}`);sent=true;
       status('编辑区计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。');
-    }catch(error){view.close();throw error;}
+    }catch(error){closeLightingReturnChannel();view.close();throw error;}
   }).finally(()=>{if(!sent)view.close();});
+};
+$('discard-lighting-result').onclick=()=>{
+  if(busy||!lightingReconnectSnapshot)return;
+  if(!confirm('放弃待核对的返回结果？当前草稿仍保留，但下次普通读取会替换草稿，请先导出保存。此操作不修改键盘。'))return;
+  lightingReconnectSnapshot=null;baseline=null;
+  status('返回结果已放弃，草稿仍保留。请先导出草稿，再重新读取键盘。');render();
 };
 $('import-lighting').onclick=()=>{if(!busy)$('lighting-draft-file').click();};
 $('lighting-draft-file').onchange=()=>{

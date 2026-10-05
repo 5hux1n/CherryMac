@@ -1,4 +1,4 @@
-import {clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal} from './model.js?v=0.6.0';
+import {clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 let database;
 function db(){if(!database)database=new Promise((resolve,reject)=>{const r=indexedDB.open('CherryMacWeb',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups',{keyPath:'id'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('备份数据库被其他页面占用。'));});return database;}
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
@@ -27,4 +27,21 @@ export function takeLightingHandoff(storage,id,now=Date.now()){
   const value=JSON.parse(text);
   if(value.format!=='CherryMacLightingHandoff'||value.version!==1||!Number.isFinite(value.createdAt)||value.createdAt<0||!Number.isFinite(now)||now<value.createdAt||now-value.createdAt>600_000)throw new Error('灯效计划已过期，请返回编辑区重新准备。');
   return value.review;
+}
+
+// This channel transports evidence only. The editor must re-read USB before
+// using the result as a live baseline; no message grants write authorization.
+export function lightingResultChannelName(id){return handoffKey(id)+':result';}
+export function reviewLightingEditorResult(record,review){
+  requireThat(new TextEncoder().encode(JSON.stringify(record)).length<=3_000_000,'灯效结果超过 3 MB。');
+  requireThat(review?.format==='CherryMacLightingDraftReview'&&review.version===1&&review.hardwareReady===false,'原编辑计划无效。');
+  requireThat(equal(officialLightingReadbackTarget(review.plan,review.original),review.target),'原编辑目标不一致。');
+  if(record?.format==='CherryMacLightingRecoveryRecord'){
+    const assessment=assessLightingRecoveryRecord(record);
+    requireThat(assessment.status==='readbackMatched'&&equal(record.original,review.original)&&equal(record.plan,review.plan)&&equal(record.current,review.target),'写入结果与编辑计划不一致。');
+  }else if(record?.format==='CherryMacLightingRestoreAttempt'){
+    const assessment=assessLightingRestoreAttempt(record),source=record.recovery.sourceRecord;
+    requireThat(['readbackMatched','alreadyMatched'].includes(assessment.status)&&equal(source.original,review.original)&&equal(source.plan,review.plan)&&equal(record.current,review.original),'恢复结果与原编辑基线不一致。');
+  }else throw new Error('灯效结果类型无效。');
+  return clone(record.current);
 }
