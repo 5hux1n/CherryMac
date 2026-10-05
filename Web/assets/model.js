@@ -158,11 +158,12 @@ export function validateSnapshot(s,complete=false){
 const macroNameKey=name=>typeof name==='string'?name.normalize('NFC'):null;
 const sameMacroName=(first,second)=>macroNameKey(first)===macroNameKey(second);
 const macroNameStem=name=>[...name.normalize('NFC')].slice(0,65).join('');
-export function validateMacro(m){
+export function validateMacro(m){return validateMacroWithin(m,256);}
+function validateMacroWithin(m,maximumEvents){
   if(m?.hardwareReserved!=null)requireThat(bytes(m.hardwareReserved,2),'宏保留数据长度无效。');
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
   if(m?.windowsActionIndex!=null)requireThat(Number.isInteger(m.windowsActionIndex)&&m.windowsActionIndex>=0,'宏来源动作索引无效。');
-  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=256,'宏名称或步骤数量无效。');
+  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=maximumEvents,'宏名称或步骤数量无效。');
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
@@ -1087,4 +1088,43 @@ export function adoptRawLightingMetadata(profile,value){
   validateRawLightingMetadata(value);validateProfile(profile);
   if(!equal(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
   const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding='officialRGB';validateProfile(next);return next;
+}
+
+// Offline official layout only. The production writer uses resolveMacros and
+// cannot consume this object as a write authorization or hardware snapshot.
+export function prepareOfficialMacroStorage({macros,bindings,modes={},factoryKeymap,deviceInfo,headerReserved=[]}){
+  requireThat(bytes(factoryKeymap,378)&&bytes(deviceInfo,34)&&deviceInfo[6]===24&&(headerReserved.length===0||bytes(headerReserved,10)),'官方宏布局需要本型号完整默认键位表、容量信息和有效保留数据。');
+  requireThat(Array.isArray(macros)&&bindings&&typeof bindings==='object'&&!Array.isArray(bindings)&&modes&&typeof modes==='object'&&!Array.isArray(modes),'宏库或绑定结构无效。');
+  const editorEventLimit=Math.trunc((deviceInfo[6]*128-22)/4);
+  macros.forEach(m=>validateMacroWithin(m,editorEventLimit));
+  requireThat(new Set(macros.map(m=>macroNameKey(m.name))).size===macros.length,'宏名称不能重复。');
+  for(const slot of Object.keys(modes))requireThat(Object.hasOwn(bindings,slot),'宏执行方式缺少对应绑定。');
+  const logicalBySlot=new Map();
+  FIRMWARE_LOGICAL_DEFAULTS.forEach((value,logical)=>{
+    let slot=-1;for(let i=0;i<126;i++)if(((factoryKeymap[i*3]<<16)|(factoryKeymap[i*3+1]<<8)|factoryKeymap[i*3+2])===value){slot=i;break;}
+    if(slot<0)return;
+    requireThat(!logicalBySlot.has(slot)||!Object.hasOwn(bindings,slot),'默认键位映射含重复逻辑位置，停止宏转换。');
+    if(!logicalBySlot.has(slot))logicalBySlot.set(slot,logical);
+  });
+  const ordered=Object.keys(bindings).map(key=>{
+    requireThat(/^(0|[1-9]\d*)$/.test(key)&&Number(key)<126&&![6,71].includes(Number(key))&&logicalBySlot.has(Number(key))&&macros.some(m=>sameMacroName(m.name,bindings[key])),'宏绑定在固件默认表中没有唯一可配置位置。');
+    validatePlayback(modes[key]??{mode:'count',count:1});return Number(key);
+  }).sort((a,b)=>logicalBySlot.get(a)-logicalBySlot.get(b));
+  if(!ordered.length)return {hardwareReady:false,editorEventLimit,usedBytes:0,records:[],bank:null};
+  const indices=ordered.map(slot=>macros.findIndex(m=>sameMacroName(m.name,bindings[slot])));
+  const total=16+ordered.length*6+indices.reduce((sum,index)=>sum+macros[index].steps.length*4,0);
+  requireThat(total<=3071,'已绑定宏超过存储容量；同一宏绑定多个键会分别占用空间。');
+  const bank=Array(3071).fill(0),records=[];const word=(offset,value)=>{bank[offset]=value&255;bank[offset+1]=value>>8;};
+  bank[0]=0xaa;bank[1]=0x55;word(2,total);word(4,ordered.length);
+  if(headerReserved.length)bank.splice(6,10,...headerReserved);
+  let cursor=16+ordered.length*2;
+  ordered.forEach((slot,ordinal)=>{
+    const libraryIndex=indices[ordinal],m=macros[libraryIndex],p=modes[slot]??{mode:'count',count:1};
+    const binding=p.mode==='count'?(p.count===1?[0x70,ordinal,0]:[0x71,ordinal,p.count]):[0x70,ordinal,p.mode==='held'?1:2];
+    word(16+ordinal*2,cursor);word(cursor,m.steps.length);
+    if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);
+    m.steps.forEach((s,j)=>{const modifier=s.kind!=='mouse'&&s.usage>=224;bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);});
+    records.push({logicalIndex:logicalBySlot.get(slot),physicalSlot:slot,libraryIndex,ordinal,offset:cursor,eventCount:m.steps.length,binding});cursor+=4+m.steps.length*4;
+  });
+  return {hardwareReady:false,editorEventLimit,usedBytes:total,records,bank};
 }

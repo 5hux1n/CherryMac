@@ -16,8 +16,8 @@ struct MacroPlayback: Codable, Equatable {
 
 enum CherryMacroCodec {
     static let accessibleSize=3071
-    static func encodeEvents(_ macro:KeyboardMacro) throws -> [UInt8] {
-        try macro.validate()
+    static func encodeEvents(_ macro:KeyboardMacro,maximumEvents:Int = 256) throws -> [UInt8] {
+        try macro.validate(maximumEvents:maximumEvents)
         return macro.steps.flatMap{step -> [UInt8] in
             let modifier=step.kind == nil && (224...231).contains(step.usage)
             let kind:UInt8=step.kind == .mouse ? 1:(modifier ? 9:10)
@@ -319,4 +319,72 @@ struct MacroStopRequest:Codable {
     let phase:Phase
     let configurations:[HardwareSnapshot]
     let requirements:[MacroCompletionRequirements]
+}
+
+// Official per-binding layout, deliberately separate from the current shared
+// library writer. A layout is data, never an authorization to send HID reports.
+struct OfficialMacroStorageLayout:Codable,Equatable {
+    struct Record:Codable,Equatable {
+        let logicalIndex:Int
+        let physicalSlot:Int
+        let libraryIndex:Int
+        let ordinal:Int
+        let offset:Int
+        let eventCount:Int
+        let binding:[UInt8]
+    }
+    let hardwareReady:Bool
+    let editorEventLimit:Int
+    let usedBytes:Int
+    let records:[Record]
+    // nil means the official sender would return without sending a macro bank.
+    let bank:[UInt8]?
+    static func prepare(macros:[KeyboardMacro],bindings:[Int:String],modes:[Int:MacroPlayback],
+                        factoryKeymap:[UInt8],deviceInfo:[UInt8],headerReserved:[UInt8]=[])throws->Self {
+        guard factoryKeymap.count==378,deviceInfo.count==34,deviceInfo[6]==24,
+              headerReserved.isEmpty || headerReserved.count==10 else {
+            throw HardwareError(message:"官方宏布局需要本型号完整默认键位表、容量信息和有效保留数据。")
+        }
+        let editorLimit=(Int(deviceInfo[6])*128-22)/4
+        guard Set(macros.map{$0.name}).count==macros.count else{throw HardwareError(message:"宏名称不能重复。")}
+        for macro in macros{try macro.validate(maximumEvents:editorLimit)}
+        guard modes.keys.allSatisfy({bindings[$0] != nil}) else{throw HardwareError(message:"宏执行方式缺少对应绑定。")}
+        var slots:[Int:Int]=[:]
+        for (logical,value) in WindowsProfile.firmwareLogicalDefaults.enumerated() {
+            if let slot=(0..<126).first(where:{slot in
+                let offset=slot*3
+                return Int(factoryKeymap[offset])<<16 | Int(factoryKeymap[offset+1])<<8 | Int(factoryKeymap[offset+2])==value
+            }) {
+                // Ambiguous logical aliases cannot receive a single physical binding.
+                if slots[slot] != nil && bindings[slot] != nil{throw HardwareError(message:"默认键位映射含重复逻辑位置，停止宏转换。")}
+                if slots[slot]==nil{slots[slot]=logical}
+            }
+        }
+        for (slot,name) in bindings {
+            guard (0..<126).contains(slot),![6,71].contains(slot),slots[slot] != nil,
+                  macros.contains(where:{$0.name==name}) else{throw HardwareError(message:"宏绑定在固件默认表中没有唯一可配置位置。")}
+            try (modes[slot] ?? .once).validate()
+        }
+        let ordered=bindings.keys.sorted{slots[$0]!<slots[$1]!}
+        if ordered.isEmpty{return .init(hardwareReady:false,editorEventLimit:editorLimit,usedBytes:0,records:[],bank:nil)}
+        let indices=ordered.map{slot in macros.firstIndex{$0.name==bindings[slot]!}!}
+        let events=try indices.map{try CherryMacroCodec.encodeEvents(macros[$0],maximumEvents:editorLimit)}
+        let total=16+ordered.count*6+events.reduce(0){$0+$1.count}
+        guard total<=CherryMacroCodec.accessibleSize else{throw HardwareError(message:"已绑定宏超过存储容量；同一宏绑定多个键会分别占用空间。")}
+        var bank=[UInt8](repeating:0,count:CherryMacroCodec.accessibleSize)
+        func word(_ offset:Int,_ value:Int){bank[offset]=UInt8(value & 255);bank[offset+1]=UInt8(value >> 8)}
+        bank[0]=0xAA;bank[1]=0x55;word(2,total);word(4,ordered.count)
+        if !headerReserved.isEmpty{bank.replaceSubrange(6..<16,with:headerReserved)}
+        var cursor=16+ordered.count*2;var records:[Record]=[]
+        for (ordinal,slot) in ordered.enumerated(){
+            let index=indices[ordinal],macro=macros[index],eventBytes=events[ordinal],mode=modes[slot] ?? .once
+            let binding:[UInt8]=mode.mode == .count ? (mode.count==1 ? [0x70,UInt8(ordinal),0]:[0x71,UInt8(ordinal),UInt8(mode.count)]) : [0x70,UInt8(ordinal),mode.mode == .held ? 1:2]
+            word(16+ordinal*2,cursor);word(cursor,macro.steps.count)
+            if let reserved=macro.hardwareReserved{bank.replaceSubrange(cursor+2..<cursor+4,with:reserved)}
+            bank.replaceSubrange(cursor+4..<cursor+4+eventBytes.count,with:eventBytes)
+            records.append(.init(logicalIndex:slots[slot]!,physicalSlot:slot,libraryIndex:index,ordinal:ordinal,offset:cursor,eventCount:macro.steps.count,binding:binding))
+            cursor += 4+eventBytes.count
+        }
+        return .init(hardwareReady:false,editorEventLimit:editorLimit,usedBytes:total,records:records,bank:bank)
+    }
 }
