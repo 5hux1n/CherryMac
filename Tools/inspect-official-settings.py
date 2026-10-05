@@ -442,7 +442,7 @@ def inspect_settings_status_predicate(pe):
                        "No live query or new product transport permission"]}
 
 
-def inspect_default_configuration_path(pe):
+def inspect_default_configuration_path(pe, defaults_dir=None):
     """Audit the confirmed default-button branch, without authorizing reset."""
     checks = {
         0x48E87C: "680cbb7500", 0x48E897: "e814be0100",
@@ -457,12 +457,21 @@ def inspect_default_configuration_path(pe):
         0x5425F9: "ff15c0b16e00", 0x542616: "ff15d0b66e00",
         0x434903: "6880fb7200", 0x434949: "8b9140080000",
         0x42B4BA: "8b80240b0000",
+        0x4FF065: "8d840a30270000", 0x4FF07D: "e89e7c1800",
+        0x4FF5A4: "81f9d7010000", 0x4FF5EF: "81fada010000",
+        0x4FF604: "81f9e6010000", 0x4FF619: "3def010000",
+        0x4FF62D: "81fa4c010000", 0x4FF633: "7533",
+        0x4FF66B: "c1e209", 0x4FF67C: "6bd103",
+        0x4FF693: "e878affdff", 0x4FF6B5: "e826aafdff",
+        0x47C747: "e8448d0000", 0x47C753: "8b82a0040000",
+        0x47C788: "e8b39d0c00",
+
     }
     for address, encoded in checks.items():
         expected = bytes.fromhex(encoded)
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected default configuration instruction")
-    methods = {0x290: 0x4F9320, 0x2A4: 0x4FE970, 0x2BC: 0x500790, 0x2C4: 0x501190}
+    methods = {0x2A0: 0x4FEFB0, 0x290: 0x4F9320, 0x2A4: 0x4FE970, 0x2BC: 0x500790, 0x2C4: 0x501190}
     for offset, target in methods.items():
         if pe.pointer(0x77F604 + offset) != target:
             raise ValueError("Unexpected model default configuration virtual target")
@@ -478,12 +487,46 @@ def inspect_default_configuration_path(pe):
         expected = (name + "\0").encode("ascii")
         if pe.at(pe.base + pe.pointer(address) + 2, len(expected)) != expected:
             raise ValueError("Unexpected default configuration import")
-    return {"instructionChecks": len(checks), "button": "default_btn", "confirmation": "message_text_22",
+    result = {"instructionChecks": len(checks), "button": "default_btn", "confirmation": "message_text_22",
             "handler": "0x4aa6b0", "modelVirtualCalls": {hex(k): hex(v) for k, v in methods.items()},
             "defaultFilePattern": "DefaultData%d.json", "defaultFilePathCompositionMethod": "0x542540",
             "fileIndexControl": "device_nprofile_combo", "profileIndexGetter": "0x42b4b0",
             "followingBindingDispatchOffset": "0x2a0", "hardwareWriteAuthorized": False,
             "limits": "Confirmed button and model virtual targets only; default file index, complete model extraction, nested binding dispatch and physical effects remain unverified. This is not a standalone factory-reset report or product reset implementation."}
+
+
+    result["bindingWrite"] = {"method": "0x4fefb0", "initialTableMember": "0x2730",
+                              "payloadBytes": "deviceInfo byte +0x1df9 multiplied by 3",
+                              "model01CEOffset": "profile index shifted left 9 (multiplied by 512)",
+                              "sendMethod": "0x4da610", "finalMethod": "0x4da0e0",
+                              "limits": "Entry and final write branch only; complete action conversion and sender internals are not reclassified here."}
+    if defaults_dir is not None:
+        rows = []
+        for index in range(5):
+            path = Path(defaults_dir) / f"DefaultData{index}.json"
+            data = path.read_bytes()
+            if len(data) > 16 * 1024 * 1024:
+                raise ValueError("Default file exceeds analysis bound")
+            root = json.loads(data.decode("utf-8-sig"))
+            devices = root.get("Device") if isinstance(root, dict) else None
+            if not isinstance(devices, list):
+                raise ValueError("Default file lacks Device array")
+            matches = [(i, row) for i, row in enumerate(devices) if isinstance(row, dict) and row.get("//") == "47"]
+            if len(matches) != 1:
+                raise ValueError("Expected one model47 default row")
+            position, row = matches[0]
+            keys = row.get("KeyList")
+            if not isinstance(keys, list) or len(keys) != 126:
+                raise ValueError("Unexpected default key count")
+            canonical = json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+            rows.append({"file": path.name, "fileSHA256": hashlib.sha256(data).hexdigest(),
+                         "modelArrayIndex": position, "modelRowSHA256": hashlib.sha256(canonical).hexdigest(),
+                         "keyCount": len(keys), "templateIdentity": row.get("DeviceBasicInfo"),
+                         "lightingModeIndex": row.get("LightInfo", {}).get("SelectItem")})
+        result["defaultFiles"] = {"rows": rows, "sameModelRowAcrossFiveFiles": len({r["modelRowSHA256"] for r in rows}) == 1,
+                                  "limits": "Read-only template identity and content comparison, not physical USB identity, firmware defaults or permission to restore unsupported lighting modes."}
+    return result
+
 
 
 def inspect_external_property_binding(pe, dll_path=None):
@@ -855,7 +898,7 @@ def inspect_macro_ui(pe, skin):
             "limits": "Static selected resource and one recorder branch; not proof against all indirect/hidden paths or firmware wheel capability"}
 
 
-def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None):
+def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != EXPECTED_SHA256:
@@ -976,13 +1019,13 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None):
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 16,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 17,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
-        "defaultConfigurationPath": inspect_default_configuration_path(pe),
+        "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
@@ -1024,9 +1067,10 @@ def main():
     parser.add_argument("--macro-ui", action="store_true", help="Also audit the target macro resource, menu and recorder branch; requires --skin")
     parser.add_argument("--ui-dll", help="Optional extracted DuiLib.dll; read-only control action audit")
     parser.add_argument("--osconf-dll", help="Optional extracted x86/vista/osConfLib.dll; read-only request table audit")
+    parser.add_argument("--defaults-dir", help="Optional extracted DefaultData directory; inspect five model47 template rows without writing them")
     args = parser.parse_args()
     try:
-        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui, args.ui_dll, args.osconf_dll), ensure_ascii=False, indent=2))
+        print(json.dumps(inspect(args.executable, args.skin, args.macro_ui, args.ui_dll, args.osconf_dll, args.defaults_dir), ensure_ascii=False, indent=2))
     except (OSError, ValueError, struct.error, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
 
