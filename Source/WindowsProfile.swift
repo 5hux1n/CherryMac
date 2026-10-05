@@ -809,13 +809,14 @@ enum WindowsProfile {
         try result.validate();return result
     }
     struct DefaultConfigurationReview:Codable {
-        var format="CherryMacDefaultConfigurationReview";var version=1;var hardwareReady=false
+        var format="CherryMacDefaultConfigurationReview";var version=2;var hardwareReady=false
         var original:HardwareSnapshot;var candidate:HardwareSnapshot
         var officialTemplateJSON:String;var factoryKeymap:[UInt8]
         var lightingPlan:OfficialLightingPlan;var changedKeySlots:[Int]
         var changedParameterOffsets:[Int];var protectedChangedSlots:[Int]
         var macroBindingSlots:[Int];var unsupportedFactorySlots:[Int]
         var pendingSystemFields:[String];var retainedMacroStorage=true
+        var pendingColorRestore=true;var pendingMacroStorageSemantics=true
         var completeRestoreImplemented=false
     }
     // Offline candidate only. Neither this report nor read metadata grants IO.

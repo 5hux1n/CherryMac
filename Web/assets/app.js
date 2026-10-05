@@ -269,7 +269,7 @@ $('default-review-file').onchange=()=>operation(async()=>{
   const text=await file.text();
   requireThat(baseline===before&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
   const review=reviewDefaultConfiguration(text,before,mapping);
-  $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，原始宏存储保留。完整恢复尚未开放。`;
+  $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，逐键颜色恢复及宏存储处理也待核对。候选保留原始宏存储，完整恢复尚未开放。`;
   download(review,'CherryMac-default-review.json');
   status('已导出默认恢复核对计划，包含当前配置与宏；未修改编辑区或写入键盘。');
 },{localOnly:true});

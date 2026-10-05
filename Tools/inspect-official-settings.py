@@ -472,6 +472,14 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x4FA7B8: "68a8dd7600", 0x4FA7D1: "68b0dd7600",
         0x4FA7F8: "e873c20400", 0x4FA810: "81c1e4250000",
         0x4FA816: "e83583f8ff",
+        0x408E02: "c7054c41820001000000",
+        0x54366D: "898840220000",
+        0x53FAC6: "c7824022000001000000", 0x53FC3C: "c7824022000000000000",
+        0x49992C: "698500fcffff1c010000", 0x499936: "8b88280d8200",
+        0x499943: "e8189d0a00", 0x49B8BD: "e89e7d0a00",
+        0x49D333: "e828630a00", 0x49E5C2: "e899500a00",
+        0x501210: "83b84022000000",
+
 
 
     }
@@ -508,6 +516,12 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
                               "model01CEOffset": "profile index shifted left 9 (multiplied by 512)",
                               "sendMethod": "0x4da610", "finalMethod": "0x4da0e0",
                               "limits": "Entry and final write branch only; complete action conversion and sender internals are not reclassified here."}
+    result["defaultColorProcessing"] = {"registeredModelIndex": 47, "rowStride": "0x11c",
+                                         "flagColumn": "0x820d28", "modelFlagAddress": "0x82414c",
+                                         "registeredValue": 1, "constructorStores": [1, 0], "setter": "0x543660", "objectMember": "0x2240",
+                                         "callerSites": ["0x499943", "0x49b8bd", "0x49d333", "0x49e5c2"],
+                                         "colorGuard": "0x501210 checks object member +0x2240",
+                                         "limits": "Static registration, column transfer and color guard; actual selected object index, loaded color source and full restore ordering remain unverified. Not proof of a live color write or prior blackout root cause."}
     result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
                                            "indexLimit": 25, "outOfRangeFallbackIndex": 0,
                                            "entryStride": 4, "output": "low byte of selected table entry",
@@ -1051,7 +1065,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 18,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 19,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
