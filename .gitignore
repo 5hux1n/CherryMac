@@ -9,3 +9,6 @@ node_modules
 
 # Generated static web application
 /Web/static-dist/
+/Web/cloudflare-dist/
+/.wrangler/
+/Web/.wrangler/

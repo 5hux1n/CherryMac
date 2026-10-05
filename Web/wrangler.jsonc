@@ -1,0 +1,14 @@
+{
+  "name": "cherrymac",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./cloudflare-dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "observability": {"enabled": false}
+}
