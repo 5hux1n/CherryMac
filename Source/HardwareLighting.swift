@@ -246,7 +246,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     func render(){
         buttons.forEach{$0.isEnabled = !running};buttons[4].isEnabled=running
         buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
-        buttons[3].isEnabled = !running && recoveryData != nil
+        buttons[3].isEnabled = !running && recoveryData != nil && registryID != nil && readback != nil
         buttons[5].isEnabled = !running && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
         buttons[6].isEnabled = !running && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && registryID==cycle?.reconnectedRegistryID && readback != nil
     }
@@ -283,8 +283,13 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         let context=Unmanaged.passUnretained(self).toOpaque()
         IOHIDManagerRegisterDeviceRemovalCallback(m,{context,_,_,device in
             guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
-            guard selfRef.writtenTarget != nil,selfRef.id(device)==selfRef.registryID else{return}
-            selfRef.cycle = .init(originalRegistryID:selfRef.registryID!);selfRef.cycle?.disconnected(at:ProcessInfo.processInfo.systemUptime);selfRef.readback=nil;selfRef.savePowerEvent("usbDisconnected");selfRef.render()
+            guard let selectedID=selfRef.registryID,selfRef.id(device)==selectedID else{return}
+            selfRef.readback=nil;selfRef.log?.requestCancellation()
+            if selfRef.writtenTarget != nil{
+                selfRef.cycle = .init(originalRegistryID:selectedID)
+                selfRef.cycle?.disconnected(at:ProcessInfo.processInfo.systemUptime)
+            }
+            selfRef.savePowerEvent("usbDisconnected");selfRef.render()
         },context)
         IOHIDManagerRegisterDeviceMatchingCallback(m,{context,_,_,device in
             guard let context else{return};let selfRef=Unmanaged<LightingAcceptanceWindow>.fromOpaque(context).takeUnretainedValue()
@@ -361,9 +366,12 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         }
     }
     @objc func restore(){
-        guard !running,let data=recoveryData,confirmation("重新核对并恢复原始灯效数据？")else{return}
+        guard !running,let data=recoveryData,let selectedID=registryID,readback != nil,confirmation("重新核对并恢复原始灯效数据？")else{return}
         perform("lighting-acceptance-restore"){usb,log in
-            let current=try usb.completeSnapshot(),plan=try WindowsProfile.restorePlanFromRecord(data,current:current)
+            guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"恢复会话与此前读取设备不同，请重新读取。")}
+            let current=try usb.completeSnapshot()
+            guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"恢复准备期间 USB 设备改变，请重新读取。")}
+            let plan=try WindowsProfile.restorePlanFromRecord(data,current:current)
             let attempt=try usb.restoreLightingCandidate(plan,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             let assessment=try attempt.assess();guard ["readbackMatched","alreadyMatched"].contains(assessment.status)else{throw HardwareError(message:attempt.failure.isEmpty ? assessment.status:attempt.failure)}
             DispatchQueue.main.async{self.writtenTarget=nil;self.cycle=nil;self.state.stringValue="恢复与原始备份读回一致。请核对键盘输出与灯光外观，再保存本轮资料。"};return attempt.current

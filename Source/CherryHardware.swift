@@ -278,10 +278,12 @@ final class CherryUSB: CherryHardwareAccess {
                                   cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                   persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
+        let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(recovery:recovery)
         stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log;defer{lightingAuthorization=nil;lightingLog=nil}
         return try recovery.execute(source:"usbTrace",assertCurrent:{
             guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"恢复 USB 会话已经改变。")}
+            guard try self.lightingRegistryID()==selectedRegistryID else{throw HardwareError(message:"灯效事务的 USB 设备标识已改变，停止后续发送。")}
         },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
         clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
             if milliseconds>0{Thread.sleep(forTimeInterval:Double(milliseconds)/1000)}
@@ -292,11 +294,13 @@ final class CherryUSB: CherryHardwareAccess {
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                 persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
+        let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:plan,baseline:baseline)
         stopHostTextObservation();lightingAuthorization=authorization;lightingLog=log
         defer{lightingAuthorization=nil;lightingLog=nil}
         return try plan.executeCandidate(baseline:baseline,source:"usbTrace",assertCurrent:{
             guard !self.transportDead,self.device != nil,self.lightingAuthorization===authorization else{throw HardwareError(message:"灯效 USB 会话已经改变。")}
+            guard try self.lightingRegistryID()==selectedRegistryID else{throw HardwareError(message:"灯效事务的 USB 设备标识已改变，停止后续发送。")}
         },cancelled:cancelled,read:{try self.completeSnapshot()},backup:backup,persist:persist,
         clock:{Int(ProcessInfo.processInfo.systemUptime*1000)},wait:{milliseconds in
             if milliseconds>0{Thread.sleep(forTimeInterval:Double(milliseconds)/1000)}
