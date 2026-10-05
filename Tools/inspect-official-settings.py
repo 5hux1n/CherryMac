@@ -1188,6 +1188,167 @@ def inspect_system_device_paths(pe):
 
 
 
+
+
+def inspect_target_parameter_branch(pe):
+    """Pin every PID comparison and conditional edge in this sender selector."""
+    digest="f9518bb11f012a8c82509f1f185099a2bd3f045bafcf1f515ac4d037caf87dde"
+    if hashlib.sha256(pe.at(0x500790,0x50118A-0x500790)).hexdigest()!=digest:
+        raise ValueError("Unexpected target parameter sender body")
+    checks = {
+        0x500AE5: "83f977",
+        0x500AE8: "0f84c2000000",
+        0x500AFB: "3dc3000000",
+        0x500B00: "0f84aa000000",
+        0x500B13: "81facd000000",
+        0x500B19: "0f8491000000",
+        0x500B2C: "81f9cb000000",
+        0x500B32: "747c",
+        0x500B41: "3dd2000000",
+        0x500B46: "7468",
+        0x500B55: "81face000000",
+        0x500B5B: "7453",
+        0x500B6A: "81f9ab010000",
+        0x500B70: "743e",
+        0x500B7F: "3daf010000",
+        0x500B84: "742a",
+        0x500B93: "81fabb010000",
+        0x500B99: "7415",
+        0x500BA8: "81f9cec00000",
+        0x500BAE: "750a",
+        0x500BE7: "81f9b4000000",
+        0x500BED: "752c",
+        0x500C28: "81f9b2010000",
+        0x500C2E: "0f84e2000000",
+        0x500C41: "3db7010000",
+        0x500C46: "0f84ca000000",
+        0x500C59: "81fab1010000",
+        0x500C5F: "0f84b1000000",
+        0x500C72: "81f9b4010000",
+        0x500C78: "0f8498000000",
+        0x500C8B: "3de5000000",
+        0x500C90: "0f8480000000",
+        0x500CA3: "81faec000000",
+        0x500CA9: "746b",
+        0x500CB8: "81f9c2010000",
+        0x500CBE: "7456",
+        0x500CCD: "3dc3010000",
+        0x500CD2: "7442",
+        0x500CE1: "81fae3000000",
+        0x500CE7: "742d",
+        0x500CF6: "81f9ea000000",
+        0x500CFC: "7418",
+        0x500D0B: "3df3010000",
+        0x500D10: "0f8580000000",
+        0x500DA3: "81fad7010000",
+        0x500DA9: "0f8580000000",
+        0x500E3C: "81f9de010000",
+        0x500E42: "0f84e2000000",
+        0x500E55: "3de2010000",
+        0x500E5A: "0f84ca000000",
+        0x500E6D: "81fae4010000",
+        0x500E73: "0f84b1000000",
+        0x500E86: "81f9da010000",
+        0x500E8C: "0f8498000000",
+        0x500E9F: "3ddb010000",
+        0x500EA4: "0f8480000000",
+        0x500EB7: "81fae6010000",
+        0x500EBD: "746b",
+        0x500ECC: "81f9e8010000",
+        0x500ED2: "7456",
+        0x500EE1: "3df7010000",
+        0x500EE6: "7442",
+        0x500EF5: "81faf9010000",
+        0x500EFB: "742d",
+        0x500F0A: "81f9ef010000",
+        0x500F10: "7418",
+        0x500F1F: "3df1010000",
+        0x500F24: "0f859e000000",
+        0x500FD5: "81fafb010000",
+        0x500FDB: "7442",
+        0x500FEA: "81f942010000",
+        0x500FF0: "742d",
+        0x500FFF: "3d4c010000",
+        0x501004: "7419",
+        0x501013: "81fa4e010000",
+        0x501019: "0f85b9000000",
+    }
+    for address,encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:
+            raise ValueError("Unexpected parameter sender PID edge")
+    groups = [
+        {"entry":"0x500bb0","productIDs":[0x77,0xC3,0xCD,0xCB,0xD2,0xCE,0x1AB,0x1AF,0x1BB,0xC0CE],"behavior":"Return success before parameter transfer"},
+        {"entry":"0x500bef","productIDs":[0xB4],"behavior":"Four-byte parameter write"},
+        {"entry":"0x500d16","productIDs":[0x1B2,0x1B7,0x1B1,0x1B4,0xE5,0xEC,0x1C2,0x1C3,0xE3,0xEA,0x1F3],"behavior":"Parameter spans 0/9, 21/1, 25/15"},
+        {"entry":"0x500daf","productIDs":[0x1D7],"behavior":"Parameter spans 0/9, 21/1, 25/28"},
+        {"entry":"0x500f2a","productIDs":[0x1DE,0x1E2,0x1E4,0x1DA,0x1DB,0x1E6,0x1E8,0x1F7,0x1F9,0x1EF,0x1F1],"behavior":"Different parameter preparation/write path"},
+        {"entry":"0x50101f","productIDs":[0x1FB,0x142,0x14C,0x14E],"behavior":"Different parameter preparation/write path"},
+    ]
+    if any(0x1CE in item["productIDs"] for item in groups):
+        raise ValueError("Target unexpectedly classified in an alternate sender path")
+    return {"sender":"0x500790","functionEndExclusive":"0x50118a","functionSHA256":digest,
+            "instructionChecks":len(checks),"productComparisonCount":len(checks)//2,
+            "selectorSource":"word device+0x1e1a", "alternateBranches":groups,
+            "targetProductID":0x1CE,"targetFallback":"0x5010d8",
+            "targetParameterSpans":[{"relativeOffset":0,"length":9},{"relativeOffset":21,"length":1},{"relativeOffset":24,"length":1}],
+            "profileOffset":"profileIndex << 6 added to each relative offset",
+            "omittedWorkBufferBytes":[53,54],
+            "distinction":"0x00ce and 0xc0ce in early-return comparisons are not target 0x01ce",
+            "limits":"Proves only this sender's selector and its named target parameter spans. The separately audited dialog calls this virtual +0x2bc, but other setting senders and later/asynchronous consumers are not exhaustively covered. No live write or fresh rate readback."}
+
+
+def inspect_refresh_mode_memory(pe):
+    """Audit the closed direct-call paths of the named mode initializers."""
+    bodies = {
+        0x504130:(0x5041D5,"040f1c987ab09f76637c52dfcb40761a5bc38e20f44e13bf79e6a09fba21f92c"),
+        0x508000:(0x5080AB,"e130e242fd57ec047a26ca3d37d4043c3071c4f753c60e48cfa603a40fb3c7bc"),
+        0x507E40:(0x507EA4,"95ad33f67c873be2727d3f8eb4375412502af164a167a727d6e806fb09d82cd4"),
+        0x5051E0:(0x5052A4,"c4a0cfb8788c669fa298949ac50622684aac4b0bbf2b223d4d8f3370035c6924"),
+        0x505650:(0x5056ED,"44677951daaea7c002d949759dbc2e9830f199cae5b593f741350bfbc9cfdba7"),
+        0x506190:(0x50623B,"31f8e1d5e4b05e5dd84a5b07bd3f70bc677bed00419493c3fb371be5b4642177"),
+        0x519D70:(0x519DD1,"0a595140070a782056f274e01e6217871d24db4f9640858713d16a8d1da96968"),
+        0x483DD0:(0x483DFD,"76c3eb638ea1373e6f79c2e834083f56321c255589401aea495208253dc116ee"),
+        0x6872A0:(0x6873FA,"08e8653de0c12b3ce71849640f88fc12cb0a4fb4910a518c1082b63790c75bea"),
+    }
+    for start,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Unexpected refresh-mode function body")
+    checks = {
+        0x504157:"e874fcf7ff",0x50416A:"e861fcf7ff",0x50417E:"e84dfcf7ff",
+        0x504192:"e839fcf7ff",0x5041A5:"e826fcf7ff",0x5041B9:"e812fcf7ff",
+        0x5041C9:"8b90e4030000",0x5041CF:"ffd2",
+        0x483DF4:"c60200",0x483DE9:"3b4d0c",
+        0x519D84:"e817d51600",0x519D9A:"e801d51600",
+        0x519DB0:"e8ebd41600",0x519DC5:"e8d6d41600",
+        0x6872A0:"8b4c240c",0x6872A4:"0fb6442408",0x6872AB:"8b7c2404",
+        0x6872DC:"f3aa",0x6873E0:"8907894704",
+        0x50801A:"83c840",0x507E5F:"83f97e",0x5051FB:"837df817",
+        0x50526D:"3dff000000",0x505680:"0fb645fe",0x5061AA:"83ca01",
+    }
+    for address,encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:
+            raise ValueError("Unexpected refresh-mode memory instruction")
+    virtuals={0x34C:0x504130,0x3D0:0x508000,0x3C8:0x507E40,0x370:0x5051E0,
+              0x37C:0x505650,0x3A4:0x506190,0x3E4:0x519D70}
+    for offset,target in virtuals.items():
+        if pe.pointer(0x77F604+offset)!=target:
+            raise ValueError("Unexpected refresh-mode virtual target")
+    return {"instructionChecks":len(checks),"virtualTargetChecks":len(virtuals),
+            "functionBodies":{hex(a):{"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+            "modeInitializer":"0x504130 clears two flags, calls 0x483dd0 six times to zero 126/23-byte arrays, then target virtual +0x3e4",
+            "nestedVirtual":"+0x3e4 -> 0x519d70 fills four 100-byte host buffers using the memory fill routine 0x6872a0; final buffer receives byte 1, others zero",
+            "otherModeMethods":{
+                "0x508000":"OR 0x40 into four host mode-array entries",
+                "0x507e40":"Initialize 126 host phase entries at +0x22ca",
+                "0x5051e0":"23x7 table traversal; skip 0xff and initialize host phase arrays",
+                "0x505650":"23x7 table traversal; skip 0xff and copy host lookup-table bytes",
+                "0x506190":"OR 1 into four host mode-array entries"},
+            "transportClassification":"These six mode methods and their resolved nested callees only modify host memory; no direct HID exchange in this closed set",
+            "limits":"Only the named post-settings mode-refresh paths; not an exhaustive settings/whole-program audit. Later animation consumers, other virtual calls and the separate 0x500790 sender are not reclassified. No runtime, hardware setting or persistence proof."}
+
+
 def inspect_custom_lighting_json(pe):
     # Fixed-byte provenance for the actual RGBA reader and writer, not a
     # guessed schema generated from a similarly named device's defaults.
@@ -1468,7 +1629,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 32,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 34,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1489,6 +1650,8 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "customLightingJSON": inspect_custom_lighting_json(pe),
+        "modeRefreshMemoryPaths": inspect_refresh_mode_memory(pe),
+        "targetParameterSelector": inspect_target_parameter_branch(pe),
         "profileSettingsReload": inspect_profile_settings_reload(pe),
         "currentDialogPollingDispatch": inspect_dialog_polling_dispatch(pe),
         "systemJSONGetter": "0x483100", "systemJSONSetter": "0x482e70",
