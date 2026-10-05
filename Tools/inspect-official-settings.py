@@ -1312,6 +1312,72 @@ def inspect_basic_apply_save(pe):
             "limits": "Resolves this save wrapper to profile configuration getter/setter calls, separately from the later +0x2bc parameter sender. Nested getter/setter storage internals are not exhaustively audited here; this does not establish firmware persistence or absence of alternate setting transports."}
 
 
+def inspect_profile_file_storage(pe):
+    """Identify the save wrapper's JSON serializer and disk output stream."""
+    classes = {0x77A68C: ".?AV?$basic_ofstream@DU?$char_traits@D@std@@@std@@",
+               0x77A648: ".?AVStyledWriter@Json@@"}
+    for table, name in classes.items():
+        if pe.class_name(table) != name:
+            raise ValueError("Unexpected profile storage class")
+    checks = {
+        0x47C9E0: "e8ab8a0000", 0x47CA0A: "8b91a0040000",
+        0x47CA11: "682c5e7400", 0x47CA20: "e81bac0c00",
+        0x47CA2B: "e8109b0c00", 0x47CA55: "e8d6880000",
+        0x485370: "e85b030000", 0x485379: "6a40", 0x48537B: "6a02",
+        0x485380: "ff15c4b16e00", 0x48538D: "e8de020000",
+        0x4853D4: "e8672e0c00", 0x4853EF: "68c0574800",
+        0x485402: "e819050000", 0x48540C: "e88f030000",
+        0x4856FF: "837d0800", 0x485708: "c70080a67700",
+        0x48574E: "c704108ca67700", 0x48567E: "83c902",
+        0x48568C: "e87f98fdff", 0x45EF4D: "e812432200",
+        0x548279: "c745a448a67700", 0x5482B3: "e878830000",
+        0x4857AB: "ff5508", 0x4857C3: "6a0a",
+        0x4857DE: "e80d000000", 0x4857E6: "e82577f9ff",
+        0x485142: "6828a97400", 0x485151: "e829fd2000",
+        0x485527: "e8d4fbffff", 0x4855BA: "e8a1550c00",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected profile file-storage instruction")
+    if pe.at(0x745E2C, 7) != b"Device\0" or pe.at(0x74A928, 6) != "rb\0".encode("utf-16-le"):
+        raise ValueError("Unexpected profile file-storage field or read mode")
+    string_import = "??BCDuiString@DuiLib@@QBEPB_WXZ"
+    raw = (string_import + "\0").encode("ascii")
+    if pe.at(pe.base + pe.pointer(0x6EB1C4) + 2, len(raw)) != raw:
+        raise ValueError("Unexpected profile filename conversion import")
+    bodies = {
+        0x47C9A0: (0x47CAB1, "fad04f3e24f2cf2571c8209e9395c618b8b299bdc7616e3fb152684bbe3bf506"),
+        0x485330: (0x485482, "184da6f592731469421d4c7b71d17cea446c8cc6e90b6306e76be58e2a11ceb3"),
+        0x485490: (0x485666, "29543f0719250ea3589014bc2123f7beb7ae40c8607638774be7964c01d0af77"),
+        0x485100: (0x48532F, "eabf976213f30f3c8e2c7095df351ab808ff7967c1af3fd18a2598c6fc4c924d"),
+        0x548240: (0x5482DF, "43c27c73294fa05f7c637e24a627e797691f67e29a32363d98104e4f6df3fae5"),
+        0x4856D0: (0x485797, "13c89cbe330f2cf5974640ee9025328f06c6378e1c63389e41d677c11d5074a6"),
+        0x485670: (0x4856C9, "cc91dc173710377d7dc5ed4313fc10b23b21843574a10c4fda714859c954a9fa"),
+        0x45EF10: (0x45EFC4, "0aa92271e9881d2fa8705336671200e5de8919b7b43fbedd36bf372048617cb6"),
+        0x4857A0: (0x4857B7, "6bd18ce6da8eb22bef45992dcaa14de385714461016cdb2988495ee2298ec7f3"),
+        0x4857C0: (0x4857F0, "b99c7aeca5f34ca4c06369c2bc906c5f3c63f572753bbb23ee4c9ff40b121e3a"),
+    }
+    for start, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(start, end - start)).hexdigest() != digest:
+            raise ValueError("Unexpected profile file-storage function body")
+    return {
+        "instructionChecks": len(checks), "classes": {hex(k): v for k, v in classes.items()},
+        "profileUpdate": {"method": "0x47c9a0", "deviceArrayField": "Device",
+                          "selectedIndexMember": "0x4a0", "assignCall": "0x47ca2b"},
+        "reader": {"method": "0x485490", "fileReader": "0x485100",
+                   "wideMode": "rb", "parseCall": "0x4855ba"},
+        "writer": {"method": "0x485330", "streamConstructor": "0x4856d0",
+                   "filenameConversionImport": string_import, "openCall": "0x48538d",
+                   "serializer": "0x548240", "serializerClass": "Json::StyledWriter",
+                   "streamInsertion": "0x485920", "newlineAndFlush": "0x4857c0"},
+        "functionBodies": {hex(a): {"endExclusive": hex(b), "sha256": h} for a, (b, h) in bodies.items()},
+        "conclusion": "This named profile-save chain updates a Device JSON row, serializes JSON and writes a host file through basic_ofstream. File saving must be distinguished from the later device parameter send.",
+        "hardwareWriteAuthorized": False,
+        "limits": "Named save and file-stream paths only. Static RTTI and call arguments do not prove disk-write success, global absence of alternate transports or any firmware persistence. CRT internals, dynamic replacement and all stream virtual consumers are not exhaustively audited.",
+    }
+
+
 def inspect_system_device_paths(pe):
     for address, encoded in SYSTEM_DEVICE_CHECKS.items():
         expected = bytes.fromhex(encoded)
@@ -1768,7 +1834,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 36,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 37,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -1790,6 +1856,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
+        "profileFileStorage": inspect_profile_file_storage(pe),
         "customLightingJSON": inspect_custom_lighting_json(pe),
         "modeRefreshMemoryPaths": inspect_refresh_mode_memory(pe),
         "targetParameterSelector": inspect_target_parameter_branch(pe),
