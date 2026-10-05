@@ -159,6 +159,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var writeButtons:[NSButton]=[]
     let recordLabel = NSTextField(labelWithString:"点击键盘上的按键查看当前功能")
     let actionPicker = NSPopUpButton()
+    let mediaPicker = NSPopUpButton()
     let keyPicker = NSPopUpButton()
     let modePicker = NSPopUpButton()
     let brightness = NSSlider(value:4,minValue:0,maxValue:4,target:nil,action:nil)
@@ -277,12 +278,16 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         selectedLabel.font = .systemFont(ofSize:19,weight:.semibold)
         place(selectedLabel,8,8,240,29,in:keys);place(recordLabel,8,48,235,62,in:keys)
         place(label("设置功能"),282,12,86,23,in:keys)
-        actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用"])
+        actionPicker.addItems(withTitles:["保留当前功能","快捷键组合","打开系统计算器","框选区域截图","刷新 · ⌘R","上一曲","播放 / 暂停","下一曲","禁用","多媒体功能"])
         actionPicker.target=self;actionPicker.action=#selector(actionChanged);controls.append(actionPicker)
         place(actionPicker,378,8,235,28,in:keys)
         place(label("快捷键主键"),282,57,95,23,in:keys)
         keyPicker.addItems(withTitles:shortcutKeys.map{$0.0});controls.append(keyPicker);place(keyPicker,378,53,155,28,in:keys)
         for (i,m) in modifiers.enumerated(){controls.append(m);place(m,282+CGFloat(i%2)*196,99+CGFloat(i/2)*31,185,25,in:keys)}
+        place(label("多媒体功能"),650,12,125,23,in:keys)
+        for index in WindowsProfile.visibleMediaIndices{mediaPicker.addItem(withTitle:WindowsProfile.mediaNames[index]);mediaPicker.lastItem?.tag=index}
+        controls.append(mediaPicker);place(mediaPicker,650,48,245,28,in:keys)
+        place(label("媒体键的响应取决于系统与当前应用。\n启动系统计算器可用左侧快捷操作方案。",12),650,91,245,80,in:keys)
         place(button("保存到编辑区",#selector(stageKey)),282,182,186,30,in:keys)
         place(button("安装计算器快捷操作",#selector(installCalculator)),8,161,230,30,in:keys)
         place(label("系统计算器使用 macOS 快捷操作。\n安装后可把计算器键设置为 ⌃⌥⌘C。",12),8,210,236,60,in:keys)
@@ -684,7 +689,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 actionPicker.selectItem(at:1)
                 if let item=shortcutKeys.firstIndex(where:{$0.1==bytes[2]}){keyPicker.selectItem(at:item)}
                 for (index,button) in modifiers.enumerated(){button.state=bytes[1] & [UInt8(0x88),0x11,0x44,0x22][index] == 0 ? .off:.on}
-            }else{keyPicker.selectItem(at:0);modifiers.forEach{$0.state = .off}}
+            }else{keyPicker.selectItem(at:0);modifiers.forEach{$0.state = .off}
+                if bytes[0]==0x30,let index=WindowsProfile.mediaCodes.firstIndex(of:UInt16(bytes[1]) | UInt16(bytes[2])<<8),WindowsProfile.visibleMediaIndices.contains(index){actionPicker.selectItem(at:9);mediaPicker.selectItem(at:mediaPicker.indexOfItem(withTag:index))}
+            }
         }
         actionChanged()
     }
@@ -933,7 +940,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             }
         }
     }
-    @objc func actionChanged(){keyPicker.isEnabled = !busy && actionPicker.indexOfSelectedItem==1;modifiers.forEach{$0.isEnabled = !busy && actionPicker.indexOfSelectedItem==1}}
+    @objc func actionChanged(){keyPicker.isEnabled = !busy && actionPicker.indexOfSelectedItem==1;modifiers.forEach{$0.isEnabled = !busy && actionPicker.indexOfSelectedItem==1};mediaPicker.isEnabled = !busy && actionPicker.indexOfSelectedItem==9}
     @objc func stageKey(){
         guard var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key)else{message.stringValue="请先读取键盘。";return}
         guard !["cherry","modR1"].contains(key.id) else{message.stringValue="此键由键盘内部处理，暂时保留原功能。";return}
@@ -947,6 +954,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         case 6:record=[0x30,205,0]
         case 7:record=[0x30,181,0]
         case 8:record=[0x20,0,0]
+        case 9:
+            guard let index=mediaPicker.selectedItem?.tag,WindowsProfile.visibleMediaIndices.contains(index)else{message.stringValue="请选择多媒体功能。";return}
+            let code=WindowsProfile.mediaCodes[index];record=[0x30,UInt8(code&255),UInt8(code>>8)]
         default:var mask:UInt8=0;for (i,m) in modifiers.enumerated() where m.state == .on{mask |= [UInt8(8),1,4,2][i]};record=[0x20,mask,shortcutKeys[max(0,keyPicker.indexOfSelectedItem)].1]
         }
         p.macroBindings?.removeValue(forKey:slot);p.macroModes?.removeValue(forKey:slot)

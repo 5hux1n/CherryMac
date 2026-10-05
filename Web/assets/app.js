@@ -1,4 +1,4 @@
-import {keys,modes,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
+import {keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
 import {importWindowsLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,encodeBank,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
@@ -9,7 +9,7 @@ import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMa
 import {HostTextStore,mergeHostTextDraft,textRecordPlan} from './product-text.js?v=0.6.0';
 import {saveLog,listLogs} from './logs.js?v=0.6.0';
 import {runPageOperation} from './page-operation.js?v=0.6.0';
-const pageFailures=[];let pageLogTasks=Promise.resolve();
+const pageFailures=[];let pageLogTasks=Promise.resolve(),mediaSelectionRecord=null;
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
@@ -32,6 +32,8 @@ function render(){
     b.title=`${k.label} · ${describe(s.keymap.slice(k.slot*3,k.slot*3+3))}`;
   }
   const key=keys.find(k=>k.id===selected);$('selection-label').textContent=`已选 ${key.label}${selection.size>1?` · 共 ${selection.size} 键`:''}`;$('light-count').textContent=`${selection.size} 键`;const binding=profile.macroBindings?.[key.slot],playback=profile.macroModes?.[key.slot]??{mode:'count',count:1};$('selected-record').textContent=binding?`宏 · ${binding} · ${playback.mode==='count'?`执行 ${playback.count} 次`:playback.mode==='held'?'按住持续':'再次按键停止'}`:describe(s.keymap.slice(key.slot*3,key.slot*3+3));
+  const record=s.keymap.slice(key.slot*3,key.slot*3+3),fingerprint=`${key.slot}:${record.join(',')}`;
+  if(mediaSelectionRecord!==fingerprint){mediaSelectionRecord=fingerprint;const action=record[0]===0x30?mediaActions.find(item=>item.visible&&item.code===(record[1]|record[2]<<8)):null;$('media-function').value=action?String(action.index):'';}
   document.querySelectorAll('[data-tab]').forEach(b=>{const active=b.dataset.tab===tab;b.setAttribute('aria-selected',String(active));b.setAttribute('aria-controls',`pane-${b.dataset.tab}`);b.tabIndex=active?0:-1;$(`pane-${b.dataset.tab}`).hidden=!active;});
   $('page-title').textContent=pages[tab][0];$('page-description').textContent=pages[tab][1];
   const editorPage=['keys','lights','macros'].includes(tab);$('board-card').hidden=!editorPage;$('review-card').hidden=!editorPage;$('workspace').classList.toggle('single-page',!editorPage);
@@ -117,6 +119,7 @@ function switchTab(next){if(!pages[next])return;tab=next;render();}
 for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
   selected=k.id;loadPlayback();if(tab==='lights'&&(e.metaKey||e.ctrlKey||$('multi').checked)){if(selection.has(k.id)&&selection.size>1){selection.delete(k.id);selected=[...selection][0];}else selection.add(k.id);}else selection=new Set([k.id]);if(tab==='lights')loadColor();render();
 };$('keyboard').append(b);}
+for(const action of mediaActions.filter(item=>item.visible))$('media-function').add(new Option(action.label,action.index));
 $('shortcut-key').add(new Option('无主键（仅修饰键）',0));usageOptions($('shortcut-key'),false);macroOptions($('macro-key'));$('shortcut-key').value=21;$('macro-key').value=4;modes.forEach(([value,name])=>$('mode').add(new Option(name,value)));
 function navigation(selector,switchPage){const buttons=[...document.querySelectorAll(selector)];buttons.forEach(b=>{
   b.onclick=()=>switchPage(b);b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();const i=buttons.indexOf(b),forward=['ArrowRight','ArrowDown'].includes(e.key),next=e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(forward?1:buttons.length-1))%buttons.length;buttons[next].focus();switchPage(buttons[next]);};
@@ -124,6 +127,10 @@ function navigation(selector,switchPage){const buttons=[...document.querySelecto
 navigation('[data-tab]',b=>switchTab(b.dataset.tab));
 navigation('[data-light-tab]',b=>{lightTab=b.dataset.lightTab;render();});
 document.querySelectorAll('[data-record]').forEach(b=>b.onclick=()=>act(()=>stageRecord(b.dataset.record.split(',').map(Number))));
+$('stage-media').onclick=()=>act(()=>{
+  const value=$('media-function').value,action=mediaActions.find(item=>item.visible&&String(item.index)===value);
+  requireThat(action,'请选择多媒体功能。');stageRecord([0x30,action.code&255,action.code>>8]);
+});
 $('stage-shortcut').onclick=()=>act(()=>{const mask=[...document.querySelectorAll('.modifier:checked')].reduce((n,b)=>n|Number(b.value),0);stageRecord([0x20,mask,Number($('shortcut-key').value)]);});
 document.querySelectorAll('[data-region]').forEach(b=>b.onclick=()=>{const region=b.dataset.region;selection=new Set(keys.filter(k=>region==='all'||region==='main'&&k.x<576&&k.y>55||region==='function'&&k.y<55||region==='num'&&k.id.startsWith('num')||region==='arrows'&&['up','down','left','right'].includes(k.id)||region==='wasd'&&k.page===7&&[26,4,22,7].includes(k.usage)).map(k=>k.id));selected=[...selection][0];loadColor();render();});
 $('color').oninput=()=>setColor(rgb($('color').value));$('hex').onchange=()=>act(()=>setColor(rgb($('hex').value)));

@@ -219,6 +219,11 @@ enum WindowsProfile {
         }
     }
     static let mediaCodes:[UInt16] = [0x0183,0x00CD,0x00B7,0x00B6,0x00B5,0x00EA,0x00E9,0x00E2,0x0223,0x0227,0x0226,0x0224,0x0225,0x022A,0x0221,0x0194,0x0192,0x018A]
+    static let mediaNames=["媒体播放器","播放 / 暂停","停止播放","上一曲","下一曲","音量降低","音量增加","静音","浏览器主页","网页刷新","网页停止","网页返回","网页向前","网页收藏","网页搜索","我的电脑","计算器","邮件"]
+    // MacroControl.xml contains all 18 entries; browser entries 8...14 are
+    // initially hidden. Keep their names for imports without advertising them
+    // as macOS application shortcuts.
+    static let visibleMediaIndices=Array(0...7)+[15,16,17]
     static let modeCodes:[UInt8] = [0,1,2,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,3,8,22,23,24]
     // Confirmed JSON getter/setter struct order (seven UInt16 fields), not
     // offsets in the keyboard's USB parameter bank or accepted UI ranges.

@@ -1,4 +1,5 @@
-import {SPECIAL, SLOTS} from './tables.js?v=0.6.0';
+import {SPECIAL, SLOTS, MEDIA_CODES} from './tables.js?v=0.6.0';
+export const mediaActions=MEDIA_CODES.map((code,index)=>({code,index,label:['媒体播放器','播放 / 暂停','停止播放','上一曲','下一曲','音量降低','音量增加','静音','浏览器主页','网页刷新','网页停止','网页返回','网页向前','网页收藏','网页搜索','我的电脑','计算器','邮件'][index],visible:index<8||index>14}));
 export const keys=[];
 function add(id,label,usage,x,row,w=1,h=1,page=7){
   keys.push({id,label,usage,page,x:18+x*36,y:20+row*36,w:w*36-4,h:h*36-4,slot:SPECIAL[id]??SLOTS[usage]});
@@ -33,7 +34,7 @@ Object.assign(usageNames,{224:'左 Ctrl',225:'左 Shift',226:'左 Option',227:'�
 export function describe(b){
   if(b[0]===161&&b[1]===0&&b[2]===0)return '文本 · 需要 CherryMac 运行';
   if(b[0]===0x20)return ['⌃','⇧','⌥','⌘'].filter((_,i)=>b[1]&[0x11,0x22,0x44,0x88][i]).join('')+(b[2]?(usageNames[b[2]]??`HID ${b[2]}`):b[1]?'':'禁用');
-  if(b[0]===0x30)return ({402:'计算器',182:'上一曲',205:'播放 / 暂停',181:'下一曲',233:'音量增加',234:'音量降低',226:'静音'})[b[1]+(b[2]<<8)]??'媒体功能';
+  if(b[0]===0x30){const code=b[1]+(b[2]<<8);return mediaActions.find(action=>action.code===code)?.label??`媒体键 ${code}`;}
   if(b[0]===0x70)return `硬件宏 ${b[1]+1}`;
   return b[0]===0xa0?'键盘内部功能':b.map(x=>x.toString(16).padStart(2,'0')).join(' ');
 }

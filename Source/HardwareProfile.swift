@@ -283,7 +283,8 @@ enum CherryMatrix {
         }
         if bytes[0] == 0x30 {
             let code=Int(bytes[1]) | Int(bytes[2])<<8
-            return [402:"计算器",182:"上一曲",205:"播放 / 暂停",181:"下一曲",233:"音量增加",234:"音量降低",226:"静音"][code] ?? "媒体键 \(code)"
+            if let index=WindowsProfile.mediaCodes.firstIndex(of:UInt16(code)){return WindowsProfile.mediaNames[index]}
+            return "媒体键 \(code)"
         }
         if bytes[0] == 0xA0 { return "键盘内部功能 \(bytes[1])" }
         return bytes.map{String(format:"%02X",$0)}.joined(separator:" ")
