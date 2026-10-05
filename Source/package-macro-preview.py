@@ -43,7 +43,7 @@ manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
             'compileFlags': ['CHERRY_MACRO_PRODUCT'],
-            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
+            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
 if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
@@ -78,6 +78,8 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 “配置与备份”中的“检查灯效恢复记录”可检查原始写入或恢复操作记录，显示读回、失败与缺失信息，并导出分析。此入口仅处理文件，不连接或写入键盘。检查灯效恢复记录后，可以导出原始数据恢复计划。只接受记录中完整、可识别的读回状态；缺失读回或范围外变化会被拒绝。恢复计划只保存文件，尚未执行，实际恢复前仍需要重新读取键盘。
 
 官方方式按每个绑定分别占用宏区，单个宏最多 762 个事件，总容量 3071 字节；同一宏绑定多个键会重复占用，未绑定宏仅保存本地。旧配置可在宏页点击“启用扩展宏编辑”，先转换草稿再核对写入。新存储范围仍待统一真机验收。
+
+宏恢复记录同时保存可与写前硬件数据匹配的名称资料，恢复后再次核对；旧记录或资料缺失时仍可恢复原始硬件配置。
 
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效页的“核对灯效写入”仅生成本地计划，不写入键盘。自定义配色核对和 Windows 草稿导出需要明确的官方原始 RGB；直接读回或来源未知的颜色不能直接转为原始配色。内置灯效遇到读回颜色时保留官方模板里的逐键配色。
 

@@ -1,4 +1,4 @@
-import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource,canonicalJSON,officialMacroReceipt,reconcileOfficialMacroDraftReceipt} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,resolveMacros,validateProfile,validateSnapshot,officialMacroSource,canonicalJSON,officialMacroReceipt,reconcileOfficialMacroDraftReceipt,fromHardware} from './model.js?v=0.6.0';
 import {MacroWriteAuthorization} from './safety.js?v=0.6.0';
 import {databaseOpener} from './database.js?v=0.6.0';
 
@@ -54,13 +54,31 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   }
   validateProfile(result);return result;
 }
-export async function rememberMacroProfile(profile,snapshot,before=snapshot){
+export function prepareMacroMetadata(profile,snapshot,before=snapshot){
   const saved=clone(profile);saved.snapshot=clone(snapshot);saved.lightingColorEncoding='hardwareRGB';validateProfile(saved);
   const resolved=resolveMacros(saved);
   requireThat(['deviceInfo','keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称与设备数据不一致，未保存名称。');
   const receipt=saved.macroStorageLayout==='officialBindings'?officialMacroReceipt(saved,before):null;
   if(receipt)reconcileOfficialMacroDraftReceipt(receipt,snapshot,saved.lightingMapping.factoryKeymap);
-  await save({id:'metadata-'+crypto.randomUUID(),kind:'metadata',format:'CherryMacMacroMetadata',version:1,date:new Date().toISOString(),profile:saved,receipt});
+  return {format:'CherryMacMacroMetadata',version:1,profile:saved,receipt};
+}
+export function restoreMacroMetadata(saved,snapshot,mapping=null){
+  if(saved.format!=null)requireThat(saved.format==='CherryMacMacroMetadata'&&saved.version===1,'宏名称记录格式或版本无效。');
+  validateProfile(saved.profile);validateSnapshot(snapshot);
+  requireThat(equal(saved.profile.snapshot.deviceInfo,snapshot.deviceInfo),'宏名称记录来自不同固件。');
+  if(saved.profile.macroStorageLayout==='officialBindings'){
+    requireThat(saved.format==='CherryMacMacroMetadata'&&saved.version===1&&saved.receipt&&mapping&&equal(mapping.deviceInfo,snapshot.deviceInfo),'官方宏名称记录缺少实际默认映射。');
+    requireThat(canonicalJSON(saved.receipt.macros)===canonicalJSON(saved.profile.macros)&&canonicalJSON(saved.receipt.bindings)===canonicalJSON(saved.profile.macroBindings)&&canonicalJSON(saved.receipt.modes)===canonicalJSON(saved.profile.macroModes??{}),'宏名称记录与草稿不一致。');
+    reconcileOfficialMacroDraftReceipt(saved.receipt,snapshot,mapping.factoryKeymap);
+  }else requireThat(saved.receipt==null,'宏名称记录的存储方式不一致。');
+  const profile=clone(saved.profile);profile.macroStorageLayout??='sharedLibrary';profile.snapshot=clone(snapshot);profile.lightingColorEncoding='hardwareRGB';
+  if(mapping)profile.lightingMapping=clone(mapping);else delete profile.lightingMapping;
+  const resolved=resolveMacros(profile);
+  requireThat(['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称记录与完整读回数据不一致。');return profile;
+}
+export async function rememberMacroProfile(profile,snapshot,before=snapshot){
+  const metadata=prepareMacroMetadata(profile,snapshot,before);
+  await save({id:'metadata-'+crypto.randomUUID(),kind:'metadata',date:new Date().toISOString(),...metadata});
 }
 export async function rememberMacroProfileIfMatching(profile,snapshot){
   if(!snapshot||!equal(profile.snapshot.deviceInfo,snapshot.deviceInfo))return false;
@@ -72,30 +90,31 @@ export async function rememberMacroProfileIfMatching(profile,snapshot){
 export async function recalledMacroProfile(snapshot,mapping=null){
   const records=await record('readonly',store=>store.getAll());
   for(const saved of records.filter(row=>row.kind==='metadata').sort((a,b)=>b.date.localeCompare(a.date))){
-    try{
-      if(saved.format!=null)requireThat(saved.format==='CherryMacMacroMetadata'&&saved.version===1,'宏名称记录格式或版本无效。');
-      validateProfile(saved.profile);
-      if(!equal(saved.profile.snapshot.deviceInfo,snapshot.deviceInfo))continue;
-      if(saved.profile.macroStorageLayout==='officialBindings'){
-        requireThat(saved.format==='CherryMacMacroMetadata'&&saved.version===1&&saved.receipt&&mapping&&equal(mapping.deviceInfo,snapshot.deviceInfo),'官方宏名称记录缺少实际默认映射。');
-        requireThat(canonicalJSON(saved.receipt.macros)===canonicalJSON(saved.profile.macros)&&canonicalJSON(saved.receipt.bindings)===canonicalJSON(saved.profile.macroBindings)&&canonicalJSON(saved.receipt.modes)===canonicalJSON(saved.profile.macroModes??{}),'宏名称记录与草稿不一致。');
-        reconcileOfficialMacroDraftReceipt(saved.receipt,snapshot,mapping.factoryKeymap);
-      }else requireThat(saved.receipt==null,'宏名称记录的存储方式不一致。');
-      const profile=clone(saved.profile);profile.macroStorageLayout??='sharedLibrary';profile.snapshot=clone(snapshot);profile.lightingColorEncoding='hardwareRGB';
-      if(mapping)profile.lightingMapping=clone(mapping);else delete profile.lightingMapping;
-      const resolved=resolveMacros(profile);
-      if(['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])))return profile;
+    try{return restoreMacroMetadata(saved,snapshot,mapping);
     }catch{/* Incompatible metadata cannot overwrite the hardware read. */}
   }return null;
 }
-export async function rememberMacroTransaction(before,target){
+export async function rememberMacroTransaction(before,target,mapping=null){
   new MacroWriteAuthorization(before,target,{allowUnbounded:true});
-  await save({id:'transaction-'+crypto.randomUUID(),kind:'transaction',format:'CherryMacMacroTransaction',version:1,before:clone(before),target:clone(target),date:new Date().toISOString()});
+  let beforeMetadata=null;
+  const known=await recalledMacroProfile(before,mapping);
+  if(known)beforeMetadata=prepareMacroMetadata(known,before);
+  else{
+    const decoded=fromHardware(before);if(mapping)decoded.lightingMapping=clone(mapping);
+    for(const layout of mapping?['officialBindings','sharedLibrary']:['sharedLibrary']){
+      decoded.macroStorageLayout=layout;try{beforeMetadata=prepareMacroMetadata(decoded,before);break;}catch{/* Only exact reconstructable layouts can supply names. */}
+    }
+  }
+  await save({id:'transaction-'+crypto.randomUUID(),kind:'transaction',format:'CherryMacMacroTransaction',version:2,before:clone(before),target:clone(target),beforeMetadata,date:new Date().toISOString()});
+}
+export function restoredMacroTransactionProfile(saved,snapshot,mapping=null){
+  if(saved.beforeMetadata)try{return restoreMacroMetadata(saved.beforeMetadata,snapshot,mapping);}catch{/* Preserve the hardware recovery even if optional names cannot be reconciled. */}
+  return null;
 }
 export async function lastMacroTransaction(){
   const rows=await record('readonly',store=>store.getAll());
   const saved=rows.filter(row=>row.kind==='transaction').sort((a,b)=>b.date.localeCompare(a.date))[0];
-  requireThat(saved?.format==='CherryMacMacroTransaction'&&saved.version===1,'没有可恢复的宏写入记录。');
+  requireThat(saved?.format==='CherryMacMacroTransaction'&&[1,2].includes(saved.version),'没有可恢复的宏写入记录。');
   new MacroWriteAuthorization(saved.before,saved.target,{allowUnbounded:true});return saved;
 }
 

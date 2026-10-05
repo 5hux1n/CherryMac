@@ -5,7 +5,7 @@ import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation
 import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
-import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords} from './product-macros.js?v=0.6.0';
+import {mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords,restoredMacroTransactionProfile} from './product-macros.js?v=0.6.0';
 import {HostTextStore,mergeHostTextDraft,textRecordPlan} from './product-text.js?v=0.6.0';
 import {saveLog,listLogs} from './logs.js?v=0.6.0';
 import {runPageOperation} from './page-operation.js?v=0.6.0';
@@ -367,7 +367,7 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
   let after;
   if(wanted.kind==='macro'){macroAbort=new AbortController();render();}
   try{const options={signal:macroAbort?.signal,gate,backup:async snapshot=>{await saveBackup(snapshot);status('写入前备份已保存。');},progress:message=>status(message+'…')};
-    if(wanted.kind==='macro'){await rememberMacroTransaction(wanted.before,wanted.wanted);after=await applyMacroWithStop(hid,wanted.wanted,wanted.before,options);}
+    if(wanted.kind==='macro'){await rememberMacroTransaction(wanted.before,wanted.wanted,baselineLightingMapping);after=await applyMacroWithStop(hid,wanted.wanted,wanted.before,options);}
     else after=await applyConfiguration(hid,wanted.wanted,wanted.before,options);}
   catch(error){baseline=null;if(macroAbort?.signal.aborted)throw new Error('宏操作已停止发送。请重新读取，或使用配置页的宏恢复入口；保存的原配置与目标记录仍在本机。');throw error;}
   finally{macroAbort=null;}
@@ -377,7 +377,7 @@ $('confirm-write').onclick=e=>{let wanted;try{gate.acknowledge(e);wanted=pending
 });};
 $('recover-macro').onclick=e=>{if(busy||!macroProduct)return;try{gate.acknowledge(e);}catch(error){status(error.message,true);return;}void operation(async()=>{
   const previous=clone(profile),saved=await lastMacroTransaction();macroAbort=new AbortController();render();
-  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=await recalledMacroProfile(after,baselineLightingMapping)??safeProfile(after);try{profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);}catch(error){throw new Error(`键盘宏已恢复且读回一致，但草稿合并失败：${error.message}。原编辑区保留，尚未写入。`);}refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
+  try{const after=await recoverMacroWithStop(hid,saved.before,saved.target,{signal:macroAbort.signal,gate,backup:saveBackup,progress:message=>status(message+'…')});baseline=clone(after);const restored=restoredMacroTransactionProfile(saved,after,baselineLightingMapping)??await recalledMacroProfile(after,baselineLightingMapping)??safeProfile(after);if(baselineLightingMapping){restored.lightingMapping=clone(baselineLightingMapping);restored.macroStorageLayout??='officialBindings';}try{profile=mergeMacroRecoveryDraft(restored,previous,saved.before,saved.target);}catch(error){throw new Error(`键盘宏已恢复且读回一致，但草稿合并失败：${error.message}。原编辑区保留，尚未写入。`);}refreshMacros();loadMacro();loadPlayback();syncLights();status('已恢复最近宏写入前配置，完整读回一致；普通键与灯效草稿保留。');}
   catch(error){baseline=null;if(macroAbort.signal.aborted)throw new Error('宏恢复已停止发送。恢复记录仍保留，重连后可再次恢复。');throw error;}
   finally{macroAbort=null;}
 });};

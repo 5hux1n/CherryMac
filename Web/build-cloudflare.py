@@ -51,7 +51,7 @@ commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=Tr
 manifest = {'format': 'CherryMacOnlineRelease', 'version': version, 'sourceCommit': commit,
             'hardwareAcceptance': 'pending',
             'features': {'macroProduct': True, 'officialMacroStorage': True,
-                         'macroDraftIdentityStorage': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'textProduct': True,
+                         'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'textProduct': True,
                          'lightingWrite': False, 'defaultResetWrite': False},
             'files': {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in sorted(out.rglob('*')) if p.is_file()}}

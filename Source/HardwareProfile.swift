@@ -356,6 +356,15 @@ struct MacroMetadataRecord:Codable {
     let version:Int
     let profile:HardwareProfile
     let receipt:OfficialMacroDraftReceipt?
+    static func capture(snapshot:HardwareSnapshot,mapping:LightingMappingContext?,known:HardwareProfile?=nil)->Self? {
+        if let known,let record=try? prepare(known,snapshot:snapshot){return record}
+        guard var decoded=try? HardwareProfile.fromHardware(snapshot) else{return nil}
+        decoded.lightingMapping=mapping
+        // Select a representation only when it reconstructs the exact bank.
+        if mapping != nil{decoded.macroStorageLayout = .officialBindings;if let record=try? prepare(decoded,snapshot:snapshot){return record}}
+        decoded.macroStorageLayout = .sharedLibrary
+        return try? prepare(decoded,snapshot:snapshot)
+    }
     static func prepare(_ draft:HardwareProfile,snapshot:HardwareSnapshot,before:HardwareSnapshot?=nil)throws->Self {
         var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;try saved.validate()
         let resolved=try saved.resolvedMacros()

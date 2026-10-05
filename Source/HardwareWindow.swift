@@ -882,13 +882,18 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         suspendHostTextForConfiguration()
         guard !busy,let owner=window else{return}
         let authorization:MacroWriteAuthorization
+        var beforeMetadata:MacroMetadataRecord?
         do{
             guard let path=UserDefaults.standard.string(forKey:"hardware.lastMacroOperation") else{throw HardwareError(message:"没有可恢复的宏写入记录。")}
             let data=try Data(contentsOf:URL(fileURLWithPath:path))
             guard data.count<=20_000_000,let saved=try JSONSerialization.jsonObject(with:data) as? [String:Any],saved["format"] as? String=="CherryMacHardwareOperation",saved["version"] as? Int==1,saved["kind"] as? String=="product-macro-write",
                 let beforeText=saved["before"] as? String,let targetText=saved["target"] as? String,let beforeData=Data(base64Encoded:beforeText),let targetData=Data(base64Encoded:targetText) else{throw HardwareError(message:"宏写入记录不完整，未恢复。")}
             authorization=try MacroWriteAuthorization(baseline:HardwareProfile.decode(beforeData).snapshot,target:HardwareProfile.decode(targetData).snapshot,allowUnbounded:true)
+            if let encoded=saved["beforeMacroMetadata"] as? String,encoded.utf8.count<=9_400_000,let bytes=Data(base64Encoded:encoded),bytes.count<=7_000_000 {
+                beforeMetadata=try? JSONDecoder().decode(MacroMetadataRecord.self,from:bytes)
+            }
         }catch{message.stringValue=error.localizedDescription;return}
+        let beforeMetadataForRestore=beforeMetadata
         let panel=NSAlert();panel.messageText="恢复最近宏写入前配置";panel.informativeText="请保持 USB 有线连接并松开全部按键。只恢复保存记录里的宏库和宏绑定；读取到其他配置变化会停止恢复。";panel.addButton(withTitle:"全部已松开，恢复");panel.addButton(withTitle:"取消")
         panel.beginSheetModal(for:owner){[weak self] response in
             guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
@@ -907,7 +912,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     switch result{
                     case .success(let snapshot):
                         self.baseline=snapshot;self.baselineWasRead=true
-                        let restored=self.recalledMacroProfile(snapshot,mapping:self.baselineLightingMapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                        let cached=beforeMetadataForRestore.flatMap{try? $0.restore(snapshot:snapshot,mapping:self.baselineLightingMapping)} ?? self.recalledMacroProfile(snapshot,mapping:self.baselineLightingMapping)
+                        var restored=cached ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                        restored.lightingMapping=self.baselineLightingMapping
+                        if self.baselineLightingMapping != nil,restored.macroStorageLayout==nil{restored.macroStorageLayout = .officialBindings}
                         do{
                             self.profile=try HardwareProfile.mergeMacroRecovery(restored:restored,previous:previousDraft,before:authorization.before,target:authorization.expected)
                             self.message.stringValue="宏原配置已恢复，完整读回一致；其他草稿保留。"
@@ -937,7 +945,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             // Freeze the review scope; a changed draft/baseline requires a new review.
             do{guard try self.macroWriteTarget()==target,self.baseline==baseline else{throw HardwareError(message:"确认期间编辑区或键盘基线变化，请重新核对。")}}catch{self.message.stringValue=error.localizedDescription;return}
             let operationLog:HardwareOperationLog
-            do{operationLog=try HardwareOperationLog(kind:"product-macro-write")}catch{self.message.stringValue=error.localizedDescription;return}
+            do{
+                operationLog=try HardwareOperationLog(kind:"product-macro-write")
+                let known=self.recalledMacroProfile(baseline,mapping:self.baselineLightingMapping)
+                if let metadata=MacroMetadataRecord.capture(snapshot:baseline,mapping:self.baselineLightingMapping,known:known){
+                    let data=try JSONEncoder().encode(metadata)
+                    guard data.count<=7_000_000 else{throw HardwareError(message:"写入前宏资料超过保存范围，未开始写入。")}
+                    operationLog.record("beforeMacroMetadata",data.base64EncodedString());try operationLog.requireStorageHealthy()
+                }
+            }catch{self.message.stringValue=error.localizedDescription;return}
             self.currentMacroOperation=operationLog;self.busy=true;self.controls.forEach{$0.isEnabled=false};self.update();self.message.stringValue="正在备份并写入宏与键位；请勿按键或拔线。"
             self.queue.async{[weak self] in
                 let result=Result<HardwareSnapshot,Error>{
