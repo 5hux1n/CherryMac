@@ -465,6 +465,14 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
         0x4FF693: "e878affdff", 0x4FF6B5: "e826aafdff",
         0x47C747: "e8448d0000", 0x47C753: "8b82a0040000",
         0x47C788: "e8b39d0c00",
+        0x500819: "e8c2a5f7ff", 0x500831: "83f819",
+        0x500836: "c685f1feffff00", 0x50084B: "81c1e4250000",
+        0x500851: "e89a1cf2ff", 0x500856: "8a10",
+        0x500858: "8895f1feffff", 0x422504: "8d0488",
+        0x4FA7B8: "68a8dd7600", 0x4FA7D1: "68b0dd7600",
+        0x4FA7F8: "e873c20400", 0x4FA810: "81c1e4250000",
+        0x4FA816: "e83583f8ff",
+
 
     }
     for address, encoded in checks.items():
@@ -500,7 +508,27 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
                               "model01CEOffset": "profile index shifted left 9 (multiplied by 512)",
                               "sendMethod": "0x4da610", "finalMethod": "0x4da0e0",
                               "limits": "Entry and final write branch only; complete action conversion and sender internals are not reclassified here."}
+    result["defaultLightingConversion"] = {"getter": "0x47ade0", "modeTableMember": "0x25e4",
+                                           "indexLimit": 25, "outOfRangeFallbackIndex": 0,
+                                           "entryStride": 4, "output": "low byte of selected table entry",
+                                           "source": "DefaultLightName model row value entries",
+                                           "limits": "Index conversion is distinct from mode visibility and actual visual behavior; no device writing or physical acceptance."}
     if defaults_dir is not None:
+        light_path = Path(defaults_dir) / "default_light.json"
+        light_data = light_path.read_bytes()
+        if len(light_data) > 16 * 1024 * 1024:
+            raise ValueError("Default lighting resource exceeds analysis bound")
+        light_root = json.loads(light_data.decode("utf-8-sig"))
+        light_rows = light_root.get("DefaultLightName") if isinstance(light_root, dict) else None
+        if not isinstance(light_rows, list) or len(light_rows) <= 47:
+            raise ValueError("Default lighting resource lacks model47")
+        modes = light_rows[47]
+        if not isinstance(modes, list) or len(modes) != 25 or any(
+                not isinstance(m, dict) or type(m.get("value")) is not int or not 0 <= m["value"] <= 255
+                or type(m.get("visible")) is not bool for m in modes):
+            raise ValueError("Unexpected model47 default lighting mode rows")
+        result["defaultLightingConversion"]["resourceSHA256"] = hashlib.sha256(light_data).hexdigest()
+        result["defaultLightingConversion"]["modeCodes"] = [m["value"] for m in modes]
         rows = []
         for index in range(5):
             path = Path(defaults_dir) / f"DefaultData{index}.json"
@@ -518,11 +546,15 @@ def inspect_default_configuration_path(pe, defaults_dir=None):
             keys = row.get("KeyList")
             if not isinstance(keys, list) or len(keys) != 126:
                 raise ValueError("Unexpected default key count")
+            selected = row.get("LightInfo", {}).get("SelectItem")
+            if type(selected) is not int or not 0 <= selected < len(modes):
+                raise ValueError("Invalid default lighting index")
             canonical = json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
             rows.append({"file": path.name, "fileSHA256": hashlib.sha256(data).hexdigest(),
                          "modelArrayIndex": position, "modelRowSHA256": hashlib.sha256(canonical).hexdigest(),
                          "keyCount": len(keys), "templateIdentity": row.get("DeviceBasicInfo"),
-                         "lightingModeIndex": row.get("LightInfo", {}).get("SelectItem")})
+                         "lightingModeIndex": selected, "mappedModeCode": modes[selected]["value"],
+                         "mappedModeVisible": modes[selected]["visible"]})
         result["defaultFiles"] = {"rows": rows, "sameModelRowAcrossFiveFiles": len({r["modelRowSHA256"] for r in rows}) == 1,
                                   "limits": "Read-only template identity and content comparison, not physical USB identity, firmware defaults or permission to restore unsupported lighting modes."}
     return result
@@ -1019,7 +1051,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 17,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 18,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
