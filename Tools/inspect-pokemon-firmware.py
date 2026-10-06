@@ -429,6 +429,86 @@ def inspect_parameter_consumers(image):
         'limits':'Actual fixed consumers only. State-byte report routing, exact user-facing lock/mode meaning, JSON WinFlag/WFlag/Key6Flag correspondence, polling-rate indices and persistence remain unproved. No product field mapping, execution, hardware access or added authorization.'}
 
 
+
+def inspect_macro_block_saving(image):
+    """Read all 48 named macro save blocks in the pinned official image."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Macro-save address exceeds image bounds")
+        return image[offset:offset + size]
+
+    def literal_load(address, register):
+        instruction = struct.unpack('<H',at(address,2))[0]
+        if instruction & 0xF800 != 0x4800 or (instruction >> 8) & 7 != register:
+            raise ValueError("Macro-save literal load differs")
+        literal = ((address + 4) & ~3) + (instruction & 255) * 4
+        return struct.unpack('<I',at(literal,4))[0]
+
+    bodies = {
+        (0x2DEE8,0x2E1D0):'8d63e3f96b4b8ac4aa49cab9d9a5e63dc4cfe1b0270376383e00903afe8a0e72',
+        (0x2E340,0x2E584):'7f029f5368c429f336507b7cb9b71c7b2d1a5e5edba62bc6f41c65e2c9e6310d',
+        (0x2E648,0x2E89C):'585125dfdf044e99bedf78d560224e1e89c15f4d796e8d88b60359e15fcf7b1e',
+        (0x2E958,0x2E9B8):'46e3702dd86bf3ea35fad2221cafc30d9bc52c625a728acf4669b207388441ab',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Macro-save code range differs")
+    # compare entry, differing-block branch, backend BL, source-pointer load.
+    locations = [
+        (0x2deea,0x2e370,0x2e388,0x2e37e),(0x2defc,0x2e998,0x2e9b0,0x2e9a6),(0x2df0c,0x2e978,0x2e990,0x2e986),
+        (0x2df1c,0x2e958,0x2e970,0x2e966),(0x2df2c,0x2e87e,0x2e896,0x2e88c),(0x2df3c,0x2e85e,0x2e876,0x2e86c),
+        (0x2df4c,0x2e83e,0x2e856,0x2e84c),(0x2df5c,0x2e81e,0x2e836,0x2e82c),(0x2df6c,0x2e7fe,0x2e816,0x2e80c),
+        (0x2df7c,0x2e7e4,0x2e7f6,0x2e7ee),(0x2df8c,0x2e7ca,0x2e7dc,0x2e7d4),(0x2df9c,0x2e7b0,0x2e7c2,0x2e7ba),
+        (0x2dfac,0x2e798,0x2e7aa,0x2e7a2),(0x2dfbc,0x2e780,0x2e792,0x2e78a),(0x2dfcc,0x2e768,0x2e77a,0x2e772),
+        (0x2dfdc,0x2e750,0x2e762,0x2e75a),(0x2dfec,0x2e738,0x2e74a,0x2e742),(0x2dffc,0x2e720,0x2e732,0x2e72a),
+        (0x2e00c,0x2e708,0x2e71a,0x2e712),(0x2e01c,0x2e6f0,0x2e702,0x2e6fa),(0x2e02c,0x2e6d8,0x2e6ea,0x2e6e2),
+        (0x2e03c,0x2e6c0,0x2e6d2,0x2e6ca),(0x2e04c,0x2e6a8,0x2e6ba,0x2e6b2),(0x2e05c,0x2e690,0x2e6a2,0x2e69a),
+        (0x2e06c,0x2e678,0x2e68a,0x2e682),(0x2e07c,0x2e660,0x2e672,0x2e66a),(0x2e08c,0x2e648,0x2e65a,0x2e652),
+        (0x2e09c,0x2e56e,0x2e580,0x2e578),(0x2e0ac,0x2e556,0x2e568,0x2e560),(0x2e0bc,0x2e53e,0x2e550,0x2e548),
+        (0x2e0cc,0x2e526,0x2e538,0x2e530),(0x2e0dc,0x2e50e,0x2e520,0x2e518),(0x2e0ec,0x2e4f6,0x2e508,0x2e500),
+        (0x2e0fc,0x2e4de,0x2e4f0,0x2e4e8),(0x2e10c,0x2e4c6,0x2e4d8,0x2e4d0),(0x2e11c,0x2e4ae,0x2e4c0,0x2e4b8),
+        (0x2e12c,0x2e496,0x2e4a8,0x2e4a0),(0x2e13c,0x2e47e,0x2e490,0x2e488),(0x2e14c,0x2e466,0x2e478,0x2e470),
+        (0x2e15c,0x2e44e,0x2e460,0x2e458),(0x2e16c,0x2e436,0x2e448,0x2e440),(0x2e17c,0x2e41e,0x2e430,0x2e428),
+        (0x2e18c,0x2e406,0x2e418,0x2e410),(0x2e19c,0x2e3ee,0x2e400,0x2e3f8),(0x2e1ac,0x2e3d6,0x2e3e8,0x2e3e0),
+        (0x2e1bc,0x2e3be,0x2e3d0,0x2e3c8),(0x2e340,0x2e3a6,0x2e3b8,0x2e3b0),(0x2e34e,0x2e38e,0x2e3a0,0x2e398),
+    ]
+    rows = []
+    for index,(compare,save,call,source_load) in enumerate(locations):
+        current, shadow = 0x200054EC + index*64, 0x2000632C + index*64
+        if literal_load(compare,1) != current or literal_load(compare+2,0) != shadow:
+            raise ValueError("Macro compare RAM pair differs")
+        name_address = literal_load(save,5)
+        name = f'flash/macro_data_{index+1}'
+        if at(name_address,len(name)+1) != name.encode('ascii') + b'\0':
+            raise ValueError("Macro-save storage name differs")
+        if literal_load(source_load,1) != current:
+            raise ValueError("Macro-save source differs")
+        first,second = struct.unpack('<HH',at(call,4))
+        if first & 0xF800 != 0xF000 or second & 0xD000 != 0xD000:
+            raise ValueError("Macro-save BL differs")
+        sign = (first >> 10) & 1
+        displacement = (sign << 24) | ((1 ^ ((second >> 13) & 1) ^ sign) << 23) | ((1 ^ ((second >> 11) & 1) ^ sign) << 22) | ((first & 0x3FF) << 12) | ((second & 0x7FF) << 1)
+        if sign:
+            displacement -= 1 << 25
+        if call + 4 + displacement != 0x33924:
+            raise ValueError("Macro-save backend target differs")
+        tail_first,tail_second = struct.unpack('<HH',at(call+4,4))
+        short_branch = tail_first & 0xF800 == 0xE000
+        wide_branch = tail_first & 0xF800 == 0xF000 and tail_second & 0xD000 == 0x9000
+        if not (short_branch or wide_branch):
+            raise ValueError("Macro-save unchecked continuation differs")
+        rows.append({'block':index+1,'compareEntry':hex(compare),'saveEntry':hex(save),
+                     'backendCall':hex(call),'name':name,'sourceRAM':hex(current),'shadowRAM':hex(shadow),'length':64})
+    if literal_load(0x2E35A,1) != 0x200054EC or literal_load(0x2E35C,0) != 0x2000632C or literal_load(0x2E366,3) != 0x20009B26:
+        raise ValueError("Macro-save final shadow/flag pointers differ")
+    return {'entry':'0x2dee8','blockCount':48,'blockSize':64,'rows':rows,
+            'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+            'returnHandling':'Every named backend BL is followed immediately by an unconditional branch; these 48 paths do not inspect r0',
+            'finalization':'0x2e35a..0x2e36e copies 3072 bytes from current RAM to shadow, clears the macro-save flag and returns',
+            'limits':'Fixed helper and named paths only. This does not establish whether another layer suppresses backend failures, how all failure contexts recover, installed firmware identity or power-off retention. 48 blocks are not 48 macros. Host transfer remains 3071 bytes; no hardware access or new write authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -513,7 +593,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 9,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 10,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -531,6 +611,7 @@ def inspect(path):
             'flashCompletion': inspect_flash_completion(image),
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
+            'macroBlockSaving': inspect_macro_block_saving(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
