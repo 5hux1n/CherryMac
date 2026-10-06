@@ -324,6 +324,51 @@ def inspect_flash_completion(image):
         'limits':'Fixed static completion path only. Low-level event producers, all scheduling and error paths, USB acknowledgement coupling, installed firmware identity and physical persistence remain unproved. No execution, hardware access, upgrade or new write authorization.'}
 
 
+
+def inspect_report_reply_cache(image):
+    """Verify the dispatch and cached reply branches in the fixed target image."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Reply-cache address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x26778,0x267F0):'1d5c44ce373c372513e8d3ed6cdb2207e7cbebb96ffe79c03a33cda168ec257c',
+        (0x27718,0x27784):'3cb0db4498523726d863e17e6e8867cc6e870fc26c8e007390d1d35432bbe143',
+        (0x2F250,0x2F28A):'a165bb2be7023662178def9154583695885f8a66990d594ee88a665c46a6b721',
+        (0x2F28A,0x2F2A6):'457f551ea07b082959a7f52adcf1e73666554684c4e7d70134704dbe341fd841',
+        (0x2F412,0x2F43E):'81aae7dc11c9a7bf091abd9160466dc76f1fe04128ded8815db69148c2005c05',
+        (0x2F45C,0x2F496):'988548b0111045f8201567b8c7ce4bb815b0320fca1000f093c646440af16841',
+        (0x2F4B4,0x2F4F4):'186b4a8aa6c9bef4c4a561e332322963492e3e01df3b4d55a222325df83d4bca',
+        (0x2F350,0x2F372):'ee227eef51f13d72575bc29b862d4a4fa00ba7b33a395c2adcf1a34d90ce226d',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Reply-cache code body differs")
+    literals = {0x276F0:0x27719,0x27804:0x200060EC,
+                0x2F2C8:0x2000716C,0x2F2CC:0x200060EC,
+                0x2F2E8:0x20009B22,0x2F5E8:0x20009B22,
+                0x2F5EC:0x20007174,0x2F5F0:0x200060F4}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Reply-cache literal differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'entryCandidates':{'controlStyleSet':'0x26778','reportCallback':'0x27718',
+                           'reportCallbackThumbPointer':'0x276f0',
+                           'limits':'Named call paths in the image; complete transport registration, USB stack scheduling and live routing are not established'},
+        'reportCallbackBranches':{
+            'nonzeroThirdArgument':'For report ID 4, ordinary commands excluding 0x23 and 0x24 tail-call 0x2f094',
+            'zeroThirdArgument':'Load destination from the first structure word and count from its byte4; copy bytes from 0x200060ec through 0x3a084 and return, without a flash-completion wait in this branch'},
+        'dispatcherCaches':{'initialReportCopyRAM':['0x2000716c','0x200060ec'],
+                            'payloadCopyRAM':['0x20007174','0x200060f4'],
+                            'payloadCopyFlagRAM':'0x20009b22',
+                            'behavior':'The dispatcher first copies the incoming 64-byte report into both caches. Its shared tail may copy payload into the cache payloads, emit an event in state 2, or return'},
+        'configurationWrites':'Named keymap/color/macro update branches copy payload to configuration RAM, set flags and branch to 0x2f28a. No direct named storage-save helper or completion wait occurs in those fixed branches or the inspected common reply tail',
+        'limits':'Shows cached replies and RAM/flag updates in these fixed branches, not a whole-program proof that no other context saves concurrently or waits before transmission. Transport registration, checksum rules, all parameter side effects and live firmware identity remain unproved. Cached success and RAM readback do not establish power-off retention. No hardware access or added write authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -408,7 +453,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 7,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 8,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -424,6 +469,7 @@ def inspect(path):
             'concreteStorageBackend': inspect_concrete_backend(image),
             'flashBinding': inspect_flash_binding(image),
             'flashCompletion': inspect_flash_completion(image),
+            'reportReplyCache': inspect_report_reply_cache(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
