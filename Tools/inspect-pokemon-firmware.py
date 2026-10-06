@@ -717,6 +717,55 @@ def inspect_factory_event_identity_branches(image):
         'limits':'Proves distinct secondary calls, not their complete pairing/identity semantics. The downstream implementation, all event listeners and ordering, protocol enum values, installed firmware and Windows button correspondence still need classification. Mode2/3 candidates are not configuration-only reset requests; no commands generated or sent.'}
 
 
+
+def inspect_factory_related_storage(image):
+    """Pin the secondary path to Bluetooth-named records, without applying it."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Factory-related storage address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x3c2e0,0x3c32e):'2d1744e6e818a3d352c30ae8a51c16cec6144c3a47a75306032d8c77921aa668',
+        (0x43de8,0x43e26):'b58bdf68d6f7df33a5dd82c5196a4af11f9cbfdd05871e7a7f436ae87a9cd962',
+        (0x3ac44,0x3acb4):'6adcb0152eb31031bea7892bb9e975dc0cc4312fef875749be22faf8a195878b',
+        (0x3acb8,0x3acc2):'6c43fac5cc6de306969c9929106578b8bd194364f2c4ae2129855d984f2d1bad',
+        (0x43fcc,0x44016):'77b478545a4b002403d9cddc4bd93b2ce56f2e35b02fd3f30dd51ea02d1a3f0f',
+        (0x41814,0x41878):'3592a4b18037932a1c0b6e3f04f71aa8157f9e7f46b3a609f1d1b633bae672c9',
+        (0x339f0,0x339f8):'2407cd74eb344ac5715845f86566ebda8b7a4ba36e224ae88e1c65dd6230c040',
+        (0x3a864,0x3a8be):'df12ce2d3ee2db7af1001ad446d9c8330a7967e9b64f6c8d4009abbd23f98385',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Factory-related storage code differs")
+    literals = {0x3C330:0x3ACB9,0x3CA6C:0x3ACB9,0x44018:0x501E0,
+                0x4187C:0x4FFC0,0x3A8C0:0x4FC58,0x3A8C4:0x4FC7C}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Factory-related storage literal differs")
+    for address, name in [(0x501E0,b'keys\0'),(0x4FFC0,b'ccc\0'),
+                          (0x4FC58,b'bt/%s/%02x%02x%02x%02x%02x%02x%u/%s\0'),
+                          (0x4FC7C,b'bt/%s/%02x%02x%02x%02x%02x%02x%u\0')]:
+        if at(address,len(name)) != name:
+            raise ValueError("Factory-related storage format differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'selectedRecordPath':{'entry':'0x3c2e0',
+                              'behavior':'When the supplied seven-byte value is null or all-zero, iterate matching records through 0x43de8 with callback 0x3acb9'},
+        'iterator':{'entry':'0x43de8','rowStride':132,'declaredTableBytes':660,
+                    'behavior':'Skip rows with an empty marker; match the selected byte preceding the seven-byte row value, copy that value and invoke the callback'},
+        'recordCallback':{'entry':'0x3acb8','target':'0x3ac44',
+                          'downstream':['0x43f7c','0x43fcc','0x41814'],
+                          'limits':'Includes connection/state and conditional record paths; not every branch is fully classified'},
+        'keyRecordPath':{'entry':'0x43fcc','namespace':'bt/keys',
+                         'behavior':'Construct a Bluetooth-address-based name through 0x3a864, call 0x339f0, then clear 132 bytes of the RAM record'},
+        'cccRecordPath':{'entry':'0x41814','namespace':'bt/ccc',
+                         'behavior':'Construct another address-based name and call 0x339f0; other setup and cleanup calls remain to be classified'},
+        'zeroLengthOperation':{'entry':'0x339f0','target':'0x33924','payloadPointer':0,'length':0},
+        'limits':'Proves Bluetooth-named record operations and RAM clearing, not complete pairing removal, zero-length backend tombstone semantics, all connection effects or live persistence. This is outside normal key/color/macro configuration restoration. Candidate commands remain unimplemented and unsent; no hardware access.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -801,7 +850,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 15,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 16,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -825,6 +874,7 @@ def inspect(path):
             'schedulerClock': inspect_scheduler_clock(image),
             'factoryEventPath': inspect_factory_event_path(image),
             'factoryEventIdentityBranches': inspect_factory_event_identity_branches(image),
+            'factoryRelatedStorage': inspect_factory_related_storage(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
