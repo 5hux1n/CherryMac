@@ -2475,6 +2475,41 @@ def inspect_macro_ui(pe, skin):
             "limits": "Static selected resource and one recorder branch; not proof against all indirect/hidden paths or firmware wheel capability"}
 
 
+def inspect_light_parameter_settings_sources(pe):
+    """Pin selected LightInfo sources separately from the seven SystemStages words."""
+    bodies = {
+        (0x47AF6B,0x47AF82):'1ac74cec036edad737c0bcbe1753c2482fa5a462be82b18841711b3f6e01e6a5',
+        (0x47B1C1,0x47B1D8):'0033f5a046b9e8c39504c70d0b67931305ee1c24f205fae3b614142b53d549fe',
+        (0x500AA0,0x500AAC):'a8a4512d4c1115eaa7d098471938ab6f45771b5b4ae42ecae35d17376f7b3258',
+        (0x500A1C,0x500A28):'db671c9b938964b1e7065faa39e228910048a0761dd4845672c8e5d278e72691',
+        (0x500806,0x50081E):'2acc0d8c4cb8940f6fec358658fbd8eb7f9c59337219f685f6343fea90ed6329',
+        (0x47B2E5,0x47B2F5):'4f4cf36092c4c6e0338b8123360a6cef87fe52ec8aa11208e990e16324b9728d',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("LightInfo parameter source body differs")
+    fields = [
+        ('Setlock',0x745748,0x47AF6B,0x47AF7F,12,22,0x500AA0),
+        ('AudioIndex',0x7458E8,0x47B1C1,0x47B1D5,38,39,0x500A1C),
+    ]
+    rows = []
+    for name, string, push, store, field_offset, parameter_offset, copy in fields:
+        if pe.at(string,len(name)+1) != name.encode('ascii') + b'\0':
+            raise ValueError("LightInfo source field string differs")
+        if pe.at(push,5) != b'\x68' + struct.pack('<I',string):
+            raise ValueError("LightInfo source field lookup differs")
+        if pe.at(store,3) != bytes([0x88,0x45,(-0x40+field_offset)&0xFF]):
+            raise ValueError("LightInfo source field store differs")
+        rows.append({'jsonObject':'LightInfo','field':name,'getterFieldOffset':field_offset,
+                     'getterStore':hex(store),'parameterBufferOffset':parameter_offset,'copyEntry':hex(copy)})
+    return {
+        'getter':'0x47ade0','getterOutputBytes':47,'callerOutputStackOffset':-180,
+        'parameterBufferStackOffset':-272,'fieldMappings':rows,
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'targetSendCaveat':'The previously pinned PID 0x01ce fallback merges offsets 0..8,21,24 into read parameters. These two constructed offsets 22 and 39 are outside that set; construction alone does not prove target writes',
+        'limits':'Selected common buffer sources only. This does not map SystemStages.WinFlag/WFlag, prove target field meanings or infer current hardware behavior from cross-model names. No execution or hardware access.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2596,12 +2631,13 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 52,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 53,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
+        "lightParameterSettingsSources": inspect_light_parameter_settings_sources(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
