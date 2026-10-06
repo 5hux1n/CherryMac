@@ -2510,6 +2510,42 @@ def inspect_light_parameter_settings_sources(pe):
         'limits':'Selected common buffer sources only. This does not map SystemStages.WinFlag/WFlag, prove target field meanings or infer current hardware behavior from cross-model names. No execution or hardware access.'}
 
 
+def inspect_factory_command_methods(pe):
+    """Separate target model command methods from the normal default-button path."""
+    bodies = {
+        (0x4ddb70,0x4ddc38):'067a57b9ebdede90437c15e69163a9970dcb5b83306eed4854041251a534ec45',
+        (0x4fef30,0x4fef50):'aca7a485944631319e418afc1479b773e1718cfb0cc151f1c4ccf874f1755c9e',
+        (0x4dee60,0x4df090):'baafc7a183af412effa6b4913751ca63faa372539a531980746d228cbbfe90bb',
+        (0x512f90,0x512fe4):'c9f9b239bebff7a495b67efc8b46f00edc3029af7036f15b32f581eaec4457ca',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Factory-command method body differs")
+    if pe.pointer(0x77F604+0x2AC) != 0x4FEF30 or pe.pointer(0x77F604+0x31C) != 0x512F90:
+        raise ValueError("Target factory-command virtual pointer differs")
+    checks = {0x4DDB9F:'c64415bc04',0x4DDBAC:'c6440dbc0d',
+              0x4DEEA0:'0fb74844',0x4DEEA4:'83f901',0x4DEEA7:'750f',
+              0x4DEEB1:'c64405bca1',0x4DEEC0:'c64415bc21'}
+    for address, encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw)) != raw:
+            raise ValueError("Factory-command report/selector bytes differ")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'instructionChecks':len(checks),
+        'dedicatedMethod':{'virtualOffset':'0x2ac','entry':'0x4fef30','receiverMember':'0xa38',
+                           'reportBuilder':'0x4ddb70','reportID':4,'command':13,
+                           'transportCall':'0x4ddc08 -> 0x4d9d90','reportBytes':64,
+                           'returnCaveat':'Wrapper returns 1 regardless of the transport return value'},
+        'stateSelectedMethod':{'virtualOffset':'0x31c','entry':'0x512f90','receiverMember':'0xa38',
+                               'reportBuilder':'0x4dee60','selectorOffset':'0x44',
+                               'commandBySelector':{'1':'0xa1','other':'0x21'},
+                               'transportCall':'0x4df003 -> 0x4d9380',
+                               'argument2':'First calls 0x4df090, then 0x4dee60; other shown argument branches call 0x4dee60'},
+        'normalDefaultCaveat':'The separately pinned default button calls offsets 0x290,0x2a4,0x2bc; it does not directly call this dedicated offset0x2ac method',
+        'limits':'Declared model vtable and named methods only. Full user-visible triggers, transport-selector state, all callers, current firmware equivalence and reset persistence remain unproved. Do not substitute these methods for normal Windows default behavior; no hardware execution or new send authorization.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2631,13 +2667,14 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 53,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 54,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
         "profileVirtualTargets": {"0x4": "0x47cac0", "0x8": "0x47c9a0"},
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "lightParameterSettingsSources": inspect_light_parameter_settings_sources(pe),
+        "factoryCommandMethods": inspect_factory_command_methods(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
