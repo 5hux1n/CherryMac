@@ -2035,6 +2035,9 @@ def inspect_cached_device_status(pe):
         0x4FC6C7: (0x4FC75B, "ee5aee0e941081cfdd8c20c9214d5c07c9a53b4e6300ee8ec1d2e2b52cde01a8"),
         0x4FC502: (0x4FC522, "5d68894d71edbf10c739868fdbf7bc1e027251f9bfb9575d01b8d348956b0f52"),
         0x4FC5C1: (0x4FC5F0, "3fa1051ef3b12e9d107885002f91765175ab24758a65e5475c9ebd755fd5876f"),
+        0x4325C0: (0x4325D4, "fe5466d8a86be5d540a6a432ced562a8a62518a20a674cea6e786e646fabd8b3"),
+        0x4BB3D0: (0x4BB3F0, "f496ad3eaa9fea3e14bf24f82261913c22686e3bd4a5d55f00d1a0e97d09aa9d"),
+        0x4A6048: (0x4A6085, "6c5e97c8f2540683f8246e7e25f295f1a9e70ee6b61d33c218d29db4e7ccbe72"),
     }
     for address, (end, expected) in bodies.items():
         if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
@@ -2047,6 +2050,10 @@ def inspect_cached_device_status(pe):
         0x4DE3A5: "c64405bc04", 0x4DE3B0: "0fb75144", 0x4DE3B4: "83fa01",
         0x4DE3C1: "c6440dbc9d", 0x4DE3D0: "c64405bc1d", 0x4DE54A: "e831aeffff",
         0x4DE5E0: "e83b871a00",
+        0x4325CA: "8b8070080000", 0x4BB3DF: "694d082c030000",
+        0x4A6055: "e866c5f8ff", 0x4A605A: "05380a0000",
+        0x4A6061: "e8ca880300", 0x4A6066: "0fb7700a",
+        0x4A6077: "81c128150000", 0x4A607D: "e84e530100", 0x4A6082: "897004",
     }
     for address, encoded in checks.items():
         raw = bytes.fromhex(encoded)
@@ -2062,6 +2069,11 @@ def inspect_cached_device_status(pe):
             "namedReadRequest": "Report byte 0 is 4; command byte 3 is 0x9d when receiver word+0x44 equals 1, otherwise 0x1d. Exchanges via 0x4d9380 and copies returned payload starting at byte 8",
             "readSuccessCache": "0x4fc5c1 writes status word at byte 10 to 2 before caching at 0x4fc5eb",
             "readFailureCache": "0x4fc6c7 builds a 56-byte host record: magic 0x55aa, zero word at byte 2, metadata VID/PID at 4/6, words 1 at 8/10/12, 42 zero bytes at 14; caches at 0x4fc756",
+            "namedConsumer": {"site":"0x4a6048..0x4a6085",
+                              "source":"0x4325c0 returns wrapper+0x870 device pointer; cache getter receiver is device+0xa38",
+                              "value":"Cached record word at byte 10",
+                              "destination":"Host vector+0x1528; getter 0x4bb3d0 indexes 0x32c-byte rows; stores the value as a dword at row+4",
+                              "limits":"This complete caller fragment transfers cached status to a host row. It does not write a device setting; the wider caller, other row consumers and aliased accesses remain outside this fragment."},
             "limits": "Classifies only the named cache methods and fixed caller fragments. The read method, later cached-record consumers, other branches and firmware semantics are not exhaustively classified. A 56-byte record or AA55 header alone is not a settings write protocol."}
 
 
@@ -2584,7 +2596,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 51,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 52,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
