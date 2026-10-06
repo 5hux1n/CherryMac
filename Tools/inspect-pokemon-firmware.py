@@ -176,7 +176,7 @@ def inspect_save_scheduler(image):
             'saveCallback':{'entry':'0x280ec','thumbPointer':'0x280ed','pointerLiteral':'0x280e8',
                             'orderedCalls':['0x2e9d0','0x2ec50','0x2ea48','0x2ee24','0x2ee64'],
                             'tailCall':'0x4b064; r0=0x20003e20, r1=0x200034c8, r2=50, r3=0',
-                            'limits':'Proves the call sequence and tail-call arguments. Initial registration, scheduler implementation and duration units are not established here; 50 is not claimed as milliseconds'},
+                            'limits':'Proves the call sequence and tail-call arguments; see saveWorkRegistration for fixed initialization and deferred enqueue declarations. Live scheduling and duration units remain unproved; 50 is not claimed as milliseconds'},
             'protocolStateEvent':{'listener':'0x2ef3c','eventType':'mulprotocol_event','typeAddress':'0x52768',
                                   'branch':'0x2f000','eventStateOffset':8,'sharedStateRAM':'0x20009b2b',
                                   'parameterIndex':16,'parameterRAM':'0x20000cd8','saveFlagRAM':'0x20009b28',
@@ -509,6 +509,44 @@ def inspect_macro_block_saving(image):
             'limits':'Fixed helper and named paths only. This does not establish whether another layer suppresses backend failures, how all failure contexts recover, installed firmware identity or power-off retention. 48 blocks are not 48 macros. Host transfer remains 3071 bytes; no hardware access or new write authorization.'}
 
 
+
+def inspect_save_work_registration(image):
+    """Pin initialization of the save work object and its deferred enqueue path."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Save-work registration address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x2803C,0x280CA):'6358a630edd52f88ef00eef65abb8ca855ae5f9fe22b31c8f03daba7fc5b70d7',
+        (0x4B064,0x4B10C):'0676a18492b267c6cc7a33ce1d0431a99a6e82b2d4b67ab32ccbd744e6c8160a',
+        (0x4AFE0,0x4B016):'588859040be1422ed51f4cec36caecee55a1c63a9715e9fa34edcd76833bd074',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Save-work registration code differs")
+    literals = {0x280D4:0x20003498,0x280D8:0x200034C8,0x280E0:0x20003E20,
+                0x280E4:0x28021,0x280E8:0x280ED,0x4B10C:0x4AFE1}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Save-work registration literal differs")
+    # Explicit pointer stores: r6 is the save object, r5 the separate input object.
+    if at(0x280A8,4) != bytes.fromhex('0f4b7360') or at(0x28098,6) != bytes.fromhex('114f124b6b60'):
+        raise ValueError("Save/input callback pointer stores differ")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'initializer':'0x2803c',
+        'saveWork':{'ram':'0x200034c8','clearedBytes':48,'callbackFieldOffset':4,
+                    'callbackThumbPointer':'0x280ed','store':'0x280aa',
+                    'initialSubmit':'0x280b4','queueRAM':'0x20003e20','delayLowWord':50,'delayHighWord':0},
+        'separateInputWork':{'ram':'0x20003498','callbackThumbPointer':'0x28021','delayLowWord':10,'delayHighWord':0},
+        'resubmit':'The previously pinned save callback 0x280ec submits the same object to the same queue with the same 50/0 argument pair',
+        'scheduler':'0x4b064 records queue ownership at work+0x28. A nonzero delay calls 0x4b284 on work+0x10 using the declared callback 0x4afe1. The zero-delay branch sets pending bit0 at work+8 and enqueues through 0x4a108 when it was not pending',
+        'deferredEnqueue':'0x4afe0 obtains the queue at timer-node+0x18, sets pending bit0 at timer-node-8 and, when newly pending, enqueues the recovered work at timer-node-0x10 through 0x4a108',
+        'limits':'Fixed registration and named deferred enqueue paths only. Initializer call reachability, queue worker callback dispatch, actual scheduling, duration units, every cancellation/error branch, USB completion and installed firmware identity remain unproved. Do not treat 50 as milliseconds or add guessed host waits. No execution or hardware access.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -593,7 +631,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 10,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 11,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -612,6 +650,7 @@ def inspect(path):
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
+            'saveWorkRegistration': inspect_save_work_registration(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
