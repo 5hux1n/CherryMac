@@ -275,6 +275,55 @@ def inspect_flash_binding(image):
             'limits':'Fixed named area, declared device descriptor and driver table only. Live initialization/readiness, current firmware identity, low-level controller operations and USB-to-persistence completion remain unproved. Area length is not a macro or profile capacity. No hardware access or added authorization.'}
 
 
+
+def inspect_flash_completion(image):
+    """Pin the real completion bodies, without invoking or emulating callbacks."""
+    base = 0x10000
+
+    def at(address, size):
+        offset = address - base
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Flash-completion address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x13D8C,0x13DD6):'0c30901976dd2a5542c7ae401b2d5964bafaec8e52e29b81d04d64689b331920',
+        (0x13DDC,0x13DFC):'7eba6460a60db616989c88e3fa4b7498b225346a6897f231941364e290196abd',
+        (0x13E00,0x13E1C):'f3cde41b17a3dd0fc354ec8bd2e6469f8fbd52eec1321f4c31cab7e9298d47c7',
+        (0x14760,0x147A8):'bc56faf4cfdb62098cd68f0da292201737b3723cd87c3cfd077d8becf7194134',
+        (0x45EA4,0x45EE8):'4e6a1e016e89621df47a9941c38a09d41cb1b8653cc9d09f5c59970971d46e95',
+        (0x4ACF0,0x4AD48):'526c680601e22a16c1358a0a76352583eb46f69ad65fae55584b6c02a41eb856',
+        (0x4AD48,0x4AD98):'7694429a07a1993a4586e4efdbeca9cc9c49e419c0dc5b0c268a4d6c5b13348b',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Flash-completion body differs")
+    literals = {0x13C68:0x13D8D,0x13DD8:0x2000007C,
+                0x13DFC:0x2000007C,0x13E1C:0x2000007C,
+                0x147A8:0x200000A0,0x45DD4:0x45EA5,
+                0x45EE8:0x20008208,0x45EEC:0x2000821C}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Flash-completion literal differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'callbackSlot':'0x2000007c',
+        'submitWrappers':{'write':'0x13e00','erase':'0x13ddc',
+                          'writeBackend':'0x14aac','eraseBackend':'0x14bc8',
+                          'behavior':'Store the supplied callback only after the low-level submit returns zero; reject a null callback or nonzero submit result with -22'},
+        'eventDrain':{'entry':'0x13d8c','declaredThumbPointer':'0x13c68',
+                      'poller':'0x14760','pendingBitmapRAM':'0x200000a0',
+                      'successEvent':2,'failureEvent':3,
+                      'behavior':'Capture the callback at entry, consume pending events, clear the callback slot and invoke the captured callback with 0 for event 2 or 1 for event 3. Poll result 5 exits the drain',
+                      'limits':'Event meanings here are defined by this caller. Producers, caller scheduling and all low-level controller branches are not closed'},
+        'jobCompletion':{'entry':'0x45ea4','jobRAM':'0x20008208',
+                         'completionObjectRAM':'0x2000821c','nextChunk':'0x45d24','give':'0x4acf0','take':'0x4ad48',
+                         'behavior':'Zero callback advances source/offset and reduces remaining length by the processed chunk. Remaining data tail-calls the next submit. A nonzero callback with remaining data also tail-calls the next submit without advancing. When remaining length is zero, clear job state and give completion',
+                         'returnLimits':'The shown callback does not store a backend error into a separate result field. Retry-submit return handling and eventual completion on failure are not fully proved; this is not a host retry recommendation'},
+        'completionPrimitive':'Take decrements an available count and returns zero; zero timeout with no count returns -16; otherwise it delegates to a waiter. Give wakes a waiter with zero or increments the bounded count',
+        'limits':'Fixed static completion path only. Low-level event producers, all scheduling and error paths, USB acknowledgement coupling, installed firmware identity and physical persistence remain unproved. No execution, hardware access, upgrade or new write authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -359,7 +408,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 6,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 7,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -374,6 +423,7 @@ def inspect(path):
             'saveScheduler': inspect_save_scheduler(image),
             'concreteStorageBackend': inspect_concrete_backend(image),
             'flashBinding': inspect_flash_binding(image),
+            'flashCompletion': inspect_flash_completion(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
