@@ -2027,6 +2027,44 @@ def inspect_device_metadata_selector(pe):
             "limits": "Selected copy/setter/getter paths only. The metadata string constructor alone does not establish initial scalar VID/PID. Target registrations are checked separately; caller index selection, later mutation and a live object PID are not observed. Does not prove all producers or alternative setting transports."}
 
 
+def inspect_cached_device_status(pe):
+    """Distinguish a raw status cache from an actual hardware send method."""
+    bodies = {
+        0x4DE900: (0x4DE921, "cde70feda1b2a84eb1321db4f8294718728ab7af259de75b270e7e513c64f91b"),
+        0x4DE930: (0x4DE954, "e0dfb1bf4878e8865af8f3d15b073e65e75ab0317bae6a858181ad8a9ba75c3f"),
+        0x4FC6C7: (0x4FC75B, "ee5aee0e941081cfdd8c20c9214d5c07c9a53b4e6300ee8ec1d2e2b52cde01a8"),
+        0x4FC502: (0x4FC522, "5d68894d71edbf10c739868fdbf7bc1e027251f9bfb9575d01b8d348956b0f52"),
+        0x4FC5C1: (0x4FC5F0, "3fa1051ef3b12e9d107885002f91765175ab24758a65e5475c9ebd755fd5876f"),
+    }
+    for address, (end, expected) in bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
+            raise ValueError("Unexpected cached device status body")
+    checks = {
+        0x4DE909: "8b7dfc83c703b90e0000008d7508f3a5",
+        0x4DE939: "8b75fc83c603b90e0000008b7d08f3a5",
+        0x4FC445: "81face0100000f84b1000000",
+        0x4FC517: "e8441efeff", 0x4FC5EB: "e81023feff", 0x4FC756: "e8a521feff",
+        0x4DE3A5: "c64405bc04", 0x4DE3B0: "0fb75144", 0x4DE3B4: "83fa01",
+        0x4DE3C1: "c6440dbc9d", 0x4DE3D0: "c64405bc1d", 0x4DE54A: "e831aeffff",
+        0x4DE5E0: "e83b871a00",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected cached device status instruction")
+    return {"instructionChecks": len(checks),
+            "functionSHA256": {hex(k): v[1] for k, v in bodies.items()},
+            "setter": "0x4de900", "getter": "0x4de930",
+            "cacheOffset": 3, "cacheSize": 56,
+            "copySemantics": "Setter copies fourteen dwords from its by-value argument to receiver+3; getter copies the same bytes out. Neither complete body contains calls or branches",
+            "targetBranch": "0x4fc445 compares PID 0x01ce; matching branch enters 0x4fc502",
+            "namedRead": "0x4fc517 -> 0x4de360 with a 56-byte output buffer",
+            "namedReadRequest": "Report byte 0 is 4; command byte 3 is 0x9d when receiver word+0x44 equals 1, otherwise 0x1d. Exchanges via 0x4d9380 and copies returned payload starting at byte 8",
+            "readSuccessCache": "0x4fc5c1 writes status word at byte 10 to 2 before caching at 0x4fc5eb",
+            "readFailureCache": "0x4fc6c7 builds a 56-byte host record: magic 0x55aa, zero word at byte 2, metadata VID/PID at 4/6, words 1 at 8/10/12, 42 zero bytes at 14; caches at 0x4fc756",
+            "limits": "Classifies only the named cache methods and fixed caller fragments. The read method, later cached-record consumers, other branches and firmware semantics are not exhaustively classified. A 56-byte record or AA55 header alone is not a settings write protocol."}
+
+
 def inspect_refresh_mode_memory(pe):
     """Audit the closed direct-call paths of the named mode initializers."""
     bodies = {
@@ -2546,7 +2584,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 50,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 51,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2570,6 +2608,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
         "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
         "deviceMetadataSelector": inspect_device_metadata_selector(pe),
+        "cachedDeviceStatus": inspect_cached_device_status(pe),
         "profileSelectionSend": inspect_profile_selection_send(pe),
         "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
