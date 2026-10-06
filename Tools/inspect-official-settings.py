@@ -829,6 +829,53 @@ def inspect_default_mode_options(pe, defaults_dir=None):
     return result
 
 
+def inspect_default_outer_dispatch(pe):
+    """Follow the named default click into its shared post-click tail."""
+    checks={
+        0x48E87C:"680cbb7500",0x48E887:"ff1594b16e00",
+        0x48E88F:"7510",0x48E897:"e814be0100",0x48E89C:"e9430f0000",
+        0x48F813:"e80812ffff",0x48F82D:"7473",
+        0x48F82F:"6844c07500",0x48F842:"750e",0x48F850:"eb50",
+        0x48F852:"68b8d17400",0x48F865:"7514",0x48F874:"e807870200",
+        0x48F87B:"6804ca7400",0x48F88E:"7512",0x48F89D:"e81ea20200",
+        0x480A52:"6a5f",0x480A57:"ff150cb66e00",0x480A94:"83c001",
+        0x480AAE:"ff15e8b56e00",0x480AF0:"ff15f0b56e00",
+        0x480B0E:"ff15e4b56e00",
+        0x480B25:"e802e52000",0x480B33:"8901",0x480B35:"c685e6feffff01",
+    }
+    for address,encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:raise ValueError(f"Unexpected default outer dispatch at {address:#x}")
+    bodies={
+        0x48E87C:(0x48E8A1,"54326b1e01475c4830d28cf7cef65b163267eb719faa8923b5c44ad8cdfdfbdc"),
+        0x48F7E4:(0x48F8E2,"96c2838fc892be197228a09dda1f9167eb21a7597137a1aef622bd08c8f0a529"),
+        0x480A20:(0x480B7B,"017b3dd69d4892a00c3ed3274c84cc029fd1c3a4caa72fa1f0232fb3332edc13"),
+    }
+    for address,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=digest:raise ValueError("Unexpected default post-click body")
+    names={0x75BB0C:"default_btn",0x75C044:"light_mode_option_",
+           0x74D1B8:"Keyvoice_change_button_",0x74CA04:"keyhighSOCDlist_closebutton_"}
+    for address,name in names.items():
+        raw=(name+"\0").encode("utf-16-le")
+        if pe.at(address,len(raw))!=raw:raise ValueError("Unexpected default post-click control name")
+    imports={0x6EB194:"?CompareNoCase@CDuiString@DuiLib@@QBEHPB_W@Z",
+             0x6EB60C:"?ReverseFind@CDuiString@DuiLib@@QBEH_W@Z",
+             0x6EB5E8:"?Left@CDuiString@DuiLib@@QBE?AV12@H@Z",
+             0x6EB5F0:"?GetLength@CDuiString@DuiLib@@QBEHXZ",
+             0x6EB5E4:"?Mid@CDuiString@DuiLib@@QBE?AV12@HH@Z"}
+    for slot,name in imports.items():
+        raw=(name+"\0").encode("ascii")
+        if pe.at(pe.base+pe.pointer(slot)+2,len(raw))!=raw:raise ValueError("Unexpected post-click string operation import")
+    return {"instructionChecks":len(checks),"hardwareWriteAuthorized":False,
+            "functionSHA256":{hex(k):v[1] for k,v in bodies.items()},
+            "defaultHandlerCall":"0x48e897 -> 0x4aa6b0","postHandlerJump":"0x48e89c -> 0x48f7e4",
+            "nameSplit":{"helper":"0x480a20","delimiter":"last underscore","prefixIncludesDelimiter":True,
+                         "defaultLiteralPrefix":"default_","numericSuffixRequired":False},
+            "postClickPrefixes":[names[k] for k in [0x75C044,0x74D1B8,0x74CA04]],
+            "keyvoiceBranch":"0x4b7f80","socdBranch":"0x4b9ac0",
+            "limits":"Fixed name comparison and string-operation sites. The literal default_btn prefix differs from all three shared-tail action prefixes. This narrows the named default click, not callbacks, mutations of a live sender name, all notification types or firmware implicit behavior. No runtime execution or global no-write assertion."}
+
+
 def inspect_default_macro_dispatch(pe, skin=None):
     """Bound the direct default-button dispatch and alternate key wrappers."""
     checks = {
@@ -1292,6 +1339,10 @@ def inspect_settings_ui_control_actions(path):
                "?Selected@CCheckBoxUI@DuiLib@@UAEX_N0@Z": 0x110A9290,
                "??0CCheckBoxUI@DuiLib@@QAE@XZ": 0x110A8540,
                "??0COptionUI@DuiLib@@QAE@XZ": 0x110A8570,
+               "??0CButtonUI@DuiLib@@QAE@XZ": 0x11091480,
+               "?SetEnabled@CButtonUI@DuiLib@@UAEX_N@Z": 0x11092C30,
+               "?SetEnabled@CControlUI@DuiLib@@UAEX_N@Z": 0x1105AB90,
+               "?IsEnabled@CControlUI@DuiLib@@UBE_NXZ": 0x11058260,
                "?SetVisible@CControlUI@DuiLib@@UAEX_N@Z": 0x1105B620,
                "?SetEnabled@COptionUI@DuiLib@@UAEX_N@Z": 0x110A9820,
                "?SetEnabled@CSliderUI@DuiLib@@UAEX_N@Z": 0x110B6510,
@@ -1317,6 +1368,24 @@ def inspect_settings_ui_control_actions(path):
         raise ValueError("Unexpected slider value callback virtual table")
     if pe.class_name(0x11113E5C) != ".?AVCCheckBoxUI@DuiLib@@" or pe.pointer(0x11113E5C + 0x1C0) != 0x110A9290:
         raise ValueError("Unexpected checkbox selection virtual target")
+    if pe.class_name(0x11113AD0)!=".?AVCButtonUI@DuiLib@@" or pe.pointer(0x11113AD0+0x120)!=0x11058260 or pe.pointer(0x11113AD0+0x124)!=0x11092C30:
+        raise ValueError("Unexpected button enabled-state virtual table")
+    button_checks={
+        0x110914B8:"c700d03a1111",0x11092C3F:"e84c7ffcff",
+        0x11092C4C:"8b8220010000",0x11092C52:"ffd0",0x11092C59:"750d",
+        0x11092C5E:"c7821807000000000000",0x1105ABA7:"7502",
+        0x1105ABB1:"88889a010000",0x1105ABBA:"e811d5ffff",0x1105826A:"8a809a010000",
+    }
+    for address,encoded in button_checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:raise ValueError("Unexpected button enabled-state instruction")
+    button_bodies={
+        0x11092C30:(0x11092C6E,"382e42742729e907155f36d430b8d25e3a847828aa7331dc3b0aef97f66ca0a2"),
+        0x1105AB90:(0x1105ABC5,"57c602c86adfe1ebe1510499986a6763e637b25b809622dd83b5aa0197b25f54"),
+        0x11058260:(0x11058274,"4fe62ad5dd13c0efc432146bc998f0065c6ca8296722aa9c07fe5febd34da1b0"),
+    }
+    for address,(end,digest) in button_bodies.items():
+        if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=digest:raise ValueError("Unexpected button state method body")
     for table, enabled in [(0x11113C94,0x110A9820),(0x11113E5C,0x110A9820),(0x111141BC,0x110B6510)]:
         if pe.pointer(table+0x118)!=0x1105B620 or pe.pointer(table+0x124)!=enabled:
             raise ValueError("Unexpected named widget visibility/enabled virtual target")
@@ -1360,6 +1429,12 @@ def inspect_settings_ui_control_actions(path):
         if pe.at(address, len(expected)) != expected:
             raise ValueError("Unexpected UI control action instruction")
     return {"dllSHA256": digest, "instructionChecks": len(checks), "exports": {k: hex(v) for k, v in exports.items()},
+            "buttonEnabledState":{"instructionChecks":len(button_checks),"virtualTable":"0x11113ad0",
+                                  "enabledMember":"0x19a","disabledVisualStateMember":"0x718",
+                                  "stateGetter":"0x11058260","baseSetter":"0x1105ab90","buttonSetter":"0x11092c30",
+                                  "functionSHA256":{hex(k):v[1] for k,v in button_bodies.items()},
+                                  "invalidationCall":"0x1105abba -> 0x110580d0",
+                                  "limits":"Known CButtonUI state methods store enabled state, invalidate on change and clear visual state only when disabled. These complete bodies contain no direct SendNotify. Invalidation nesting and live child class are not globally classified."},
             "namedWidgetVisibility": {"visibleOffset": "0x118", "enabledOffset": "0x124", "tables": ["0x11113c94", "0x11113e5c", "0x111141bc"], "limits": "Known option, checkbox and slider vtables only; resource declarations and live layout children are not interchangeable. Nested effects of these setters are not classified here."},
             "optionGroupInitialization": {"groupMember": "0xb5c", "initialUTF16FirstUnit": 0,
                                           "emptyCheck": "0x1104f530", "emptySkipsPeerLoop": True,
@@ -2408,7 +2483,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 48,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 49,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2422,6 +2497,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
+        "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
