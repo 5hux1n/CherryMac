@@ -586,6 +586,48 @@ def inspect_queue_worker(image):
         'limits':'Fixed queue construction and dispatch chain only. Actual startup/thread readiness, precise scheduling and timeout units, all waiter/error/cancellation paths, USB completion coupling, live firmware identity and power-off retention remain unproved. No execution, emulation or hardware access.'}
 
 
+
+def inspect_scheduler_clock(image):
+    """Pin RTC count conversion; nominal units are not a persistence barrier."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Scheduler-clock address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x35EDC,0x35F1E):'dc3719cf95ebe81a41fa3bcd54302e61d25af52a397857c1f00b1fd48179c3dc',
+        (0x35FA4,0x35FCE):'639401244ab581b4834fc6643516dcd366f5b6f202f6355bf423563d4e5f2f45',
+        (0x35EB8,0x35ED6):'749bd7c31c7cfbea13b3183bca977cb263369acebbc2a4163eeeb14692f09fc5',
+        (0x4B284,0x4B3AC):'6d7fe1df18d56d04e6f68a8caf7e9461cadff403f56b8cd62fddff120029c630',
+        (0x4B464,0x4B4E8):'d313566002134a6b433e6294a9746a7af2eb39bf55b0aebe010eb4652187e001',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Scheduler-clock code range differs")
+    literals = {0x35F20:0x40011000,0x35F28:0x40011008,
+                0x35FD0:0x40011000,0x35FD4:0x20007614,0x35ED8:0x20007614}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Scheduler-clock literal differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'rtcDeclaration':{'initializer':'0x35edc','base':'0x40011000','counterOffset':1284,'prescalerOffset':1288,
+                          'prescalerWrite':0,'startWrite':1},
+        'elapsedConversion':{'entry':'0x35fa4','baselineRAM':'0x20007614',
+                             'behavior':'Read COUNTER, subtract the baseline, extract bits 5..23 (floor count difference /32 modulo the counter range)'},
+        'announceConversion':{'entry':'0x35eb8','baselineRAM':'0x20007614',
+                              'behavior':'Advance baseline by the aligned counter difference; pass its bits 5..23 to 0x4b464'},
+        'timeoutInsertion':'0x4b284 adds one to the 64-bit timeout except its all-ones special path, then handles elapsed compensation and ordered timeout-list insertion',
+        'expiryCallbackPrefix':'0x4b464 consumes elapsed units and, for an expired node in the inspected prefix, loads callback at node+8 and invokes it at 0x4b4e6',
+        'nominalClockInference':{'source':'https://docs.nordicsemi.com/r/bundle/ps_nrf52833/page/rtc.html',
+                                 'manufacturerCounterHzFormula':'32768/(PRESCALER+1)',
+                                 'counterCountsPerSchedulerUnit':32,'nominalUnitsPerSecond':1024,
+                                 'nominalUnitMilliseconds':0.9765625,
+                                 'condition':'Inference for the declared RTC1 prescaler-zero initialization using nominal LFCLK; not a measured live rate or deadline'},
+        'limits':'Fixed initialization and count conversion only. LFCLK startup, installed firmware, clock accuracy, all timeout/list branches and live queue latency remain unproved. Parameter 50 is not an exact 50ms wait or host persistence barrier; no guessed waits, hardware access or additional write authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -670,7 +712,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 12,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 13,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -691,6 +733,7 @@ def inspect(path):
             'macroBlockSaving': inspect_macro_block_saving(image),
             'saveWorkRegistration': inspect_save_work_registration(image),
             'queueWorker': inspect_queue_worker(image),
+            'schedulerClock': inspect_scheduler_clock(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
