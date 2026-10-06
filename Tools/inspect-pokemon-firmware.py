@@ -186,6 +186,43 @@ def inspect_save_scheduler(image):
             'limits':'Fixed firmware scheduling candidate and named event-state path only. Not a polling-rate field mapping or proof of actual scheduling, flash completion, current firmware identity or blackout cause. No hardware access or added authorization.'}
 
 
+def inspect_concrete_backend(image):
+    base = 0x10000
+
+    def at(address, size):
+        offset = address - base
+        if offset < 0 or offset + size > len(image):
+            raise ValueError("Backend address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x34320,0x343C0):'695ae51cad27c9b9a6d66eceb9db0918bea8cdf24f39fd103206de4e8347bf91',
+        (0x33984,0x3398C):'ebb7dd893b4cffb08798c15e60dcebb8e07867694c5efcf4d0006c76e2c8a50d',
+        (0x340E8,0x34280):'e4a26e5b10ffd9c379c762fd23ac0644a6463d506cf7d35fd004e8adf1ef0d9e',
+        (0x34284,0x34298):'267888edbc4be9d5b74b109a006de3717cedd7b2f72f4c0be09a771b09c52ea6',
+        (0x33864,0x338BC):'576b4f2c67a29f8cfa35cc02b8f56aa624eb5ae30ab510488e2969a147bf323a',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Concrete backend body differs")
+    literals = {0x3398C:0x20007384,0x343C4:0x200012BC,0x343C8:0x4F894,
+                0x343D0:0x3401D,0x343D4:0x34285,0x4F894:0x340D9,0x4F89C:0x340E9}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Concrete backend registration pointer differs")
+    return {'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+            'initializer':'0x34320; successful preparation installs table 0x4f894 at object 0x200012bc+4 and calls 0x33984 at 0x3434e',
+            'registration':'0x33984 stores its argument into 0x20007384; the facade subsequently reads this same pointer',
+            'table':'0x4f894','loadEntry':'0x340d8','saveEntry':'0x340e8',
+            'writer':'0x340e8 handles named records, allocation/reclamation paths, data serialization and a final record operation; return values are checked in its named data/final-operation path',
+            'dataSerializer':'0x33dac, called at 0x3425e; it writes name/value data via a registered callback',
+            'registeredCallbacks':{'read':'0x34298','write':'0x34284','thirdCallback':'0x3401c',
+                                   'registration':'0x33f3c stores three function pointers and one configuration byte; third callback semantics are not classified'},
+            'writeAdapter':'0x34284 adjusts the record-relative offset with two context offsets and branches to 0x33864',
+            'deviceWrite':'0x33864 checks offset/length against region size, looks up a device via 0x49984, makes surrounding driver-table offset 12 calls with arguments 0/1, and writes via driver-table offset 4. It preserves the main operation error for return',
+            'limits':'Fixed registration and named record-to-device chain only; not a live selected backend or confirmed physical flash write. Initializer recovery branches, all reclamation/serialization errors, concrete device driver, completion timing and USB acknowledgement propagation remain unproved. No execution or hardware access.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -270,7 +307,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 4,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 5,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -283,6 +320,7 @@ def inspect(path):
             'reportDispatcher': inspect_report_dispatcher(image, banks),
             'storageSavePaths': inspect_storage_save_paths(image),
             'saveScheduler': inspect_save_scheduler(image),
+            'concreteStorageBackend': inspect_concrete_backend(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
