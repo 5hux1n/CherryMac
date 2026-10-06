@@ -223,6 +223,58 @@ def inspect_concrete_backend(image):
             'limits':'Fixed registration and named record-to-device chain only; not a live selected backend or confirmed physical flash write. Initializer recovery branches, all reclamation/serialization errors, concrete device driver, completion timing and USB acknowledgement propagation remain unproved. No execution or hardware access.'}
 
 
+def inspect_flash_binding(image):
+    base = 0x10000
+
+    def at(address, size):
+        offset = address - base
+        if offset < 0 or offset + size > len(image):
+            raise ValueError("Flash-binding address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x4B140,0x4B15C):'f10a458f2d3b4b9646811b816fce8db68450b6bc488ea27c271e6cb5d08bf8a0',
+        (0x45E38,0x45EA0):'f7ad1e63e0b4a540604f64f78f1a74c3e11d295ddf50141e8196f9f245178bad',
+        (0x45D10,0x45D14):'a7ddd513d149ea16fdd4db3f82267f83087aeaddd06b5dde5468adb704205fc4',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Flash-binding code body differs")
+    literals = {0x4B15C:0x20000000,0x4B160:0x20001E84,0x4B164:0x50428,
+                0x49A10:0x20001A00,0x49A14:0x20001B20,0x516E0:0x4F840,0x4F890:5}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Initialized-data/device-table literal differs")
+    # Inspect declared initial bytes, not running RAM or an emulated startup.
+    ram_start, ram_end, rom_start = 0x20000000,0x20001E84,0x50428
+    device_ram = 0x20001AA8
+    if not ram_start <= device_ram < ram_end - 24:
+        raise ValueError("Device blueprint exceeds initialized-data range")
+    descriptor_address = rom_start + device_ram - ram_start
+    descriptor = list(struct.unpack('<6I',at(descriptor_address,24)))
+    if descriptor != [0x4F82C,0,0x502E8,0,0x49A41,0x20001928]:
+        raise ValueError("Flash device initial descriptor differs")
+    name = b'NRF_FLASH_DRV_NAME\0'
+    if at(0x4F82C,len(name)) != name:
+        raise ValueError("Flash binding name differs")
+    area = list(struct.unpack('<4I',at(0x4F880,16)))
+    if area != [4,0x7A000,0x6000,0x4F82C]:
+        raise ValueError("Settings area descriptor differs")
+    api = list(struct.unpack('<6I',at(0x502E8,24)))
+    if api != [0x45EF1,0x45E39,0x45F41,0x45D11,0x45D09,0x45D15]:
+        raise ValueError("Flash driver API table differs")
+    return {'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+            'initializedData':{'copyRoutine':'0x4b140','romStart':hex(rom_start),'ramStart':hex(ram_start),'ramEndExclusive':hex(ram_end),
+                               'limits':'Static initial-data blueprint only; no RAM access or startup execution'},
+            'deviceRegistry':{'begin':'0x20001a00','endExclusive':'0x20001b20','rowSize':24,
+                              'flashDeviceRAM':hex(device_ram),'initialDescriptorROM':hex(descriptor_address)},
+            'settingsArea':{'descriptor':'0x4f880','id':area[0],'offset':area[1],'length':area[2],'bindingName':'NRF_FLASH_DRV_NAME'},
+            'driverAPI':{'table':'0x502e8','read':'0x45ef0','write':'0x45e38','erase':'0x45f40','offset12':'0x45d10'},
+            'offset12Behavior':'Complete 0x45d10 body returns zero without other operations; surrounding offset12 calls are not evidence of write-protection switching',
+            'writeBehavior':'0x45e38 rejects invalid offset/length, stores a source/offset/length job, starts via 0x45e0c and takes a completion path via 0x4ad48 when starting succeeded; full low-level write and synchronization semantics are not yet classified',
+            'limits':'Fixed named area, declared device descriptor and driver table only. Live initialization/readiness, current firmware identity, low-level controller operations and USB-to-persistence completion remain unproved. Area length is not a macro or profile capacity. No hardware access or added authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -307,7 +359,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 5,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 6,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -321,6 +373,7 @@ def inspect(path):
             'storageSavePaths': inspect_storage_save_paths(image),
             'saveScheduler': inspect_save_scheduler(image),
             'concreteStorageBackend': inspect_concrete_backend(image),
+            'flashBinding': inspect_flash_binding(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
