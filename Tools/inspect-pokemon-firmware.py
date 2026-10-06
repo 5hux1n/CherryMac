@@ -369,6 +369,66 @@ def inspect_report_reply_cache(image):
         'limits':'Shows cached replies and RAM/flag updates in these fixed branches, not a whole-program proof that no other context saves concurrently or waits before transmission. Transport registration, checksum rules, all parameter side effects and live firmware identity remain unproved. Cached success and RAM readback do not establish power-off retention. No hardware access or added write authorization.'}
 
 
+
+def inspect_parameter_consumers(image):
+    """Locate declared base loads and pin two actual consumers; no emulation."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Parameter-consumer address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x2811C,0x28158):'cabe5cce3799deb5f9c41c538030c04ef075b013686f76788b6987e0265e4d38',
+        (0x28D48,0x28D9E):'0b35b4103991ad40ccbaabadffeed625a8f4a564a68f98c1572d04fdc3f535f5',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Parameter-consumer body differs")
+    for address, expected in {0x28158:0x20009AD4,0x2815C:0x20009AC8,
+                              0x28160:0x20004B60,0x28164:0x20000CD8,
+                              0x28DA0:0x20000CD8,0x28DA4:0x20009AEA}.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Parameter-consumer literal differs")
+    loads = []
+    # Byte-pattern candidates, not a linear code disassembly: pools may look like instructions.
+    for offset in range(0,len(image)-3,2):
+        first, second = struct.unpack_from('<HH',image,offset)
+        address = offset + 0x10000
+        if first & 0xF800 == 0x4800:  # Thumb LDR literal T1
+            register = (first >> 8) & 7
+            literal = ((address + 4) & ~3) + (first & 0xFF) * 4
+            width = 2
+        elif first in (0xF8DF,0xF85F):  # Thumb LDR literal T2 +/- imm12
+            register = second >> 12
+            literal = ((address + 4) & ~3) + (1 if first == 0xF8DF else -1) * (second & 0xFFF)
+            width = 4
+        else:
+            continue
+        relative = literal - 0x10000
+        if 0 <= relative <= len(image)-4 and struct.unpack_from('<I',image,relative)[0] == 0x20000CD8:
+            loads.append({'instructionCandidate':hex(address),'literalAddress':hex(literal),
+                          'destinationRegister':register,'instructionWidth':width})
+    known = {0x2812E,0x28D4A,0x2F260,0x2F3CC,0x2F000}
+    if not known.issubset({int(row['instructionCandidate'],16) for row in loads}):
+        raise ValueError("Known parameter-base loads are absent")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'parameterBaseRAM':'0x20000cd8','baseLoadCandidates':loads,
+        'candidateScanLimits':'Only PC-relative Thumb literal-load encodings. Candidates may occur in data or inside wide instructions; not a complete reference/data-flow census or proof that another field has no consumer',
+        'bitMaskConsumer':{'entry':'0x2811c','stateByteRAM':'0x20004b60',
+                           'condition':'On the nonzero event-state branch, parameter byte22 is nonzero and byte39 is zero',
+                           'operation':'Merge the input mask, then AND the state byte with 0x77, clearing bits 3 and 7',
+                           'otherBranch':'Zero event-state clears the supplied mask with BIC; zero input returns immediately'},
+        'keyTransformConsumer':{'entry':'0x28d48','parameterIndex':39,
+                               'condition':'Byte39 equals 1 enables the special branch',
+                               'sourceStateRAM':'0x20009aea',
+                               'specialCases':{'0x0b':'mask 0x04; key argument 0','0x11':'mask 0x08; key argument 0',
+                                               '0x41':'mask 0x80; key argument 0','0x4d':'mask 0x40; key argument 0'},
+                               'downstream':['0x2811c','0x28168']},
+        'limits':'Actual fixed consumers only. State-byte report routing, exact user-facing lock/mode meaning, JSON WinFlag/WFlag/Key6Flag correspondence, polling-rate indices and persistence remain unproved. No product field mapping, execution, hardware access or added authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -453,7 +513,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 8,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 9,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -470,6 +530,7 @@ def inspect(path):
             'flashBinding': inspect_flash_binding(image),
             'flashCompletion': inspect_flash_completion(image),
             'reportReplyCache': inspect_report_reply_cache(image),
+            'parameterConsumers': inspect_parameter_consumers(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
