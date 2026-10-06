@@ -829,6 +829,50 @@ def inspect_default_mode_options(pe, defaults_dir=None):
     return result
 
 
+def inspect_default_macro_dispatch(pe):
+    """Bound the direct default-button dispatch and alternate key wrappers."""
+    checks = {
+        0x4AA701: "8b8290020000", 0x4AA707: "ffd0",
+        0x4AA720: "8b90a4020000", 0x4AA726: "ffd2",
+        0x4AA750: "8b82bc020000", 0x4AA756: "ffd0",
+        0x4FE97C: "05c83f0000", 0x4FE98A: "e8a104f8ff",
+        0x4FE99E: "8b90a0020000", 0x4FE9A4: "ffd2",
+        0x4FEF64: "e8a7f3f5ff", 0x4FEF6C: "81c1d43f0000",
+        0x4FEF7D: "e8aefef7ff", 0x4FEF91: "8b82a0020000", 0x4FEF97: "ffd0",
+        0x4AB43C: "8b90b4020000", 0x4AB442: "ffd2",
+        0x4F8A35: "8b90b4020000", 0x4F8A3B: "ffd2",
+        0x4F8A52: "8b82b0020000", 0x4F8A58: "ffd0",
+    }
+    for address, encoded in checks.items():
+        expected=bytes.fromhex(encoded)
+        if pe.at(address,len(expected))!=expected:
+            raise ValueError(f"Unexpected default/macro dispatch at {address:#x}")
+    targets={0x290:0x4F9320,0x2A4:0x4FE970,0x2BC:0x500790,
+             0x2A0:0x4FEFB0,0x2B4:0x4FF710,0x2B0:0x4FEF50}
+    for offset,target in targets.items():
+        if pe.pointer(0x77F604+offset)!=target:
+            raise ValueError("Unexpected target default/macro virtual method")
+    bodies={
+        0x4AA6B0:(0x4AA75C,"112b1b81643526dc919843fe3e32ba6eb369af88e13c585dd8731ff9692fbc45"),
+        0x4FE970:(0x4FE9B2,"818e4d3ac477f72c5063d9b7a5d5c96a61b1022fbeb20a6f20cb69d564bd7f42"),
+        0x4FEF50:(0x4FEFA5,"0b8660ae0a2ca96391429d35d77582479994901921d9816dc4a457721974a1ec"),
+    }
+    for address,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=digest:
+            raise ValueError("Unexpected default/macro wrapper body")
+    return {"instructionChecks":len(checks),"hardwareWriteAuthorized":False,
+            "virtualTargets":{hex(k):hex(v) for k,v in targets.items()},
+            "functionSHA256":{hex(k):v[1] for k,v in bodies.items()},
+            "defaultButtonDirectDeviceCalls":["0x290","0x2a4","0x2bc"],
+            "defaultButtonDirectMacroSenderCall":False,
+            "macroSenderDispatchSites":["0x4ab442","0x4f8a3b"],
+            "keyActionWrappers":{"current":{"virtualOffset":"0x2a4","sourceMember":"0x3fc8"},
+                                 "alternate":{"virtualOffset":"0x2b0","sourceMember":"0x3fd4","precedingUIHelper":"0x45e310"},
+                                 "sharedVirtualOffset":"0x2a0","sharedSender":"0x4fefb0",
+                                 "conclusion":"Both named wrappers copy different host action vectors into the same key serializer. The alternate +0x2b0 wrapper is not a macro-bank read inferred from its position after +0x2b4."},
+            "limits":"Direct calls in the complete default-button handler only. Nested model methods, UI callbacks and implicit firmware effects are not globally excluded; does not prove macro bank erasure/retention or persistence. The two named macro-dispatch sites are not a whole-program caller inventory."}
+
+
 def inspect_default_key_action_branch(pe):
     """Distinguish factory-record copying from action binding serialization."""
     virtuals = {0x2A0: 0x4FEFB0, 0x2A4: 0x4FE970, 0x2EC: 0x540C60}
@@ -2341,7 +2385,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 46,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 47,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2354,6 +2398,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
+        "defaultMacroDispatch": inspect_default_macro_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
