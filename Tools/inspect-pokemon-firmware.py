@@ -146,6 +146,46 @@ def inspect_storage_save_paths(image):
             'limits':'Named save helper/facade paths only. Actual backend selection, physical flash writes, polling schedule, failure propagation outside these calls and USB completion semantics remain unproved. RAM readback does not establish persistence; no automatic retry or added hardware authorization.'}
 
 
+def inspect_save_scheduler(image):
+    base = 0x10000
+
+    def at(address, size):
+        offset = address - base
+        if offset < 0 or offset + size > len(image):
+            raise ValueError("Save-scheduler address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x280EC,0x28114):'290fab69faacf38c2e5ad8881ff16c8b8991cfd8bd5d8998735f66d4a2fa460e',
+        (0x2EF3C,0x2F044):'c9791c583fab0df9261fb516802925db7b9aaf1c612e67b2ec1fb301d1f088c0',
+        (0x2FD2C,0x2FDB0):'d1cddb0e6fba64b602d7155477c3698ff249ec31875e95e42acb4dd63cbb3501',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Save-scheduler/event body differs")
+    literals = {0x280E8:0x280ED,0x28114:0x200034C8,0x28118:0x20003E20,
+                0x2F058:0x52768,0x2F064:0x20000CD8,0x2F080:0x20009B2B,0x2F084:0x20009B28,
+                0x52768:0x4F50C,0x2FDB4:0x52768,0x2FDB8:0x52790,0x52790:0x4F520}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Save-scheduler/event literal differs")
+    for address, text in [(0x4F50C,b'mulprotocol_event\0'),(0x4F520,b'usb_dtm_event\0')]:
+        if at(address,len(text)) != text:
+            raise ValueError("Save-event type name differs")
+    return {'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+            'saveCallback':{'entry':'0x280ec','thumbPointer':'0x280ed','pointerLiteral':'0x280e8',
+                            'orderedCalls':['0x2e9d0','0x2ec50','0x2ea48','0x2ee24','0x2ee64'],
+                            'tailCall':'0x4b064; r0=0x20003e20, r1=0x200034c8, r2=50, r3=0',
+                            'limits':'Proves the call sequence and tail-call arguments. Initial registration, scheduler implementation and duration units are not established here; 50 is not claimed as milliseconds'},
+            'protocolStateEvent':{'listener':'0x2ef3c','eventType':'mulprotocol_event','typeAddress':'0x52768',
+                                  'branch':'0x2f000','eventStateOffset':8,'sharedStateRAM':'0x20009b2b',
+                                  'parameterIndex':16,'parameterRAM':'0x20000cd8','saveFlagRAM':'0x20009b28',
+                                  'behavior':'Copies event byte8 into shared state. If it differs from parameter byte16 and the old parameter byte is neither 4 nor 6, stores the new byte16 and sets the parameter-save flag to 1'},
+            'relatedListener':{'entry':'0x2fd2c','eventTypes':['mulprotocol_event','usb_dtm_event'],
+                               'limits':'Type identities and fixed body only; numeric protocol values, DTM behavior and reset branch semantics are not fully classified'},
+            'limits':'Fixed firmware scheduling candidate and named event-state path only. Not a polling-rate field mapping or proof of actual scheduling, flash completion, current firmware identity or blackout cause. No hardware access or added authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -230,7 +270,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 3,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 4,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -242,6 +282,7 @@ def inspect(path):
                             'candidateLinkBase': '0x10000', 'pointerAnchors': anchors, 'storageNames': banks},
             'reportDispatcher': inspect_report_dispatcher(image, banks),
             'storageSavePaths': inspect_storage_save_paths(image),
+            'saveScheduler': inspect_save_scheduler(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
