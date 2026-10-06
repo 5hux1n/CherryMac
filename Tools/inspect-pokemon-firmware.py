@@ -679,6 +679,44 @@ def inspect_factory_event_path(image):
         'limits':'Fixed named command/event/helper paths only. All other event consumers, command branch flags, event dispatch ordering, pairing/radio effects, macro playback after prefix clearing, Windows button equivalence and live firmware identity remain unproved. Not a reset implementation or authorization; no requests generated or sent.'}
 
 
+
+def inspect_factory_event_identity_branches(image):
+    """Separate secondary event branches from configuration-only reset scope."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Factory-event secondary address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x24070,0x240BE):'88143db5aeb1e3b6c835becf8c73189de26abd8eb5de1f21084eaa2a4c6001dd',
+        (0x2450A,0x2453A):'1b7b5142470d88d2a7ea97a45f42bacf6b414f97115ccb31cd54666baf0b6b5c',
+        (0x24566,0x245C8):'f6e3fe6dae882a90947514044ff22bc0b887a37ddc083e6c00acc44ef6e6c72d',
+        (0x23A98,0x23AC0):'2639f96b0c15daf4b62a17d079ce13e4bc191baa9721fbe0e48f6ccbc4aff5f8',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Factory-event secondary body differs")
+    literals = {0x2436C:0x527B8,0x23AC0:0x20009A8C,0x23AC4:0x20003EDC,
+                0x2469C:0x20009A8C,0x246B4:0x20003EDC}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Factory-event secondary selector differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'listener':'0x24070','eventType':'userflash_event','typeLiteral':'0x2436c','branch':'0x2450a',
+        'mode2Flag':{'eventByte':9,'branch':'0x24566','requestedSlots':[0,1,2],
+                     'behavior':'Clear event byte9 and another internal byte; for each requested slot, call 0x23a98 followed by 0x3c9b8 with the selected first argument and zero second/third arguments'},
+        'mode3Flag':{'eventByte':10,'branch':'0x2450e',
+                     'condition':'Byte9 is zero and byte10 is nonzero','requestedSlots':[3],
+                     'behavior':'Clear event byte10; call 0x23a98 then 0x3c9b8 with selected first argument and zero second/third arguments'},
+        'selector':{'stateRAM':'0x20009a8c','tableRAM':'0x20003edc',
+                    'behavior':'State 4 or 5 selects table byte4 regardless of requested slot; other states select the requested table byte'},
+        'slotHelper':{'entry':'0x23a98','downstream':'0x3c2e0',
+                      'behavior':'Select the same table entry, prepare a zero seven-byte structure on stack and pass its pointer as the second argument'},
+        'limits':'Proves distinct secondary calls, not their complete pairing/identity semantics. The downstream implementation, all event listeners and ordering, protocol enum values, installed firmware and Windows button correspondence still need classification. Mode2/3 candidates are not configuration-only reset requests; no commands generated or sent.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -763,7 +801,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 14,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 15,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -786,6 +824,7 @@ def inspect(path):
             'queueWorker': inspect_queue_worker(image),
             'schedulerClock': inspect_scheduler_clock(image),
             'factoryEventPath': inspect_factory_event_path(image),
+            'factoryEventIdentityBranches': inspect_factory_event_identity_branches(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
