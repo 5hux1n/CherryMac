@@ -829,7 +829,7 @@ def inspect_default_mode_options(pe, defaults_dir=None):
     return result
 
 
-def inspect_default_macro_dispatch(pe):
+def inspect_default_macro_dispatch(pe, skin=None):
     """Bound the direct default-button dispatch and alternate key wrappers."""
     checks = {
         0x4AA701: "8b8290020000", 0x4AA707: "ffd0",
@@ -842,6 +842,9 @@ def inspect_default_macro_dispatch(pe):
         0x4AB43C: "8b90b4020000", 0x4AB442: "ffd2",
         0x4F8A35: "8b90b4020000", 0x4F8A3B: "ffd2",
         0x4F8A52: "8b82b0020000", 0x4F8A58: "ffd0",
+        0x45E31F: "898870080000", 0x45E325: "681ca17300",
+        0x45E334: "ff15a4b36e00", 0x45E33D: "837d0800",
+        0x45E35A: "8b9024010000", 0x45E360: "ffd2",
     }
     for address, encoded in checks.items():
         expected=bytes.fromhex(encoded)
@@ -856,11 +859,31 @@ def inspect_default_macro_dispatch(pe):
         0x4AA6B0:(0x4AA75C,"112b1b81643526dc919843fe3e32ba6eb369af88e13c585dd8731ff9692fbc45"),
         0x4FE970:(0x4FE9B2,"818e4d3ac477f72c5063d9b7a5d5c96a61b1022fbeb20a6f20cb69d564bd7f42"),
         0x4FEF50:(0x4FEFA5,"0b8660ae0a2ca96391429d35d77582479994901921d9816dc4a457721974a1ec"),
+        0x45E310:(0x45E368,"58b99c6c95b021e19bf299a6f95fbfbf843fe7de687bf6915d1bc6c8a93c6f11"),
     }
     for address,(end,digest) in bodies.items():
         if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=digest:
             raise ValueError("Unexpected default/macro wrapper body")
+    label="key_butt_prosave"
+    expected=(label+"\0").encode("utf-16-le")
+    if pe.at(0x73A11C,len(expected))!=expected:
+        raise ValueError("Unexpected alternate key wrapper UI name")
+    resource=None
+    if skin is not None:
+        raw=(Path(skin)/"XML/CustomControlXML/MacroControl.xml").read_bytes()
+        digest=hashlib.sha256(raw).hexdigest()
+        if digest!="f6205f78bce8801c99ea4538ab165cde3c6e6878734cbea18dd5aa48a12d511d":
+            raise ValueError("Unexpected macro control resource")
+        tags=[tag for tag in re.findall(r"<[^<>]+>",raw.decode("utf-8-sig")) if f'name="{label}"' in tag]
+        if len(tags)!=1 or not tags[0].startswith("<Button ") or 'text="key_set_apply_text"' not in tags[0]:
+            raise ValueError("Unexpected macro apply button declaration")
+        resource={"sha256":digest,"declaredClass":"Button","textResource":"key_set_apply_text",
+                  "limits":"Exact-hash declaration, not an observed runtime child. Duplicate XML attributes are not rewritten."}
     return {"instructionChecks":len(checks),"hardwareWriteAuthorized":False,
+            "alternateWrapperUIHelper":{"method":"0x45e310","hostStateMember":"0x870","childName":label,
+                                        "virtualOffset":"0x124","argumentRule":"enabled = first argument != 0",
+                                        "callerArgument":1,"resource":resource,
+                                        "limits":"This complete method stores host state and calls the named child's enabled setter. No direct report exchange or macro-bank erase. Setter nesting and actual runtime child remain separate work."},
             "virtualTargets":{hex(k):hex(v) for k,v in targets.items()},
             "functionSHA256":{hex(k):v[1] for k,v in bodies.items()},
             "defaultButtonDirectDeviceCalls":["0x290","0x2a4","0x2bc"],
@@ -2385,7 +2408,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 47,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 48,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2398,7 +2421,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
-        "defaultMacroDispatch": inspect_default_macro_dispatch(pe),
+        "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
