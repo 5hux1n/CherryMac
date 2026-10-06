@@ -766,6 +766,40 @@ def inspect_factory_related_storage(image):
         'limits':'Proves Bluetooth-named record operations and RAM clearing, not complete pairing removal, zero-length backend tombstone semantics, all connection effects or live persistence. This is outside normal key/color/macro configuration restoration. Candidate commands remain unimplemented and unsent; no hardware access.'}
 
 
+
+def inspect_zero_length_record_semantics(image):
+    """Pin empty-record serialization and load-time filtering of named values."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Empty-record address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x34020,0x340D8):'aa02f60b6ab08fbdb98b52a90cc3cb328c4522032674fbf7b50f67ce9161db0e',
+        (0x340D8,0x340E2):'d817ac7cf8be8661ab98d01da1f586574ca3fb598da9cb508e5eb0486d150ca0',
+        (0x33DAC,0x33E88):'2c4e7c7a4d91c9050fc162f4c68decdfdcf9ca63ae8c588ca8ec598294cf406c',
+        (0x33E8C,0x33E9A):'02cb885994eda9c1e732684c53d1b8b90fa561c3a254a594d56d98c53decb59e',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Empty-record code body differs")
+    if struct.unpack('<I',at(0x340E4,4))[0] != 0x33FED:
+        raise ValueError("Named loader callback differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'recordSize':'0x33e8c computes name length + 1 + payload length',
+        'serializer':{'entry':'0x33dac','separatorByte':61,
+                      'behavior':'Serialize name, append =, copy payload only while remaining payload length is nonzero, align and send through the registered writer. A zero-length operation still has a named record'},
+        'loadWrapper':{'entry':'0x340d8','walk':'0x34020','filterFlag':1,'callbackThumbPointer':'0x33fed'},
+        'emptyFilter':{'entry':'0x34064',
+                       'behavior':'With the load filter enabled, skip a record when parsed name length + 1 is greater than or equal to the record length'},
+        'sameNameFilter':{'entry':'0x34070',
+                          'behavior':'Walk following records and compare names with 0x39ffc. A matching name skips the earlier record, without requiring a nonempty value in that matching record'},
+        'inference':'Together these fixed paths support a named empty record acting as a logical deletion marker once successfully committed. This is not a whole-flash erase or proof that every affected Bluetooth record was successfully removed',
+        'limits':'Fixed serializer and loading filters only. Record iterator order/recovery, commit failures, reclamation, all same-value shortcuts, installed firmware and physical retention still require confirmation. Candidate factory commands remain unimplemented and unsent; no hardware access.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -850,7 +884,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 16,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 17,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -875,6 +909,7 @@ def inspect(path):
             'factoryEventPath': inspect_factory_event_path(image),
             'factoryEventIdentityBranches': inspect_factory_event_identity_branches(image),
             'factoryRelatedStorage': inspect_factory_related_storage(image),
+            'zeroLengthRecordSemantics': inspect_zero_length_record_semantics(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
