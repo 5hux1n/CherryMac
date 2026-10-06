@@ -628,6 +628,57 @@ def inspect_scheduler_clock(image):
         'limits':'Fixed initialization and count conversion only. LFCLK startup, installed firmware, clock accuracy, all timeout/list branches and live queue latency remain unproved. Parameter 50 is not an exact 50ms wait or host persistence barrier; no guessed waits, hardware access or additional write authorization.'}
 
 
+
+def inspect_factory_event_path(image):
+    """Pin reset candidates without constructing or sending a hardware request."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Factory-event address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x2EEB4,0x2EF0C):'e46891f3348ae31df0f133ba45181bceab76eb3f2d84b056c62b717cb82eb0da',
+        (0x2D49C,0x2D4D4):'e2fba12fdc216c7bad7bc73f6bb186a22ce8c191f7142379e1393b0a20f81e0a',
+        (0x2EFF0,0x2F000):'f8d1d68d1972705a62d1d3ada62159a5f4a101802ec7b4dd5e89240150e9a0d2',
+        (0x2F488,0x2F496):'46717d2b47e68ade5944da1f0d2446eba86ba92c7d4f6ae3ce807b5f73d53abf',
+        (0x2F516,0x2F538):'07419cf3e668221067ea68cc1d956baa674b7a30e8fd5d6eb5750e3e3bac1c06',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Factory-event code body differs")
+    commands = {0x0D:0x2F488,0x21:0x2F516,0x22:0x2F52A}
+    for command, expected in commands.items():
+        destination = 0x2F0F4 + 2*struct.unpack('<H',at(0x2F0F4+2*(command-3),2))[0]
+        if destination != expected:
+            raise ValueError("Factory-event command branch differs")
+    literals = {0x2F054:0x527B8,0x2D4E4:0x527B8,0x527B8:0x4F54C,
+                0x2EF0C:0x4F264,0x2EF10:0x20000CD8,0x2EF18:0x4D738,
+                0x2EF1C:0x20000A98,0x2EF24:0x4F2A4,0x2EF28:0x20000D18,
+                0x2EF30:0x200054EC,0x2EF34:0x20009B26}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Factory-event literal differs")
+    if at(0x4F54C,len(b'userflash_event\0')) != b'userflash_event\0':
+        raise ValueError("Factory-event type name differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'commandCandidates':{hex(k):hex(v) for k,v in commands.items()},
+        'eventBuilder':{'entry':'0x2d49c','type':'userflash_event','typeAddress':'0x527b8','publish':'0x3737c',
+                        'modesByCommand':{'0x0d':1,'0x21':3,'0x22':2},
+                        'fields':{'byte8':1,'byte9':'1 iff mode equals 2','byte10':'1 iff mode equals 3'}},
+        'eventConsumer':{'listener':'0x2ef3c','branch':'0x2eff0',
+                         'behavior':'When event byte8 is nonzero, clear it and call 0x2eeb4'},
+        'resetHelper':{'entry':'0x2eeb4',
+                       'copies':[{'sourceROM':'0x4f264','destinationRAM':'0x20000cd8','length':64},
+                                 {'sourceROM':'0x4d738','destinationRAM':'0x20000a98','length':512},
+                                 {'sourceROM':'0x4f2a4','destinationRAM':'0x20000d18','length':512}],
+                       'macroZeroPrefix':{'destinationRAM':'0x200054ec','length':128,'entireBankCleared':False},
+                       'saveCalls':['0x2ec50','0x2ea48','0x2ee24'],
+                       'otherCall':'0x2c1b4; remaining side effects still require correlation'},
+        'limits':'Fixed named command/event/helper paths only. All other event consumers, command branch flags, event dispatch ordering, pairing/radio effects, macro playback after prefix clearing, Windows button equivalence and live firmware identity remain unproved. Not a reset implementation or authorization; no requests generated or sent.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -712,7 +763,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 13,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 14,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -734,6 +785,7 @@ def inspect(path):
             'saveWorkRegistration': inspect_save_work_registration(image),
             'queueWorker': inspect_queue_worker(image),
             'schedulerClock': inspect_scheduler_clock(image),
+            'factoryEventPath': inspect_factory_event_path(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
