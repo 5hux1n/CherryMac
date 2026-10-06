@@ -75,6 +75,77 @@ def inspect_report_dispatcher(image, banks):
             'limits':'Fixed firmware report-dispatch entry and named branches only. USB callback routing, checksums upstream, all command side effects, save completion and installed firmware identity remain unproved. No new hardware authorization.'}
 
 
+def inspect_storage_save_paths(image):
+    base = 0x10000
+
+    def at(address, size):
+        offset = address - base
+        if offset < 0 or offset + size > len(image):
+            raise ValueError("Save-path address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x2E9D0,0x2EA34):'a501d4e4e3d2c024aebdfdcfe4e7b7b50ed83dbdf0a9b25cbcc177f51872f992',
+        (0x2EA48,0x2EBE8):'f6c92fccc934657658aafed40d4628d616e6de5be147315ec4c0aef2a99d5981',
+        (0x2EC50,0x2EDBC):'69db63862d1312553707bbf38c617e1ae8ff616ae3a9fc7560d12cc27ca5a0d6',
+        (0x2EE24,0x2EE54):'132098597e64eb9df1f61cd7f6a7cd5764567dfe2c6d1b59429958e9b2c525cc',
+        (0x2EE64,0x2EEA4):'6561d35513cb2d824603a210c117d31eb2bcbf37bcfd279be0b3a707ed961c74',
+        (0x33924,0x33960):'a9257d78973a3a3fe844a1c0f373e869b457b9e56aa046a795ee08e3231564b8',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Storage save-path body differs")
+
+    def branch_link(address):
+        first, second = struct.unpack('<HH', at(address,4))
+        if first & 0xF800 != 0xF000 or second & 0xD000 != 0xD000:
+            raise ValueError("Expected a Thumb BL instruction")
+        sign = (first >> 10) & 1
+        i1 = 1 ^ ((second >> 13) & 1) ^ sign
+        i2 = 1 ^ ((second >> 11) & 1) ^ sign
+        displacement = (sign << 24) | (i1 << 23) | (i2 << 22) | ((first & 0x3FF) << 12) | ((second & 0x7FF) << 1)
+        if sign:
+            displacement -= 1 << 25
+        return address + 4 + displacement
+
+    calls = {'colors':[0x2EB0E,0x2EB2C,0x2EB4A,0x2EB68,0x2EB86,0x2EBA4,0x2EBC2,0x2EBE0],
+             'keymap':[0x2ED0E,0x2ED26,0x2ED3E,0x2ED56,0x2ED6E,0x2ED86,0x2ED9E,0x2EDB6]}
+    for addresses in calls.values():
+        for address in addresses:
+            if branch_link(address) != 0x33924 or struct.unpack('<H',at(address+4,2))[0] & 0xF800 != 0xE000:
+                raise ValueError("Named save call/return-discard branch differs")
+    if branch_link(0x2EE9A) != 0x33924 or at(0x2EE9E,4) != bytes.fromhex('06b070bd'):
+        raise ValueError("Device-version save epilogue differs")
+    if branch_link(0x2EA18) != 0x33924 or at(0x2EA1C,6) != bytes.fromhex('05460028e0d1'):
+        raise ValueError("Parameter save return check differs")
+    literals = {0x2EBE8:0x20009B2B,0x2EBEC:0x20009B25,
+                0x2EDBC:0x20009B2B,0x2EDC0:0x20009B27,
+                0x2EE54:0x20009B2B,0x2EE58:0x20009B26,
+                0x2EEA4:0x20009B2B,0x2EEA8:0x20009B24,
+                0x2EEAC:0x4F204,0x2EEB0:0x20000C98,0x33960:0x20007384,
+                0x2EA34:0x20009B2B,0x2EA38:0x20009B28,0x2EA3C:0x20000CD8,
+                0x2EA40:0x20006F2C,0x2EA44:0x4F0B4}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Save-path literal differs")
+    if at(0x4F204,len(b'flash/device_version\0')) != b'flash/device_version\0':
+        raise ValueError("Device-version storage name differs")
+    if at(0x4F0B4,len(b'flash/func_ram\0')) != b'flash/func_ram\0':
+        raise ValueError("Parameter storage name differs")
+    return {'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+            'backendFacade':'0x33924; obtains backend from pointer at 0x20007384 and invokes its function-table offset 8; returns backend result or -2 when absent',
+            'commonSkipCondition':'Named save helpers return without saving when byte 0x20009b2b equals 4; meaning of this state is not yet classified',
+            'saveFlags':{'colors':'0x20009b25','keymap':'0x20009b27','macroData':'0x20009b26','parameters':'0x20009b28','deviceVersion':'0x20009b24'},
+            'namedBackendCalls':{key:[hex(address) for address in addresses] for key,addresses in calls.items()},
+            'returnHandling':'Each of the sixteen named color/keymap calls is followed immediately by an unconditional branch, without checking r0. The device-version helper clears its flag before the backend call and returns through its epilogue without checking r0. Parameter saving uses a separate return-checked helper',
+            'macroGate':'0x2ee24 compares 3072 RAM bytes with its shadow; identical data clears the flag, differing data invokes 0x2dee8',
+            'deviceVersionSave':{'helper':'0x2ee64','name':'flash/device_version','sourceRAM':'0x20000c98','length':64},
+            'parameterSave':{'helper':'0x2e9d0','name':'flash/func_ram','sourceRAM':'0x20000cd8','shadowRAM':'0x20006f2c','length':64,
+                             'returnHandling':'0x2ea18 calls the backend; a nonzero return skips shadow update/flag clearing. Zero updates the shadow and clears the flag; unchanged data also clears it',
+                             'normalization':'When saving changed parameters, byte 16 equal to 4 is replaced with 2; purpose and live relevance remain unclassified'},
+            'limits':'Named save helper/facade paths only. Actual backend selection, physical flash writes, polling schedule, failure propagation outside these calls and USB completion semantics remain unproved. RAM readback does not establish persistence; no automatic retry or added hardware authorization.'}
+
+
 def download_resources(pe):
     optional = pe.u32(0x3C) + 24
     base = pe.base + pe.u32(optional + 96 + 2 * 8)
@@ -159,7 +230,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 2,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 3,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -170,6 +241,7 @@ def inspect(path):
                             'descriptorBCDDevice': 0x0104, 'initialVectorWords': list(struct.unpack_from('<4I', image)),
                             'candidateLinkBase': '0x10000', 'pointerAnchors': anchors, 'storageNames': banks},
             'reportDispatcher': inspect_report_dispatcher(image, banks),
+            'storageSavePaths': inspect_storage_save_paths(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
