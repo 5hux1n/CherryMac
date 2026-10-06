@@ -544,7 +544,46 @@ def inspect_save_work_registration(image):
         'resubmit':'The previously pinned save callback 0x280ec submits the same object to the same queue with the same 50/0 argument pair',
         'scheduler':'0x4b064 records queue ownership at work+0x28. A nonzero delay calls 0x4b284 on work+0x10 using the declared callback 0x4afe1. The zero-delay branch sets pending bit0 at work+8 and enqueues through 0x4a108 when it was not pending',
         'deferredEnqueue':'0x4afe0 obtains the queue at timer-node+0x18, sets pending bit0 at timer-node-8 and, when newly pending, enqueues the recovered work at timer-node-0x10 through 0x4a108',
-        'limits':'Fixed registration and named deferred enqueue paths only. Initializer call reachability, queue worker callback dispatch, actual scheduling, duration units, every cancellation/error branch, USB completion and installed firmware identity remain unproved. Do not treat 50 as milliseconds or add guessed host waits. No execution or hardware access.'}
+        'limits':'Fixed registration and named deferred enqueue paths only. Initializer call reachability, actual scheduling, duration units, every cancellation/error branch, USB completion and installed firmware identity remain unproved. Do not treat 50 as milliseconds or add guessed host waits. No execution or hardware access.'}
+
+
+
+def inspect_queue_worker(image):
+    """Pin the declared queue worker and its callback dispatch body."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Queue-worker address exceeds image bounds")
+        return image[offset:offset + size]
+
+    bodies = {
+        (0x4AD9C,0x4ADBE):'7eaa8d05c0f57e959373b1d06a3fcdc528c217d0926fc9b089613f669609cfda',
+        (0x4B018,0x4B05C):'0906e8b431faebbd704132970d49c77d05daf76d04d8aa9ef491b4c0016f0db8',
+        (0x31070,0x310B4):'d1ce423cb09f0cf22e054b045ef5b75b7fcc025d6d568325e2414a6b8ffed61f',
+        (0x4A1C0,0x4A22A):'5613c41b151de4702e3e8e8bc4ceb4864eeb322bad4803e822b6adb627204eb4',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Queue-worker body differs")
+    literals = {0x4ADC0:0x20003E20,0x4ADC4:0x2000C5C8,0x4ADC8:0x50410,
+                0x4B05C:0x31071,0x4B060:0x5041C}
+    for address, expected in literals.items():
+        if struct.unpack('<I',at(address,4))[0] != expected:
+            raise ValueError("Queue-worker creation literal differs")
+    if at(0x3108A,2) != bytes.fromhex('4168') or at(0x310AA,2) != bytes.fromhex('8847'):
+        raise ValueError("Queue-worker callback load/invoke differs")
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'queueInitializer':{'entry':'0x4ad9c','queueRAM':'0x20003e20',
+                            'stackRAM':'0x2000c5c8','stackSize':1536,'createCall':'0x4b018'},
+        'workerDeclaration':{'constructor':'0x4b018','thumbPointer':'0x31071',
+                             'literal':'0x4b05c','queueArgument':'Declared constructor stores its queue argument in the thread argument setup'},
+        'workerLoop':{'entry':'0x31070','getWork':'0x4a1c0','timeoutLowWord':4294967295,'timeoutHighWord':4294967295,
+                      'callbackFieldOffset':4,'pendingFieldOffset':8,
+                      'behavior':'Get a work object; a null result loops. Load callback at work+4, atomically clear pending bit0 at work+8, invoke callback through BLX only when bit0 was previously set, then call 0x4abdc and loop'},
+        'getWork':'0x4a1c0 removes a queued head or delegates to a waiter when no head is present and the timeout is nonzero; includes tagged-node and error paths',
+        'saveChain':'The declared queue matches saveWorkRegistration; its initialized save object carries 0x280ed in the same callback field that this worker invokes',
+        'limits':'Fixed queue construction and dispatch chain only. Actual startup/thread readiness, precise scheduling and timeout units, all waiter/error/cancellation paths, USB completion coupling, live firmware identity and power-off retention remain unproved. No execution, emulation or hardware access.'}
 
 
 def download_resources(pe):
@@ -631,7 +670,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 11,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 12,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -651,6 +690,7 @@ def inspect(path):
             'parameterConsumers': inspect_parameter_consumers(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
             'saveWorkRegistration': inspect_save_work_registration(image),
+            'queueWorker': inspect_queue_worker(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
