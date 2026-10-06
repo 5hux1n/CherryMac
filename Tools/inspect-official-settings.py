@@ -1343,6 +1343,8 @@ def inspect_settings_ui_control_actions(path):
                "?SetEnabled@CButtonUI@DuiLib@@UAEX_N@Z": 0x11092C30,
                "?SetEnabled@CControlUI@DuiLib@@UAEX_N@Z": 0x1105AB90,
                "?IsEnabled@CControlUI@DuiLib@@UBE_NXZ": 0x11058260,
+               "?Invalidate@CControlUI@DuiLib@@QAEXXZ": 0x110580D0,
+               "?Invalidate@CPaintManagerUI@DuiLib@@QAEXAAUtagRECT@@@Z": 0x11061710,
                "?SetVisible@CControlUI@DuiLib@@UAEX_N@Z": 0x1105B620,
                "?SetEnabled@COptionUI@DuiLib@@UAEX_N@Z": 0x110A9820,
                "?SetEnabled@CSliderUI@DuiLib@@UAEX_N@Z": 0x110B6510,
@@ -1384,8 +1386,20 @@ def inspect_settings_ui_control_actions(path):
         0x1105AB90:(0x1105ABC5,"57c602c86adfe1ebe1510499986a6763e637b25b809622dd83b5aa0197b25f54"),
         0x11058260:(0x11058274,"4fe62ad5dd13c0efc432146bc998f0065c6ca8296722aa9c07fe5febd34da1b0"),
     }
-    for address,(end,digest) in button_bodies.items():
-        if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=digest:raise ValueError("Unexpected button state method body")
+    for address,(end,expected) in button_bodies.items():
+        if hashlib.sha256(pe.at(address,end-address)).hexdigest()!=expected:raise ValueError("Unexpected button state method body")
+    invalidation_bodies = {
+        0x110580D0: (0x110581B7, "b7c56fe502854afad29caec653af3efb7e4b772f11326486d7d8eff1413c2b3d"),
+        0x11061710: (0x110617A6, "e5b3bd157b45aeac5ebc976d3d8ab098a4eea906a750be935461338f4bc235cd"),
+    }
+    for address, (end, expected) in invalidation_bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
+            raise ValueError("Unexpected invalidation function body")
+    invalidation_imports = {0x1110D33C: "IntersectRect", 0x1110D490: "UnionRect", 0x1110D3AC: "InvalidateRect"}
+    for address, name in invalidation_imports.items():
+        raw = (name + "\0").encode("ascii")
+        if pe.at(pe.base + pe.pointer(address) + 2, len(raw)) != raw:
+            raise ValueError("Unexpected invalidation API import")
     for table, enabled in [(0x11113C94,0x110A9820),(0x11113E5C,0x110A9820),(0x111141BC,0x110B6510)]:
         if pe.pointer(table+0x118)!=0x1105B620 or pe.pointer(table+0x124)!=enabled:
             raise ValueError("Unexpected named widget visibility/enabled virtual target")
@@ -1434,7 +1448,12 @@ def inspect_settings_ui_control_actions(path):
                                   "stateGetter":"0x11058260","baseSetter":"0x1105ab90","buttonSetter":"0x11092c30",
                                   "functionSHA256":{hex(k):v[1] for k,v in button_bodies.items()},
                                   "invalidationCall":"0x1105abba -> 0x110580d0",
-                                  "limits":"Known CButtonUI state methods store enabled state, invalidate on change and clear visual state only when disabled. These complete bodies contain no direct SendNotify. Invalidation nesting and live child class are not globally classified."},
+                                  "limits":"Known CButtonUI state methods store enabled state, invalidate on change and clear visual state only when disabled. These complete bodies contain no direct SendNotify. Named invalidation implementations are classified separately; live child class is not observed."},
+            "invalidation":{"functionSHA256":{hex(k):v[1] for k,v in invalidation_bodies.items()},
+                            "apiImports":{hex(k):v for k,v in invalidation_imports.items()},
+                            "controlPath":"Checks visibility, clips its rectangle through parent virtual calls and IntersectRect; invokes manager 0x11061710 at 0x110581a4",
+                            "managerPath":"Clamps the rectangle, merges it into manager+0x264 using UnionRect, then calls InvalidateRect for HWND manager+0xa8 with erase=false",
+                            "limits":"Named full bodies contain no direct SendNotify or HID configuration send. Parent virtual implementations, subsequent painting and live subclass behavior are not exhaustively classified; erase=false refers only to window background erasure."},
             "namedWidgetVisibility": {"visibleOffset": "0x118", "enabledOffset": "0x124", "tables": ["0x11113c94", "0x11113e5c", "0x111141bc"], "limits": "Known option, checkbox and slider vtables only; resource declarations and live layout children are not interchangeable. Nested effects of these setters are not classified here."},
             "optionGroupInitialization": {"groupMember": "0xb5c", "initialUTF16FirstUnit": 0,
                                           "emptyCheck": "0x1104f530", "emptySkipsPeerLoop": True,
@@ -1964,6 +1983,50 @@ def inspect_target_parameter_branch(pe):
             "limits":"Proves only this sender's selector and its named target parameter spans. The separately audited dialog calls this virtual +0x2bc, but other setting senders and later/asynchronous consumers are not exhaustively covered. No live write or fresh rate readback."}
 
 
+def inspect_device_metadata_selector(pe):
+    """Trace the named metadata copies without treating a live PID as observed."""
+    bodies = {
+        0x429100: (0x4291CF, "558a1c40e4110961d847d166152e336d0aa945ce69ac354b5a12c10402e5b9b1"),
+        0x498270: (0x49833F, "691c1557db6eb07f0ecd18bc58c5e04fdd0e60ac0bbbcd762815eb5f33836516"),
+        0x5435A0: (0x54361B, "28ffcfa4bb44fc7e35519630c80107bec704f21b2ef29feddee269d5a715e1e9"),
+        0x543620: (0x543653, "11cf2ad0015526341d5d14ef7e0e33c9585b44a87529f4ca84941f2463723591"),
+        0x4BAF90: (0x4BAFB0, "7ddb04643af10b24fad01ee1811719357a93531399334a7af515e38d1b585e30"),
+        0x49E54A: (0x49E584, "75f98525a9f66d41e41fcff0d0dbcf697e2c36607c79c42d3c067faa835f5e89"),
+        0x49DB57: (0x49DB91, "e4c76ff5607500820f29ce86c951bad39dbe0c72974187b5f962e1314085f1be"),
+        0x48B919: (0x48B942, "119024aa6cef8d0bfda8a0ae6503be9ece8d20a1585c2678bac2c44320556765"),
+    }
+    for address, (end, expected) in bodies.items():
+        if hashlib.sha256(pe.at(address, end - address)).hexdigest() != expected:
+            raise ValueError("Unexpected device metadata copy body")
+    checks = {
+        0x4F608B: "e870950400", 0x53F6BB: "81c1181e0000", 0x53F6C1: "e81a57eeff",
+        0x42910D: "668b11", 0x429110: "668910",
+        0x429119: "668b5102", 0x42911D: "66895002",
+        0x49827D: "668b11", 0x498280: "668910",
+        0x498289: "668b5102", 0x49828D: "66895002",
+        0x5435D4: "81c1181e0000", 0x5435DA: "e8215beeff",
+        0x543633: "05181e0000", 0x54363C: "e82f4cf5ff",
+        0x49E554: "81c1d0120000", 0x49E55A: "e831ca0100",
+        0x49E56E: "e8fd9cffff", 0x49E57F: "e81c500a00",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected device metadata selector instruction")
+    return {"instructionChecks": len(checks),
+            "functionSHA256": {hex(k): v[1] for k, v in bodies.items()},
+            "deviceMetadataMember": "0x1e18", "metadataSize": 160,
+            "vendorWordOffset": 0, "productWordOffset": 2,
+            "setter": "0x5435a0 -> 0x429100",
+            "getter": "0x543620 -> 0x498270",
+            "vectorElementGetter": "0x4baf90; index * 160",
+            "namedSetterCalls": ["0x49db8c", "0x49e57f"],
+            "constructor": "0x4f6060 -> 0x53f600; metadata string constructor 0x424de0",
+            "copySemantics": "Both named copy methods preserve the first VID/PID words exactly; no PID alias conversion in those copies",
+            "sourceChain": "Named UI paths obtain host+0x12d0 vector metadata, copy it by value, then assign device+0x1e18; a named registry population loop uses 0x836288 rows of size 160",
+            "limits": "Selected copy/setter/getter paths only. The metadata string constructor alone does not establish initial scalar VID/PID. Target registrations are checked separately; caller index selection, later mutation and a live object PID are not observed. Does not prove all producers or alternative setting transports."}
+
+
 def inspect_refresh_mode_memory(pe):
     """Audit the closed direct-call paths of the named mode initializers."""
     bodies = {
@@ -2483,7 +2546,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 49,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 50,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2506,6 +2569,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
         "parameterSenderLengths": inspect_parameter_sender_lengths(pe),
+        "deviceMetadataSelector": inspect_device_metadata_selector(pe),
         "profileSelectionSend": inspect_profile_selection_send(pe),
         "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
