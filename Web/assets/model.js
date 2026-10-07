@@ -1073,22 +1073,29 @@ export function duplicateMacro(profile,name){
   const stem=macroNameStem(name);let next=`${stem} 副本`,number=2;while(p.macros.some(m=>sameMacroName(m.name,next)))next=`${stem} 副本 ${number++}`;
   const copied=clone(original);copied.name=next;p.macros.push(copied);p.snapshot=resolveMacros(p);return {profile:p,name:next};
 }
-export function removeMacro(profile,name){
+function macroRemovalRecord(profile,slot,mode){
+  requireThat(Number.isInteger(slot)&&slot>=0&&slot<126&&![6,71].includes(slot),'内部键不能解除宏绑定。');
+  requireThat(['disabled','factory'].includes(mode),'请选择解绑后的按键功能。');if(mode==='disabled')return [0x20,0,0];
+  requireThat(profile.lightingMapping,'恢复默认功能需要读取到的完整默认键位表。');lightingMappingSlots(profile.lightingMapping,profile.snapshot);
+  const record=profile.lightingMapping.factoryKeymap.slice(slot*3,slot*3+3);
+  requireThat(record[0]===0x20&&(record[2]===0||record[2]>=4&&record[2]<224)||record[0]===0x30,'此按键的默认记录尚未支持，不能猜测默认功能。');return record;
+}
+export function removeMacro(profile,name,mode='disabled'){
   validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能删除。');
   requireThat(profile.macros.some(m=>sameMacroName(m.name,name)),'请选择已保存的宏。');const p=clone(profile);
   for(const [slot,binding] of Object.entries(p.macroBindings))if(sameMacroName(binding,name)){
-    p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
+    p.snapshot.keymap.splice(Number(slot)*3,3,...macroRemovalRecord(p,Number(slot),mode));delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
   }
   p.macros=p.macros.filter(m=>!sameMacroName(m.name,name));p.snapshot=resolveMacros(p);return p;
 }
-export function unassignMacro(profile,slot){
+export function unassignMacro(profile,slot,mode='disabled'){
   validateProfile(profile);requireThat(Object.hasOwn(profile.macroBindings??{},slot),'所选键没有宏绑定。');const p=clone(profile);
-  p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
+  p.snapshot.keymap.splice(Number(slot)*3,3,...macroRemovalRecord(p,Number(slot),mode));delete p.macroBindings[slot];if(p.macroModes)delete p.macroModes[slot];
   p.snapshot=resolveMacros(p);return p;
 }
-export function clearMacros(profile){
+export function clearMacros(profile,mode='disabled'){
   validateProfile(profile);requireThat(profile.macroBindings!=null,'原硬件宏尚未解码，不能清空。');const p=clone(profile);
-  for(const slot of Object.keys(p.macroBindings))p.snapshot.keymap.splice(Number(slot)*3,3,0x20,0,0);
+  for(const slot of Object.keys(p.macroBindings))p.snapshot.keymap.splice(Number(slot)*3,3,...macroRemovalRecord(p,Number(slot),mode));
   p.macros=[];p.macroBindings={};p.macroModes={};p.snapshot=resolveMacros(p);return p;
 }
 

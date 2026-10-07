@@ -175,23 +175,31 @@ struct HardwareProfile: Codable, Equatable {
         }
         try playback.validate();macroBindings![slot]=name;if macroModes==nil{macroModes=[:]};macroModes![slot]=playback;snapshot=try resolvedMacros()
     }
-    mutating func removeMacro(named name:String) throws {
+    mutating func removeMacro(named name:String,restoreDefault:Bool=false) throws {
         guard macroBindings != nil,macros.contains(where:{$0.name==name}) else{throw HardwareError(message:"请先读取并选择已保存的宏。")}
         var draft=self;try draft.validate()
-        try draft.removeKnownMacro(named:name);self=draft
+        try draft.removeKnownMacro(named:name,restoreDefault:restoreDefault);self=draft
     }
-    private mutating func removeKnownMacro(named name:String) throws {
+    private mutating func removeKnownMacro(named name:String,restoreDefault:Bool) throws {
         for (slot,binding) in macroBindings ?? [:] where binding==name {
-            snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])
+            snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:try macroRemovalRecord(slot:slot,restoreDefault:restoreDefault))
             macroBindings?.removeValue(forKey:slot);macroModes?.removeValue(forKey:slot)
         }
         macros.removeAll{$0.name==name}
         if macroBindings != nil {snapshot=try resolvedMacros()}
     }
-    mutating func unassignMacro(from slot:Int)throws {
+    func macroRemovalRecord(slot:Int,restoreDefault:Bool)throws->[UInt8]{
+        guard (0..<126).contains(slot),![6,71].contains(slot) else{throw HardwareError(message:"内部键不能解除宏绑定。")}
+        guard restoreDefault else{return [0x20,0,0]}
+        guard let mapping=lightingMapping else{throw HardwareError(message:"恢复默认功能需要读取到的完整默认键位表。")};_ = try mapping.slots(for:snapshot)
+        let record=Array(mapping.factoryKeymap[slot*3..<slot*3+3])
+        guard (record[0]==0x20 && (record[2]==0 || (4..<224).contains(record[2]))) || record[0]==0x30 else{throw HardwareError(message:"此按键的默认记录尚未支持，不能猜测默认功能。")}
+        return record
+    }
+    mutating func unassignMacro(from slot:Int,restoreDefault:Bool=false)throws {
         try validate()
         guard macroBindings?[slot] != nil else{throw HardwareError(message:"所选键没有宏绑定。")}
-        var draft=self;draft.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:[0x20,0,0])
+        var draft=self;draft.snapshot.keymap.replaceSubrange(slot*3..<slot*3+3,with:try draft.macroRemovalRecord(slot:slot,restoreDefault:restoreDefault))
         draft.macroBindings?.removeValue(forKey:slot);draft.macroModes?.removeValue(forKey:slot)
         draft.snapshot=try draft.resolvedMacros();self=draft
     }
@@ -263,9 +271,9 @@ struct HardwareProfile: Codable, Equatable {
         while draft.macros.contains(where:{$0.name==next}){next="\(stem) 副本 \(number)";number+=1}
         var copied=original;copied.name=next;draft.macros.append(copied);draft.snapshot=try draft.resolvedMacros();self=draft;return next
     }
-    mutating func clearMacros()throws {
+    mutating func clearMacros(restoreDefault:Bool=false)throws {
         guard macroBindings != nil else{throw HardwareError(message:"原硬件宏尚未解码，不能清空。")}
-        var draft=self;for name in macros.map({$0.name}){try draft.removeMacro(named:name)}
+        var draft=self;for name in macros.map({$0.name}){try draft.removeMacro(named:name,restoreDefault:restoreDefault)}
         draft.snapshot=try draft.resolvedMacros();self=draft
     }
     static func decode(_ data: Data) throws -> HardwareProfile {

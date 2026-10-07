@@ -218,7 +218,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let macroDelay = NSTextField(string:"50")
     let macroPlayback=NSPopUpButton()
     let macroRepeat=NSTextField(string:"1")
-    let macroSummary=NSTextField(wrappingLabelWithString:"")
+    let macroSummary=NSTextField(labelWithString:"")
+    var macroSummaryDetails=""
     let queue = DispatchQueue(label:"local.cherrymac.hardware")
     var keyButtons:[KeyButton] = []
     var tabButtons:[NSButton]=[]
@@ -332,7 +333,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("宏草稿选项…",#selector(macroDraftOptions)),463,258,121,28,in:macros)
         place(label("名称"),8,57,90,24,in:macros);controls.append(macroName);place(macroName,116,53,333,28,in:macros)
         macroSummary.font = .systemFont(ofSize:11);macroSummary.textColor = .secondaryLabelColor
-        place(macroSummary,463,45,412,51,in:macros)
+        macroSummary.lineBreakMode = .byTruncatingTail;macroSummary.usesSingleLineMode=true
+        place(macroSummary,8,83,552,15,in:macros)
+        place(button("宏容量详情…",#selector(showMacroSummary)),463,53,121,28,in:macros)
         macroName.delegate=self;macroRepeat.delegate=self;macroText.delegate=self
         let macroScroll=NSScrollView(frame:NSRect(x:8,y:99,width:552,height:120));macroScroll.hasVerticalScroller=true;macroScroll.borderType = .bezelBorder
         macroText.frame=NSRect(origin:.zero,size:macroScroll.contentSize);macroText.minSize=NSSize(width:0,height:macroScroll.contentSize.height);macroText.maxSize=NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
@@ -926,7 +929,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard let draft=profile,let baseline else{throw HardwareError(message:"请先读取键盘。")}
         try draft.validate()
         guard draft.snapshot.deviceInfo==baseline.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请重新读取。") }
-        if draft.macroStorageLayout == .officialBindings {
+        if draft.macroStorageLayout == .officialBindings || draft.lightingMapping != nil {
             guard let mapping=baselineLightingMapping,draft.lightingMapping==mapping else{throw HardwareError(message:"宏草稿的默认映射与最近实际读取不同，请重新读取后重新导入配置。")}
         }
         var target=try draft.macroStorageLayout == .officialBindings ? draft.officialMacroReceipt(before:baseline).expected:draft.resolvedMacros()
@@ -1207,12 +1210,14 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         updateMacroSummary()
     }
     func textDidChange(_ notification:Notification){updateMacroSummary()}
+    func setMacroSummary(_ value:String){macroSummaryDetails=value;macroSummary.stringValue=value.replacingOccurrences(of:"\n",with:" · ");macroSummary.toolTip=value;macroSummary.setAccessibilityHelp(value)}
+    @objc func showMacroSummary(){updateMacroSummary();let alert=NSAlert();alert.messageText="宏容量与等待";alert.informativeText=macroSummaryDetails+"\n\n设定等待总量不等于固件实际执行时间。未绑定宏不占用官方宏区。";alert.addButton(withTitle:"关闭");alert.runModal()}
     func updateMacroSummary(){
-        guard let profile,profile.macroBindings != nil else{macroSummary.stringValue="读取完整配置后显示宏容量。";return}
+        guard let profile,profile.macroBindings != nil else{setMacroSummary("读取完整配置后显示宏容量。");return}
         do{
             let used=try profile.macroStorageUsage()
             let library="宏库 \(profile.macros.count) · 已绑定 \(profile.macroBindings?.count ?? 0) 个键 · 写入数据 \(used)/3071 字节"
-            guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{macroSummary.stringValue=library+"\n当前步骤为空，可保存为空宏；绑定仍保留，解除绑定须另行操作。";return}
+            guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{setMacroSummary(library+"\n当前步骤为空，可保存为空宏；绑定仍保留，解除绑定须另行操作。");return}
             do{
                 let steps=try parsedMacroSteps(),macro=KeyboardMacro(name:macroName.stringValue,steps:steps)
                 var draft=profile;let index=macroPicker.indexOfSelectedItem-1
@@ -1224,9 +1229,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 let mode:[MacroPlayback.Mode]=[.count,.held,.toggle]
                 let playback=MacroPlayback(mode:mode[max(0,macroPlayback.indexOfSelectedItem)],count:count);try playback.validate()
                 let duration=playback.mode == .count ? "\(cycle*count) ms":"每轮 \(cycle) ms · 持续执行"
-                macroSummary.stringValue=library+"\n本次保存 \(next)/3071 字节 · \(steps.count) 步\n设定等待总量："+duration
-            }catch{macroSummary.stringValue=library+"\n本次保存："+error.localizedDescription}
-        }catch{macroSummary.stringValue="宏容量暂不可计算："+error.localizedDescription}
+                setMacroSummary(library+"\n本次保存 \(next)/3071 字节 · \(steps.count) 步\n设定等待总量："+duration)
+            }catch{setMacroSummary(library+"\n本次保存："+error.localizedDescription)}
+        }catch{setMacroSummary("宏容量暂不可计算："+error.localizedDescription)}
     }
     @objc func playbackChanged(){macroRepeat.isEnabled = !busy && macroPlayback.indexOfSelectedItem==0;updateMacroSummary()}
     @objc func assignMacro(){
@@ -1243,9 +1248,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         do{draft.macroStorageLayout = .officialBindings;draft.snapshot=try draft.resolvedMacros();profile=draft;update();updateMacroSummary();try persistMacroEditorDraft();message.stringValue="已启用扩展宏编辑，尚未写入。最多 762 个事件；多个键绑定同一宏会分别占用空间。未绑定宏保存在本机。"}
         catch{message.stringValue=error.localizedDescription}
     }
-    @objc func clearMacros(){guard var p=profile else{return};do{try p.clearMacros();profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏已从编辑区清空，原宏绑定键设为禁用；尚未写入，可撤销修改。"}catch{message.stringValue=error.localizedDescription}}
-    @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key) else{return};do{try p.unassignMacro(from:slot);profile=p;loadSelectedAssignment();update();try persistMacroEditorDraft();message.stringValue="已解除 \(key.label) 的宏绑定并设为禁用；宏库保留，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
-    @objc func deleteMacro(){guard var p=profile,macroPicker.indexOfSelectedItem>0 else{return};do{let name=p.macros[macroPicker.indexOfSelectedItem-1].name;try p.removeMacro(named:name);profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏已从编辑区删除；关联按键设为禁用，尚未写入键盘。"}catch{message.stringValue=error.localizedDescription}}
+    func chooseMacroRemoval(slots:[Int])->Bool?{
+        guard !slots.isEmpty else{return false};let canRestore=profile.map{p in slots.allSatisfy{(try? p.macroRemovalRecord(slot:$0,restoreDefault:true)) != nil}} ?? false
+        let alert=NSAlert();alert.messageText="解除宏后，按键执行什么？";alert.informativeText="将影响 \(slots.count) 个宏绑定键。恢复默认使用配置中的完整默认键位表；禁用会让这些键不产生输入。只更新编辑区与本机草稿，核对后需另行写入。";alert.addButton(withTitle:"恢复默认功能");alert.addButton(withTitle:"禁用这些键");alert.addButton(withTitle:"取消")
+        alert.buttons[0].isEnabled=canRestore;alert.buttons[0].toolTip=canRestore ? nil:"缺少完整默认映射或默认记录尚未支持，请先读取键盘。"
+        let choice=alert.runModal();if choice == .alertFirstButtonReturn{return true};if choice == .alertSecondButtonReturn{return false};return nil
+    }
+    @objc func clearMacros(){guard !busy,var p=profile,let restoreDefault=chooseMacroRemoval(slots:Array((p.macroBindings ?? [:]).keys)) else{return};do{try p.clearMacros(restoreDefault:restoreDefault);profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏库已清空，原绑定键已\(restoreDefault ? "恢复默认功能":"设为禁用")；尚未写入。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),p.macroBindings?[slot] != nil,let restoreDefault=chooseMacroRemoval(slots:[slot]) else{return};do{try p.unassignMacro(from:slot,restoreDefault:restoreDefault);profile=p;loadSelectedAssignment();update();try persistMacroEditorDraft();message.stringValue="已解除 \(key.label) 的宏绑定并\(restoreDefault ? "恢复默认功能":"设为禁用")；宏库保留，尚未写入。"}catch{message.stringValue=error.localizedDescription}}
+    @objc func deleteMacro(){guard !busy,var p=profile,macroPicker.indexOfSelectedItem>0 else{return};let name=p.macros[macroPicker.indexOfSelectedItem-1].name;guard let restoreDefault=chooseMacroRemoval(slots:(p.macroBindings ?? [:]).filter{$0.value==name}.map{$0.key}) else{return};do{try p.removeMacro(named:name,restoreDefault:restoreDefault);profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏已删除，关联键已\(restoreDefault ? "恢复默认功能":"设为禁用")；尚未写入。"}catch{message.stringValue=error.localizedDescription}}
     @objc func editPollingDraft(){
         guard !busy else{return}
         do{
