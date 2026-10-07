@@ -336,7 +336,7 @@ enum WindowsProfile {
             "ActionMacroType":mode,"ActionMacroLoopValue":selected.count,
             "ActionMacroFixTimeIsSelected":macro.recordingDelay?.fixed == true ? 1:0,
             "ActionMacroFixTimeValue":macro.recordingDelay?.milliseconds ?? 0,
-            "ActionMacroEvents":events.isEmpty ? NSNull():events]]
+            "ActionMacroEvents":events.isEmpty ? (NSNull() as Any):events]]
     }
     private static func macroEvents(_ content:[String:Any])throws->[[String:Any]] {
         guard let value=content["ActionMacroEvents"] else{throw HardwareError(message:"Windows 宏缺少事件字段。")}
