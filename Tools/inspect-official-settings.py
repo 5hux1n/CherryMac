@@ -2737,6 +2737,42 @@ def inspect_pairing_completion(pe):
         'limits':'Fixed executable static evidence only. Full descriptor association, enumeration updates, lifecycle and hardware acceptance are pending. No report bytes are generated, no hardware I/O is performed.'}
 
 
+def inspect_receiver_registration(pe):
+    """Recover the model's explicitly linked registry rows from real code."""
+    bodies = {
+        (0x412302,0x41230b):'4882de1451a45342b2845ce5e64b811d040b58a17dd4ab2cb5c2c480410be933',
+        (0x41239b,0x4123a4):'0c3c1764a3229841187a13fe3cc585f534ea66149a014d610f982d01af997c9f',
+        (0x412434,0x41243d):'7eef89df2d0d38d57a912818c4156f4af255334885b48d2e7ffdc793d88e01a6',
+        (0x49780f,0x4978dc):'43619a31631afeee94b9d67ba55b79a62310462550bc5ef7296f46956a812bf7',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Receiver registration or matching code differs")
+    keyboard=[(0x4120b1,0x412128,0x83b148),(0x412147,0x4121c1,0x83b1e8),(0x4121e0,0x41225a,0x83b288)]
+    receiver=[(0x412279,0x4122f0,0x83b328),(0x41230f,0x412389,0x83b3c8),(0x4123a8,0x412422,0x83b468)]
+    rows=[]
+    for idx, (left,right) in enumerate(zip(keyboard,receiver)):
+        kw=initialized_words(pe,*left)
+        rw=initialized_words(pe,*right)
+        expected=[0x046a,0x01cf,0,[4,3,5][idx],8,[0,0xff,0xfe][idx],0,[0xff1c,0xc,0xff1c][idx],[0x92,1,0x92][idx],1,126+idx]
+        if rw!=expected or kw[10]!=129+idx or kw[9]!=1:
+            raise ValueError("Target receiver registry relationship differs")
+        ki=(left[2]-0x836288)//160
+        ri=(right[2]-0x836288)//160
+        if kw[10]!=ri or rw[10]!=ki:
+            raise ValueError("Registry links are not reciprocal")
+        rows.append({'keyboardIndex':ki,'receiverIndex':ri,'keyboardRow':hex(left[2]),
+                     'receiverRow':hex(right[2]),'receiverWords':rw,
+                     'reciprocalLinks':True,'receiverCommandSelectorInitialValue':0})
+    return {'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+            'vendorID':0x046a,'keyboardProductID':0x01ce,'linkedProductID':0x01cf,'rows':rows,
+            'matching':{'range':'0x49780f..0x4978dc',
+                        'fields':['VID','PID','collection number','interface number','usage page','usage'],
+                        'assignedOffsets':['0x08 connection selector','0x0a secondary selector'],
+                        'limits':'This matched branch assigns two fields only; not a census of enumeration mutations'},
+            'limits':'Static registry association for this fixed official version. Does not prove current attachment, same physical pair, stable selection among duplicate devices or accepted browser reports. No device discovery or hardware I/O.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2858,7 +2894,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 58,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 59,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2870,6 +2906,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "dongleModelGate": inspect_dongle_model_gate(pe),
         "pairingTransportRoutes": inspect_pairing_transport_routes(pe),
         "pairingCompletion": inspect_pairing_completion(pe),
+        "receiverRegistration": inspect_receiver_registration(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
