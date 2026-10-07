@@ -2546,6 +2546,75 @@ def inspect_factory_command_methods(pe):
         'limits':'Declared model vtable and named methods only. Full user-visible triggers, transport-selector state, all callers, current firmware equivalence and reset persistence remain unproved. Do not substitute these methods for normal Windows default behavior; no hardware execution or new send authorization.'}
 
 
+def inspect_dongle_pairing_entry(pe, skin=None):
+    """Connect the selected-command caller to the actual dongle pairing control."""
+    bodies = {
+        (0x4251fa,0x425283):'9f3122510554cfacb38661dda148270064c16dc3d28ac3aed904eb4e6236ab01',
+        (0x4941bc,0x4941e6):'a2da329009e1dfb148db0abaafb7c0b85cac353c1270634942f925eb8eab99db',
+        (0x48b27a,0x48b29f):'b0a3f13a3eecf4b3681eb0ff581650e771be27e3a10ef4b6beefb6926145481f',
+        (0x4b654e,0x4b65f4):'c03e9f893f45b3e8678e02a918d3b3f5723a512f6b1842796c021b9e744b0ecd',
+        (0x4b65fc,0x4b66a5):'53913af70ddf069948276387ac1a9c71f892d47e890b13c7bc8546417da46ec2',
+        (0x545210,0x5452c4):'64f068f70b9f9a747b797e96914e5a1b5c47d026339d9b67ecc22271594e1607',
+        (0x5452d0,0x54531c):'0ce6bcb61c6bc90dabadd029bdb1c28adfced661091e726802aaefd3998efb44',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Dongle pairing entry code differs")
+    strings = {0x72B8A8:'dongle_match_btn',0x74B25C:'message_text_32',0x74B2E4:'message_text_33'}
+    for address, value in strings.items():
+        raw=(value+'\0').encode('utf-16le')
+        if pe.at(address,len(raw)) != raw:
+            raise ValueError("Dongle pairing control/message key differs")
+    for slot, name in [(0x6ebc90, b'CreateFileW\0'), (0x6ebd04, b'CloseHandle\0')]:
+        if pe.at(pe.base+pe.pointer(slot)+2, len(name)) != name:
+            raise ValueError("Pairing interface opening import differs")
+    resource = None
+    if skin is not None:
+        data=(Path(skin)/'KbBasicSetWnd.xml').read_bytes()
+        if len(data)>500_000:
+            raise ValueError("Dongle pairing resource exceeds bound")
+        # Official DuiLib markup contains duplicate style attributes, so use the
+        # same bounded opening-tag scan as inspect_basic_settings_dialog.
+        markup=re.sub(r"<!--.*?-->", "", data.decode('utf-8'), flags=re.S)
+        controls={}
+        for tag in re.finditer(r"<([A-Za-z_][A-Za-z_0-9:]*)\b([^<>]*)>", markup):
+            attrs=dict(re.findall(r'\b([A-Za-z_][A-Za-z_0-9]*)="([^"<>]*)"', tag[2]))
+            if 'name' in attrs:
+                controls.setdefault(attrs['name'], []).append((tag[1], attrs))
+        selected={}
+        for name, kind in [('dongle_match_layout','VerticalLayout'), ('dongle_match_btn','Button')]:
+            matches=controls.get(name, [])
+            if len(matches)!=1 or matches[0][0]!=kind:
+                raise ValueError("Dongle pairing resource is absent, ambiguous or has a different type")
+            selected[name]=matches[0][1]
+        layout=selected['dongle_match_layout']
+        button=selected['dongle_match_btn']
+        resource={'sha256':hashlib.sha256(data).hexdigest(),
+                  'method':'Bounded opening-tag attribute scan of official DuiLib markup',
+                  'layout':layout['name'],'initialVisible':layout.get('visible'),
+                  'button':button['name'],'initialEnabled':button.get('enabled'),
+                  'captionKey':button.get('text')}
+    return {
+        'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
+        'control':'dongle_match_btn','resource':resource,
+        'messageChain':{'buttonBranch':'0x4251fa','sendMessage':3106,'mainBranch':'0x4941bc',
+                        'timerID':1040,'timerIntervalArgument':1000,'timerBranch':'0x48b27a',
+                        'workflowCall':'0x48b295 -> 0x4b61a0'},
+        'firstTransport':{'member':'0xa8c','open':'0x5452d0','conditionalVirtualCall':'0x4b65ec; offset0x31c argument1'},
+        'secondTransport':{'member':'0xd64','open':'0x5452d0','conditionalVirtualCall':'0x4b669d; offset0x31c argument2'},
+        'interfaceOpening':{'wrapper':'0x5452d0','implementation':'0x545210',
+                            'pathStorageOffset':'0x20','handleOffset':'0x1c',
+                            'callArgumentsAfterPath':[1,1,1,0],
+                            'createFileImport':'0x6ebc90 CreateFileW',
+                            'desiredAccess':'0xc0000000','shareMode':3,'creationDisposition':3,
+                            'flagsAndAttributes':'0x40000000',
+                            'postOpenCheck':'0x5447a0 must return nonzero; otherwise handle is closed',
+                            'limits':'Opening flags are statically derived from the two shown calls. Device path identity, post-open check internals and transport selector remain unproved.'},
+        'hostModeStores':'The intervening 0x4de960 calls use arguments 1 and 2 and update members +0x684/+0x690 as already pinned by settingsStatusPredicate. They do not establish the separate +0x44 command selector',
+        'resultMessageKeys':['message_text_32','message_text_33'],
+        'limits':'Named button/message/transport workflow only. Initial hidden/disabled XML is not a target-model visibility decision. Full applicability, opened interfaces, +0x44 selector state, pairing reports and persistence still require correlation. Not ordinary default restoration or an implemented pairing feature; no hardware access.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2667,7 +2736,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 54,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 55,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2675,6 +2744,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsStructureLayouts": inspect_settings_layouts(pe),
         "lightParameterSettingsSources": inspect_light_parameter_settings_sources(pe),
         "factoryCommandMethods": inspect_factory_command_methods(pe),
+        "donglePairingEntry": inspect_dongle_pairing_entry(pe, skin),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
