@@ -2699,6 +2699,44 @@ def inspect_pairing_transport_routes(pe):
         'limits':'Initial registry values and named dispatch only. Enumeration mutation, actual selected path identities, successful I/O and pairing persistence are unproved. No pairing requests are generated or sent.'}
 
 
+def inspect_pairing_completion(pe):
+    """Identify the official polling predicate independently of start replies."""
+    bodies = {
+        (0x4b66a5,0x4b6712):'7882977c23a6806f6242abdd2283e9a46211ee7fadcb82ce19c4d2743464b4d5',
+        (0x4b6751,0x4b680f):'aa0b52450f45d120ebebfd26fbbee440843801bbcb93117c2a7382a2b96a1988',
+        (0x4dde50,0x4de0a4):'e7f417a902a0d11e0c51e3dc4908e6bf8dc1ec056d8d3d6a8ac0c8f3235e156c',
+        (0x4df090,0x4df2bb):'d2397be9d90a2665e87b2d770ca0db411506a9410bab7464b29ccf3755a22769',
+        (0x4b680f,0x4b682b):'3b72a551038f4156e3c657b455b82e1897ac5aa49a71be75002452dae7b1e028',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Pairing completion code differs")
+    imported=b'Sleep\0'
+    if pe.at(pe.base+pe.pointer(0x6ebcf4)+2,len(imported)) != imported:
+        raise ValueError("Pairing polling delay import differs")
+    return {
+        'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+        'polling':{'workflow':'0x4b66a5..0x4b6712','helper':'0x4dde50',
+                   'maximumCalls':5,'delayAfterFalseMilliseconds':2000,
+                   'successMessage':'message_text_32','failureMessage':'message_text_33',
+                   'limits':'I/O wait adds to Sleep; this is not a fixed total ten-second timeout'},
+        'query':{'reportLength':64,'reportID':4,'command':170,
+                 'zeroFilledBeforeFields':True,'checksum':'Sum bytes3..63 stored little-endian at bytes1..2',
+                 'transportCall':'0x4ddff2 -> 0x4d9380',
+                 'successConditions':['exchange return equals1','reply byte8 equals0xff',
+                                      'reply byte7 is neither0xff nor0xfe'],
+                 'zeroRouteException':'If communication+0x684 is zero, helper returns true without sending; the shown pairing poll follows host mode2, which stores +0x684=1',
+                 'limits':'Offsets include report ID at byte0. Predicate does not establish durable pairing or current hardware behavior.'},
+        'secondStagePreparation':{'helper':'0x4df090','selector':'communication word+0x44',
+                                  'commandBySelector':{'1':'0xa0','other':'0x20'},
+                                  'transportCall':'0x4df233 -> 0x4d9380',
+                                  'errorStatus':{'0xff':-102,'0xfe':-103},
+                                  'wrapperCaveat':'0x512fbc return is not checked before 0x512fca starts the next method'},
+        'routeRestoration':{'branch':'0x4b680f','condition':'saved local -0x40c equals0',
+                            'action':'0x4b6826 calls host mode setter0x4de960 with1'},
+        'limits':'Fixed executable static evidence only. Full descriptor association, enumeration updates, lifecycle and hardware acceptance are pending. No report bytes are generated, no hardware I/O is performed.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2820,7 +2858,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 57,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 58,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2831,6 +2869,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "donglePairingEntry": inspect_dongle_pairing_entry(pe, skin),
         "dongleModelGate": inspect_dongle_model_gate(pe),
         "pairingTransportRoutes": inspect_pairing_transport_routes(pe),
+        "pairingCompletion": inspect_pairing_completion(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
