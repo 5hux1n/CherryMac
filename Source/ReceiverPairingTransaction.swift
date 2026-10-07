@@ -8,7 +8,7 @@ struct ReceiverPairingTransaction {
         case backup, keyboardStart, receiverPrepare, receiverStart, polling
         case configurationCheck, completed, failed, cancelled
     }
-    struct Event: Codable {
+    struct Event: Codable, Equatable {
         let sequence: Int
         let phase: Phase
         let action: String
