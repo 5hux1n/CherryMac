@@ -415,21 +415,26 @@ struct OfficialMacroDraftReceipt:Codable,Equatable {
     let macros:[KeyboardMacro]
     let bindings:[Int:String]
     let modes:[Int:MacroPlayback]
+    let removedKeyAssignments:[Int:[UInt8]]?
     let layout:OfficialMacroStorageLayout
     let expected:HardwareSnapshot
     static func prepare(before:HardwareSnapshot,factoryKeymap:[UInt8],macros:[KeyboardMacro],
-                        bindings:[Int:String],modes:[Int:MacroPlayback])throws->Self {
+                        bindings:[Int:String],modes:[Int:MacroPlayback],removedKeyAssignments:[Int:[UInt8]]?=nil)throws->Self {
         try before.validate()
         guard let originalBank=before.macroData else{throw HardwareError(message:"保存宏草稿对应关系需要完整原始宏区。")}
         let header=originalBank[0]==0xAA && originalBank[1]==0x55 ? Array(originalBank[6..<16]):[]
         let layout=try OfficialMacroStorageLayout.prepare(macros:macros,bindings:bindings,modes:modes,
             factoryKeymap:factoryKeymap,deviceInfo:before.deviceInfo,headerReserved:header)
+        for (slot,record) in removedKeyAssignments ?? [:]{
+            guard (0..<126).contains(slot),![6,71].contains(slot),bindings[slot]==nil,[UInt8(0x70),0x71].contains(before.keymap[slot*3]),record.count==3,
+                  (record[0]==0x20 && (record[2]==0 || (4..<224).contains(record[2]))) || record[0]==0x30 else{throw HardwareError(message:"解绑后的按键记录无效或超出宏写入范围。")}
+        }
         var expected=before
-        // Explicitly removed macro bindings become disabled keys. Ordinary
-        // keys remain the baseline; this is a macro-only target, not all drafts.
+        // Overrides are restricted to removed baseline macros. Ordinary keys
+        // retain the true baseline; legacy receipts still disable removals.
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(before.keymap[slot*3]) && bindings[slot]==nil {
             guard ![6,71].contains(slot) else{throw HardwareError(message:"原宏覆盖内部键，停止转换。")}
-            expected.keymap.replaceSubrange(slot*3..<slot*3+3,with:[UInt8(0x20),0,0])
+            expected.keymap.replaceSubrange(slot*3..<slot*3+3,with:removedKeyAssignments?[slot] ?? [UInt8(0x20),0,0])
         }
         for record in layout.records {
             expected.keymap.replaceSubrange(record.physicalSlot*3..<record.physicalSlot*3+3,with:record.binding)
@@ -438,11 +443,11 @@ struct OfficialMacroDraftReceipt:Codable,Equatable {
             var target=originalBank;target.replaceSubrange(0..<layout.usedBytes,with:bank.prefix(layout.usedBytes));expected.macroData=target
         }
         return .init(format:"CherryMacOfficialMacroDraftReceipt",version:1,hardwareReady:false,
-            before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes,layout:layout,expected:expected)
+            before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes,removedKeyAssignments:removedKeyAssignments?.isEmpty == false ? removedKeyAssignments:nil,layout:layout,expected:expected)
     }
     func validate()throws {
         guard format=="CherryMacOfficialMacroDraftReceipt",version==1,!hardwareReady else{throw HardwareError(message:"官方宏草稿记录格式或版本无效。")}
-        let rebuilt=try Self.prepare(before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes)
+        let rebuilt=try Self.prepare(before:before,factoryKeymap:factoryKeymap,macros:macros,bindings:bindings,modes:modes,removedKeyAssignments:removedKeyAssignments)
         guard rebuilt==self else{throw HardwareError(message:"宏草稿记录与重新生成的绑定、存储数据不一致。")}
     }
     struct Readback:Codable,Equatable {

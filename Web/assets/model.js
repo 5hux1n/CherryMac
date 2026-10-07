@@ -1167,16 +1167,22 @@ export function prepareOfficialMacroStorage({macros,bindings,modes={},factoryKey
 
 // This record preserves names and unbound drafts across per-binding storage.
 // It is neither a HID authorization nor proof of an actual device transaction.
-export function prepareOfficialMacroDraftReceipt({before,factoryKeymap,macros,bindings,modes={}}){
+export function prepareOfficialMacroDraftReceipt({before,factoryKeymap,macros,bindings,modes={},removedKeyAssignments=null}){
   validateSnapshot(before);requireThat(bytes(before.macroData,3071),'保存宏草稿对应关系需要完整原始宏区。');
   const headerReserved=before.macroData[0]===0xaa&&before.macroData[1]===0x55?before.macroData.slice(6,16):[];
   const layout=prepareOfficialMacroStorage({macros,bindings,modes,factoryKeymap,deviceInfo:before.deviceInfo,headerReserved}),expected=clone(before);
+  if(removedKeyAssignments!=null){
+    requireThat(typeof removedKeyAssignments==='object'&&!Array.isArray(removedKeyAssignments),'解绑后的按键记录无效。');
+    for(const [key,record] of Object.entries(removedKeyAssignments)){
+      const slot=Number(key);requireThat(/^(0|[1-9]\d*)$/.test(key)&&slot<126&&![6,71].includes(slot)&&!Object.hasOwn(bindings,slot)&&[0x70,0x71].includes(before.keymap[slot*3])&&bytes(record,3)&&((record[0]===0x20&&(record[2]===0||record[2]>=4&&record[2]<224))||record[0]===0x30),'解绑后的按键记录无效或超出宏写入范围。');
+    }
+  }
   for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(before.keymap[slot*3])&&!Object.hasOwn(bindings,slot)){
-    requireThat(![6,71].includes(slot),'原宏覆盖内部键，停止转换。');expected.keymap.splice(slot*3,3,0x20,0,0);
+    requireThat(![6,71].includes(slot),'原宏覆盖内部键，停止转换。');expected.keymap.splice(slot*3,3,...(removedKeyAssignments?.[slot]??[0x20,0,0]));
   }
   for(const r of layout.records)expected.keymap.splice(r.physicalSlot*3,3,...r.binding);
   if(layout.bank!==null)expected.macroData.splice(0,layout.usedBytes,...layout.bank.slice(0,layout.usedBytes));
-  return clone({format:'CherryMacOfficialMacroDraftReceipt',version:1,hardwareReady:false,before,factoryKeymap,macros,bindings,modes,layout,expected});
+  return clone({format:'CherryMacOfficialMacroDraftReceipt',version:1,hardwareReady:false,before,factoryKeymap,macros,bindings,modes,...(removedKeyAssignments&&Object.keys(removedKeyAssignments).length?{removedKeyAssignments}:{}),layout,expected});
 }
 export function validateOfficialMacroDraftReceipt(receipt){
   requireThat(receipt?.format==='CherryMacOfficialMacroDraftReceipt'&&receipt.version===1&&receipt.hardwareReady===false,'官方宏草稿记录格式或版本无效。');
@@ -1198,7 +1204,9 @@ export function officialMacroReceipt(profile,before=profile.snapshot){
   validateProfile(profile);requireThat(equal(profile.snapshot.deviceInfo,before.deviceInfo),'配置来自不同固件，请重新读取。');
   requireThat(profile.lightingMapping&&equal(profile.lightingMapping.deviceInfo,before.deviceInfo),'官方宏写入需要重新读取完整默认键位映射。');
   requireThat(profile.macroBindings!=null,'未知宏不能覆盖，请先读取完整配置。');
-  return prepareOfficialMacroDraftReceipt({before,factoryKeymap:profile.lightingMapping.factoryKeymap,macros:profile.macros,bindings:profile.macroBindings,modes:profile.macroModes??{}});
+  const removedKeyAssignments={};
+  for(let slot=0;slot<126;slot++)if([0x70,0x71].includes(before.keymap[slot*3])&&!Object.hasOwn(profile.macroBindings,slot)&&![0x70,0x71].includes(profile.snapshot.keymap[slot*3]))removedKeyAssignments[slot]=profile.snapshot.keymap.slice(slot*3,slot*3+3);
+  return prepareOfficialMacroDraftReceipt({before,factoryKeymap:profile.lightingMapping.factoryKeymap,macros:profile.macros,bindings:profile.macroBindings,modes:profile.macroModes??{},removedKeyAssignments:Object.keys(removedKeyAssignments).length?removedKeyAssignments:null});
 }
 export function macroStorageUsage(profile){
   if(profile.macroStorageLayout==='officialBindings')return officialMacroReceipt(profile).layout.usedBytes;

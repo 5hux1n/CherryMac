@@ -149,7 +149,11 @@ struct HardwareProfile: Codable, Equatable {
         guard snapshot.deviceInfo==original.deviceInfo else{throw HardwareError(message:"配置来自不同固件，请重新读取。") }
         guard let mapping=lightingMapping,mapping.deviceInfo==original.deviceInfo else{throw HardwareError(message:"官方宏写入需要重新读取完整默认键位映射。")}
         guard let bindings=macroBindings else{throw HardwareError(message:"未知宏不能覆盖，请先读取完整配置。")}
-        return try OfficialMacroDraftReceipt.prepare(before:original,factoryKeymap:mapping.factoryKeymap,macros:macros,bindings:bindings,modes:macroModes ?? [:])
+        var removed:[Int:[UInt8]]=[:]
+        for slot in 0..<126 where [UInt8(0x70),0x71].contains(original.keymap[slot*3]) && bindings[slot]==nil && ![UInt8(0x70),0x71].contains(snapshot.keymap[slot*3]){
+            removed[slot]=Array(snapshot.keymap[slot*3..<slot*3+3])
+        }
+        return try OfficialMacroDraftReceipt.prepare(before:original,factoryKeymap:mapping.factoryKeymap,macros:macros,bindings:bindings,modes:macroModes ?? [:],removedKeyAssignments:removed.isEmpty ? nil:removed)
     }
     func macroStorageUsage()throws->Int {
         if macroStorageLayout == .officialBindings{return try officialMacroReceipt().layout.usedBytes}
