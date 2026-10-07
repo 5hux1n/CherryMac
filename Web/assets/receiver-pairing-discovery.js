@@ -22,6 +22,7 @@ export class ReceiverPairingDiscovery {
     return this.candidates;
   }
   get candidates(){return [...this.#entries.values()].map(candidate=>({...candidate}));}
+  candidateFor(device){const candidate=this.#entries.get(device);return candidate?{...candidate}:null;}
   remove(device){this.#entries.delete(device);}
   clear(){this.#entries.clear();}
   resolve(selection={}){
