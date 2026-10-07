@@ -17,8 +17,8 @@ TASK_PREVIEW_APP_NAME="CherryMacMacroPreview.app"
 TASK_PREVIEW_IDENTIFIER="local.cherrymac.macro-product-preview"
 TASK_PREVIEW_DISPLAY="CherryMac Macro & Text Preview"
 TASK_PREVIEW_BUNDLE_NAME="CherryMac Macro Preview"
-TASK_PREVIEW_VERSION="0.50.0"
-TASK_PREVIEW_BUILD="52"
+TASK_PREVIEW_VERSION="0.51.0"
+TASK_PREVIEW_BUILD="53"
 TASK_PREVIEW_FLAGS=(-D CHERRY_MACRO_PRODUCT)
 if [[ $# -eq 2 ]]; then
     TASK_PREVIEW_APP_NAME="CherryMacLightingAcceptance.app"

@@ -2397,6 +2397,50 @@ def inspect_macro_binding_collection_and_editor_limit(pe):
             "limits": "Static named official paths. Editor per-macro limit is separate from total bound-record byte capacity. Does not establish firmware execution of 762 events or authorize expanded writes. CherryMac currently uses a shared library and 32/256 policy; migration of existing profiles requires explicit compatibility handling."}
 
 
+def inspect_macro_step_list_actions(pe):
+    """Pin current-step toolbar dispatch, distinct from the ActionInfo library."""
+    bodies = {
+        (0x4B4400, 0x4B446F): "3cf7a8d16cc32ef93bf7371703b1ee7f9e9c27cef3a385300a449069620ed378",
+        (0x4B4470, 0x4B44DF): "3dc873765b33a3c93dbe580a2ef018c852e74020e2900e39a0d7b4aa053d6770",
+        (0x4B44E0, 0x4B454F): "ba49fe4def92b982cb2e3a6d91622f03ca3b6aa7a968690c485d152d5b880f43",
+        (0x450CE0, 0x450D87): "7942ab47552fecbe4f420f8645d80befdcd986eea1393c229edd01c970e187ec",
+        (0x450D90, 0x450E11): "7fdadbb691ec02b104c497f006f90ea82370908a4d142eb2cb720531f4ad52a5",
+        (0x450E20, 0x451A64): "537720741680aa6fc63358b8efc1006109f331f7ce446532db7675cf8783367b",
+    }
+    for (start, end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != expected:
+            raise ValueError("Unexpected macro step toolbar body")
+    checks = {
+        0x48ED6A: "6874d87400",
+        0x48ED85: "e876560200",
+        0x48ED8F: "6898d87400",
+        0x48EDAA: "e8c1560200",
+        0x48EDB4: "6834d87400",
+        0x48EDCF: "e80c570200",
+        0x450CE9: "688cab7300",
+        0x450D33: "8b82f00600008b501cffd2",
+        0x450D99: "688cab7300",
+        0x450DBD: "8b82f00600008b5020ffd2",
+        0x450E9D: "688cab7300",
+        0x451072: "8b8d88fbffff518b95d0fbffff528b8dc8fbffff81c1f00600008b85c8fbffff8b90f00600008b4214",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected macro step toolbar dispatch")
+    for address, value in [(0x74D874, "macro_btn_delete"), (0x74D898, "macro_btn_deleteall"),
+                           (0x74D834, "macro_btn_copy"), (0x73AB8C, "macro_action_list")]:
+        raw = (value + "\0").encode("utf-16le")
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError("Unexpected macro step toolbar resource name")
+    return {"instructionChecks": len(checks),
+            "functionBodies": [{"method": hex(a), "endExclusive": hex(b), "SHA256": h} for (a,b),h in bodies.items()],
+            "delete": {"dispatch": "0x48ed85 -> 0x4b4400 -> 0x450ce0", "list": "macro_action_list", "operation": "selected index through list+0x868; removal dispatch list+0x6f0 vtable+0x1c"},
+            "clear": {"dispatch": "0x48edaa -> 0x4b4470 -> 0x450d90", "list": "macro_action_list", "operation": "list+0x6f0 vtable+0x20; selection reset to -1"},
+            "copy": {"dispatch": "0x48edcf -> 0x4b44e0 -> 0x450e20", "list": "macro_action_list", "operation": "reads selected item, creates a new event item and inserts at the same selected index through list+0x6f0 vtable+0x14"},
+            "scope": "These named toolbar paths edit the current macro event list, not the complete ActionInfo macro library; both wrapper type 1/2 branches use the same control handlers.",
+            "limits": "Static named dispatch/control paths only; does not prove all model visibility, later save semantics, firmware persistence or hardware execution."}
+
+
 def inspect_macro_mouse_search_bounds(pe):
     """Check named mouse-table search bounds and separate toolbar forwarding."""
     checks = {
@@ -2910,7 +2954,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 60,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 61,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2949,6 +2993,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
+        "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),
         "macroBindingCollectionAndEditorLimit": inspect_macro_binding_collection_and_editor_limit(pe),

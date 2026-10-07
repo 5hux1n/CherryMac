@@ -15,21 +15,22 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     var finished=false
     init(steps:[KeyboardMacro.Step],choices:[KeyChoice],maximumEvents:Int=762,completion:@escaping([KeyboardMacro.Step]?)->Void){
         self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.choices=choices;self.maximumEvents=maximumEvents;self.completion=completion
-        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:510),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:552),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         super.init(window:window);window.title="编辑宏步骤";window.delegate=self
-        let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:780,height:510));window.contentView=view
+        let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:780,height:552));window.contentView=view
         for (id,title,width) in [("number","步骤",48.0),("key","按键",305.0),("state","动作",130.0),("delay","事件后等待（毫秒）",210.0)]{
             let column=NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)
         }
         table.delegate=self;table.dataSource=self;table.rowHeight=32;table.intercellSpacing=NSSize(width:8,height:3);table.allowsMultipleSelection=false
         let scroll=NSScrollView(frame:NSRect(x:18,y:18,width:744,height:346));scroll.hasVerticalScroller=true;scroll.borderType = .bezelBorder;scroll.documentView=table;view.addSubview(scroll)
-        func button(_ title:String,_ action:Selector,_ x:CGFloat,_ width:CGFloat,tag:Int=0){let b=NSButton(title:title,target:self,action:action);b.frame=NSRect(x:x,y:378,width:width,height:30);b.tag=tag;view.addSubview(b)}
+        func button(_ title:String,_ action:Selector,_ x:CGFloat,_ width:CGFloat,tag:Int=0,y:CGFloat=378){let b=NSButton(title:title,target:self,action:action);b.frame=NSRect(x:x,y:y,width:width,height:30);b.tag=tag;view.addSubview(b)}
         button("添加按下／松开",#selector(addPair),18,160);button("删除",#selector(deleteStep),188,64)
+        button("复制所选步骤",#selector(copyStep),18,160,y:416);button("清空本宏步骤",#selector(clearSteps),188,160,y:416)
         for (index,title) in ["置顶","上移","下移","置底"].enumerated(){button(title,#selector(moveStep),268+CGFloat(index)*76,68,tag:index)}
         insertion.addItems(withTitles:["末尾追加","所选步骤前插入","所选步骤后插入"]);insertion.frame=NSRect(x:588,y:378,width:174,height:30);insertion.setAccessibilityLabel("新增步骤的位置");view.addSubview(insertion)
-        message.frame=NSRect(x:18,y:424,width:470,height:66);message.font = .systemFont(ofSize:12);view.addSubview(message)
-        let cancel=NSButton(title:"取消",target:self,action:#selector(cancel));cancel.frame=NSRect(x:506,y:448,width:90,height:32);view.addSubview(cancel)
-        let apply=NSButton(title:"采用步骤",target:self,action:#selector(apply));apply.frame=NSRect(x:608,y:448,width:152,height:32);view.addSubview(apply)
+        message.frame=NSRect(x:18,y:462,width:470,height:66);message.font = .systemFont(ofSize:12);view.addSubview(message)
+        let cancel=NSButton(title:"取消",target:self,action:#selector(cancel));cancel.frame=NSRect(x:506,y:486,width:90,height:32);view.addSubview(cancel)
+        let apply=NSButton(title:"采用步骤",target:self,action:#selector(apply));apply.frame=NSRect(x:608,y:486,width:152,height:32);view.addSubview(apply)
         table.reloadData()
     }
     required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
@@ -59,6 +60,17 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         steps.insert(contentsOf:[.init(usage:key.usage,pressed:true,delayMilliseconds:50,kind:key.kind),.init(usage:key.usage,pressed:false,delayMilliseconds:0,kind:key.kind)],at:index)
         delays.insert(contentsOf:["50","0"],at:index);select(index);message.stringValue="已插入按下／松开；原步骤和等待保留，采用时检查事件配对。"
     }
+    @objc func copyStep(){
+        window?.makeFirstResponder(nil);let row=table.selectedRow
+        guard steps.indices.contains(row) else{message.stringValue="请先选中要复制的步骤。";return}
+        guard steps.count<maximumEvents else{message.stringValue="最多 \(maximumEvents) 个事件，请先删除部分步骤。";return}
+        steps.insert(steps[row],at:row);delays.insert(delays[row],at:row);select(row)
+        message.stringValue="已在原步骤前插入副本，等待值保留；采用时检查按下与松开配对。"
+    }
+    @objc func clearSteps(){
+        window?.makeFirstResponder(nil);steps=[];delays=[];select(-1)
+        message.stringValue="本宏步骤已清空；可添加新步骤。取消会保留原步骤，不删除宏库或绑定。"
+    }
     @objc func deleteStep(){window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row) else{return};steps.remove(at:row);delays.remove(at:row);select(min(row,steps.count-1))}
     @objc func moveStep(_ sender:NSButton){
         window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row),(0...3).contains(sender.tag) else{return}
@@ -69,7 +81,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         window?.makeFirstResponder(nil)
         do{var result=steps
             for index in result.indices{guard let delay=Int(delays[index]),(0...60000).contains(delay) else{throw HardwareError(message:"步骤 \(index+1) 的等待须为 0…60000 毫秒整数。")};result[index].delayMilliseconds=delay}
-            try KeyboardMacro(name:"步骤编辑",steps:result).validate(maximumEvents:maximumEvents);finish(result)
+            if !result.isEmpty{try KeyboardMacro(name:"步骤编辑",steps:result).validate(maximumEvents:maximumEvents)};finish(result)
         }catch{message.stringValue=error.localizedDescription}
     }
     func finish(_ result:[KeyboardMacro.Step]?){guard !finished else{return};finished=true;if let window{window.sheetParent?.endSheet(window);window.orderOut(nil)};completion(result)}
