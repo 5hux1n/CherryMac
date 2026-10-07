@@ -2773,6 +2773,22 @@ def inspect_receiver_registration(pe):
             'limits':'Static registry association for this fixed official version. Does not prove current attachment, same physical pair, stable selection among duplicate devices or accepted browser reports. No device discovery or hardware I/O.'}
 
 
+def inspect_pairing_path_assignment(pe):
+    start,end=0x497903,0x497a90
+    digest='7ae24b47c98713c55bd0a44ca6669531e44e05a997e95c177747a91806a45592'
+    if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+        raise ValueError("Pairing path assignment differs")
+    name=b'?IsEmpty@CDuiString@DuiLib@@QBE_NXZ\0'
+    if pe.at(pe.base+pe.pointer(0x6eb87c)+2,len(name))!=name:
+        raise ValueError("Path availability check differs")
+    return {'codeSHA256':digest,'range':'0x497903..0x497a90',
+            'matching':['VID','PID','collection','interface','usagePage','usage'],
+            'availability':'row word+0x0c equals0 and string+0x18 IsEmpty returns true',
+            'assignment':'store word+0x0c=1, assign input string+0x18 to row string+0x18, return row index through argument2',
+            'selection':'First matching available row, then exits loop',
+            'limits':'Named assignment path only; no serial-based association in this path, not proof of all multi-device behavior. Product selection must retain explicit current-interface identity.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2894,7 +2910,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 59,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 60,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2907,6 +2923,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "pairingTransportRoutes": inspect_pairing_transport_routes(pe),
         "pairingCompletion": inspect_pairing_completion(pe),
         "receiverRegistration": inspect_receiver_registration(pe),
+        "pairingPathAssignment": inspect_pairing_path_assignment(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
