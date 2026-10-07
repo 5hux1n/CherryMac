@@ -12,6 +12,59 @@ EXPECTED_SHA256 = "188836c15eb1560d0282ae3c2485b4a4d2edd5dfb69a91d4510b273c61047
 IMAGE_SHA256 = "31d0a07361ad531fa16867412d46e496737b126efc90482f86baa7e6bd5051bd"
 
 
+def inspect_macro_event_dispatch_and_release(image):
+    """Pin the event TBB table and separate held-state cleanup, without execution."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):
+            raise ValueError("Macro event path exceeds fixed image")
+        return image[offset:offset+size]
+    bodies={
+        (0x2F6C4,0x2F76C):"0ebd672b9ec709ab91e10fd4a94d1e75fa37c39e70ad7675dc22513da39398a0",
+        (0x2F7FC,0x2F954):"da655abe4bcd1c6e334e920627f65d903a8307188fcff3d1ce30b6c6552e8dfd",
+    }
+    for (start,end),expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=expected:
+            raise ValueError("Unexpected macro event/release segment")
+    checks={
+        0x2F7D6:"a17894f902001a80654d01f07f03c217013b2a70092b3fd8dfe803f0",
+        0x2F85A:"002866db4a4be278da7000221a71484b01221a7000232b7070bd",
+        0x2F8EE:"002824db254be2785a7000229a70b4e7",
+        0x2F92C:"e378164aff21117153b15b42d37095e7e378124aff21917023b15b4253708de7d3708be7537089e7",
+        0x2F6D2:"284e012b",
+        0x2F6EE:"092a28d0012a2dd0402b4ff0010133d016f8132017f81300dcb2651c0a2a03f10103edb2ecd1",
+        0x2F728:"98f800502ab206eb450306f812405c703f2d8cbf00200120bde8f081",
+    }
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Unexpected macro event/release instruction")
+    table=at(0x2F7F2,10)
+    if table!=bytes.fromhex("6c5a867e343e3e3e7551"):
+        raise ValueError("Unexpected macro event TBB table")
+    expected={0x2F774:0x20004B7C,0x2F77C:0x20009B2D,0x2F968:0x200054EC,0x2F988:0x20004C3C}
+    for address,value in expected.items():
+        if struct.unpack("<I",at(address,4))[0]!=value:
+            raise ValueError("Unexpected macro state/bank pointer")
+    return {'instructionChecks':len(checks),
+            'codeSegments':[{'start':hex(a),'endExclusive':hex(b),'SHA256':h} for (a,b),h in bodies.items()],
+            'eventDispatch':{'table':'0x2f7f2..0x2f7fc','dataNotInstructions':True,
+                'entries':[{'type':i+1,'target':hex(0x2F7F2+2*v)} for i,v in enumerate(table)],
+                'index':'event type byte & 0x7f, minus 1; >9 bypasses dispatch'},
+            'axisFields':{'type4':{'target':'0x2f8ee','destination':'0x20004c3c+1/+2'},
+                          'type5':{'target':'0x2f85a','destination':'0x20004c3c+3/+4'},
+                          'positive':'payload byte copied to low byte, high byte zero',
+                          'negative':'event bit 7 selects low byte -payload mod256, high byte ff; payload zero gives ff00 (-256), not zero',
+                          'directionIsNotButtonState':True},
+            'releaseState':{'entry':'0x2f6c4','twoByteHeldEntries':'0x20004b7c',
+                            'savedScanIndex':'0x20009b2d','configurationBank':'0x200054ec',
+                            'distinctRegions':True,'typesMatched':[1,9,10],
+                            'clearEntry':'0x2f732/0x2f736 zero the two bytes of the selected held entry',
+                            'result':'0x2f738..0x2f740 returns 1 for index<=63, otherwise 0; caller clears active state after a zero result'},
+            'otherBranches':'Types 2/3 have distinct handlers; their full report and Windows producer semantics are not classified here. Types 6/7/8 target 0x2f86e.',
+            'hardwareWriteAuthorized':False,
+            'limits':'Selected fixed official-image event/release paths only. Does not prove Windows model visibility, all triggers/stops, report transport, installed firmware identity or actual output. No execution, emulation or HID access.'}
+
+
 def inspect_macro_zero_event_path(image):
     """Pin selected macro-count load and zero-event branch, not live execution."""
     def at(address,size):
@@ -944,7 +997,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 19,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 20,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -954,6 +1007,7 @@ def inspect(path):
                             'usbDescriptorOffset': hex(descriptor_offset), 'vendorID': 0x046A, 'productID': 0x01CE,
                             'descriptorBCDDevice': 0x0104, 'initialVectorWords': list(struct.unpack_from('<4I', image)),
                             'candidateLinkBase': '0x10000', 'pointerAnchors': anchors, 'storageNames': banks},
+            'macroEventDispatchAndRelease': inspect_macro_event_dispatch_and_release(image),
             'macroZeroEventPath': inspect_macro_zero_event_path(image),
             'reportDispatcher': inspect_report_dispatcher(image, banks),
             'storageSavePaths': inspect_storage_save_paths(image),
