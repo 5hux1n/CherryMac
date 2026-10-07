@@ -327,8 +327,8 @@ enum WindowsProfile {
         try selected.validate()
         let mode=selected.mode == .count ? 0:selected.mode == .held ? 1:2
         let events:[[String:Any]]=macro.steps.map{step in
-            let mouse=step.kind == .mouse,modifier = !mouse && step.usage>=224
-            return ["Type":mouse ? 1:modifier ? 9:10,
+            let mouse=step.kind == .mouse,modifier = step.kind == nil && step.usage>=224
+            return ["Type":step.kind == .mouseX ? 4:step.kind == .mouseY ? 5:mouse ? 1:modifier ? 9:10,
                     "Button":modifier ? 1 << Int(step.usage-224):Int(step.usage),
                     "Action":step.pressed ? "down":"up","Delay":step.delayMilliseconds]
         }
@@ -1467,11 +1467,12 @@ enum WindowsProfile {
                 let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
                 let usage:UInt8
                 if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
+                else if type==4 || type==5{usage=UInt8(button)}
                 else if type==10,button>=4,button<224{usage=UInt8(button)}
                 else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
                 else{throw HardwareError(message:"Windows 宏包含尚未支持的鼠标移动或其他事件。")}
                 guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
-                return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==1 ? .mouse:nil)
+                return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==4 ? .mouseX:type==5 ? .mouseY:type==1 ? .mouse:nil)
             }
             let originalName=actions[index]["ActionName"] as? String ?? "导入宏"
             var name=KeyboardMacro.nameStem(originalName);if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}

@@ -9,8 +9,14 @@ struct KeyboardMacro: Codable, Equatable {
         var usage: UInt8
         var pressed: Bool
         var delayMilliseconds: Int
-        enum Kind:String,Codable {case mouse}
+        enum Kind:String,Codable {case mouse,mouseX,mouseY}
         var kind:Kind? = nil
+        var isMovement:Bool{kind == .mouseX || kind == .mouseY}
+        var movementValue:Int{pressed ? -(usage==0 ? 256:Int(usage)):Int(usage)}
+        static func movement(axis:Kind,value:Int,delayMilliseconds:Int)throws->Self {
+            guard axis == .mouseX || axis == .mouseY,(-256...255).contains(value),(0...60000).contains(delayMilliseconds) else{throw HardwareError(message:"鼠标位移须为 -256…255，等待须为 0…60000 毫秒。")}
+            return .init(usage:UInt8(abs(value)%256),pressed:value<0,delayMilliseconds:delayMilliseconds,kind:axis)
+        }
     }
     var name: String
     var steps: [Step]
@@ -30,7 +36,8 @@ struct KeyboardMacro: Codable, Equatable {
               steps.count <= maximumEvents else { throw HardwareError(message: "宏名称或步骤数量无效。") }
         var held = Set<Int>()
         for step in steps {
-            guard (step.kind == .mouse ? [UInt8(1),2,4,8,16].contains(step.usage):(4...231).contains(step.usage)), (0...60000).contains(step.delayMilliseconds) else { throw HardwareError(message: "宏按键或延迟超出范围。") }
+            guard (step.isMovement || (step.kind == .mouse ? [UInt8(1),2,4,8,16].contains(step.usage):(4...231).contains(step.usage))), (0...60000).contains(step.delayMilliseconds) else { throw HardwareError(message: "宏按键或延迟超出范围。") }
+            if step.isMovement{continue}
             let identity=Int(step.usage)+(step.kind == .mouse ? 256:0)
             if step.pressed {
                 guard held.insert(identity).inserted else { throw HardwareError(message: "宏中同一个键重复按下，缺少释放步骤。") }

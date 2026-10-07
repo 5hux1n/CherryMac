@@ -158,6 +158,11 @@ export function validateSnapshot(s,complete=false){
 const macroNameKey=name=>typeof name==='string'?name.normalize('NFC'):null;
 const sameMacroName=(first,second)=>macroNameKey(first)===macroNameKey(second);
 const macroNameStem=name=>[...name.normalize('NFC')].slice(0,65).join('');
+export const macroStepIsMovement=s=>s?.kind==='mouseX'||s?.kind==='mouseY';
+export const macroStepMovementValue=s=>s.pressed?-(s.usage===0?256:s.usage):s.usage;
+export function setMacroMovementValue(step,value){
+  requireThat(macroStepIsMovement(step)&&Number.isInteger(value)&&value>=-256&&value<=255,'鼠标位移须为 -256…255 的整数。');step.usage=Math.abs(value)%256;step.pressed=value<0;
+}
 export function validateMacro(m){return validateMacroWithin(m,762);}
 function validateMacroWithin(m,maximumEvents){
   if(m?.hardwareReserved!=null)requireThat(bytes(m.hardwareReserved,2),'宏保留数据长度无效。');
@@ -167,8 +172,9 @@ function validateMacroWithin(m,maximumEvents){
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
-    const mouse=s.kind==='mouse';requireThat(s.kind==null||mouse,'宏事件类型尚未支持。');const identity=`${mouse?'mouse':'key'}:${s.usage}`;
-    requireThat(Number.isInteger(s.usage)&&(mouse?[1,2,4,8,16].includes(s.usage):s.usage>=4&&s.usage<=231)&&typeof s.pressed==='boolean'&&Number.isInteger(s.delayMilliseconds)&&s.delayMilliseconds>=0&&s.delayMilliseconds<=60000,'宏按键或延迟超出范围。');
+    const mouse=s.kind==='mouse',movement=macroStepIsMovement(s);requireThat(s.kind==null||mouse||movement,'宏事件类型尚未支持。');const identity=`${mouse?'mouse':'key'}:${s.usage}`;
+    requireThat(Number.isInteger(s.usage)&&(movement?s.usage>=0&&s.usage<=255:mouse?[1,2,4,8,16].includes(s.usage):s.usage>=4&&s.usage<=231)&&typeof s.pressed==='boolean'&&Number.isInteger(s.delayMilliseconds)&&s.delayMilliseconds>=0&&s.delayMilliseconds<=60000,'宏按键或延迟超出范围。');
+    if(movement)continue;
     requireThat(s.pressed?!held.has(identity):held.has(identity),'宏的按下与松开必须一一对应。');
     if(s.pressed)held.add(identity);else held.delete(identity);
   }
@@ -184,8 +190,8 @@ export function encodeBank(macros,headerReserved=[]){
   if(headerReserved.length)bank.splice(6,10,...headerReserved);
   let cursor=16+macros.length*2;
   macros.forEach((m,i)=>{word(16+i*2,cursor);word(cursor,m.steps.length);m.steps.forEach((s,j)=>{
-    const modifier=s.kind!=='mouse'&&s.usage>=224;
-    bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
+    const modifier=s.kind==null&&s.usage>=224;
+    bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouseX'?4:s.kind==='mouseY'?5:s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);
   });if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);cursor+=4+m.steps.length*4;});return bank;
 }
 export function decodeBank(bank){return decodeBankWithin(bank,126,762);}
@@ -201,10 +207,11 @@ function decodeBankWithin(bank,maximumRecords,maximumEvents){
     const reserved=bank.slice(start+2,start+4);if(reserved.some(b=>b!==0))m.hardwareReserved=reserved;
     for(let o=start+4;o<end;o+=4){const kind=bank[o+2]&127,code=bank[o+3];let usage;
       if(kind===1&&[1,2,4,8,16].includes(code))usage=code;
+      else if(kind===4||kind===5)usage=code;
       else if(kind===10&&code<224)usage=code;
       else if(kind===9&&code>0&&(code&(code-1))===0)usage=224+Math.log2(code);
       else throw new Error('宏包含尚未支持的事件，原始数据仍保留。');
-      m.steps.push({usage,pressed:!!(bank[o+2]&128),delayMilliseconds:word(o),...(kind===1?{kind:'mouse'}:{})});
+      m.steps.push({usage,pressed:!!(bank[o+2]&128),delayMilliseconds:word(o),...(kind===4?{kind:'mouseX'}:kind===5?{kind:'mouseY'}:kind===1?{kind:'mouse'}:{})});
     }
     validateMacroWithin(m,maximumEvents);macros.push(m);cursor=end;
   }return macros;
@@ -294,8 +301,8 @@ export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'coun
   return {ActionType:2,ActionName:m.name,ActionContent:{
     ActionMacroType:['count','held','toggle'].indexOf(playback.mode),ActionMacroLoopValue:playback.count,
     ActionMacroFixTimeIsSelected:m.recordingDelay?.fixed?1:0,ActionMacroFixTimeValue:m.recordingDelay?.milliseconds??0,
-    ActionMacroEvents:m.steps.length?m.steps.map(s=>{const mouse=s.kind==='mouse',modifier=!mouse&&s.usage>=224;
-      return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};}):null
+    ActionMacroEvents:m.steps.length?m.steps.map(s=>{const mouse=s.kind==='mouse',modifier=s.kind==null&&s.usage>=224;
+      return {Type:s.kind==='mouseX'?4:s.kind==='mouseY'?5:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};}):null
   }};
 }
 export function canonicalJSON(value){
@@ -452,9 +459,10 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
     const events=officialMacroEvents(c);
     const steps=events.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
       if(type===1&&[1,2,4,8,16].includes(button))usage=button;
+      else if(type===4||type===5)usage=button;
       else if(type===10&&button>=4&&button<224)usage=button;
       else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
-      else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===1?{kind:'mouse'}:{})};});
+      else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===4?{kind:'mouseX'}:type===5?{kind:'mouseY'}:type===1?{kind:'mouse'}:{})};});
     const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?macroNameStem(a.ActionName):'导入宏';let name=stem,j=1;while(p.macros.some(m=>sameMacroName(m.name,name)))name=`${stem} (${j++})`;
     const mode=winInt(c.ActionMacroType,'宏模式',0,2),preferredPlayback={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};
     const macro={name,steps,recordingDelay,preferredPlayback,windowsActionIndex:index};validateMacro(macro);p.macros.push(macro);imported.set(index,name);
@@ -988,7 +996,7 @@ export class MacroExecutionEvidence {
   #matched=0;#observed=0;#afterStop=0;#stop=null;#stopSource=null;#failure=null;
   constructor({macro,playback,source,startedMilliseconds}){
     validateMacro(macro);validatePlayback(playback);
-    requireThat(macro.steps.length>0,'空宏没有按键输出，不能通过输入观察判定执行成功。请使用配置读回与独立触发检查。');
+    requireThat(macro.steps.length>0&&!macro.steps.some(macroStepIsMovement),'空宏或位移宏不能通过当前按键观察判定执行成功，请使用独立触发／位移验收。');
     requireThat(['hid','focusedBrowser','simulation'].includes(source)&&Number.isSafeInteger(startedMilliseconds)&&startedMilliseconds>=0,'执行观察来源或时钟无效。');
     this.#macro=clone(macro);this.#playback=clone(playback);this.#source=source;this.#last=startedMilliseconds;
     this.#requiredQuiet=Math.max(200,macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0)+200);
@@ -1144,7 +1152,7 @@ export function prepareOfficialMacroStorage({macros,bindings,modes={},factoryKey
     const binding=p.mode==='count'?(p.count===1?[0x70,ordinal,0]:[0x71,ordinal,p.count]):[0x70,ordinal,p.mode==='held'?1:2];
     word(16+ordinal*2,cursor);word(cursor,m.steps.length);
     if(m.hardwareReserved)bank.splice(cursor+2,2,...m.hardwareReserved);
-    m.steps.forEach((s,j)=>{const modifier=s.kind!=='mouse'&&s.usage>=224;bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);});
+    m.steps.forEach((s,j)=>{const modifier=s.kind==null&&s.usage>=224;bank.splice(cursor+4+j*4,4,s.delayMilliseconds&255,s.delayMilliseconds>>8,(s.kind==='mouseX'?4:s.kind==='mouseY'?5:s.kind==='mouse'?1:modifier?9:10)|(s.pressed?128:0),modifier?1<<(s.usage-224):s.usage);});
     records.push({logicalIndex:logicalBySlot.get(slot),physicalSlot:slot,libraryIndex,ordinal,offset:cursor,eventCount:m.steps.length,binding});cursor+=4+m.steps.length*4;
   });
   return {hardwareReady:false,editorEventLimit,usedBytes:total,records,bank};

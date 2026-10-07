@@ -24,12 +24,12 @@ export class MacroStopObservation{
   observe({kind,code,pressed,milliseconds}){
     this.clock(milliseconds);
     requireThat(!this.failure,'停止观察已经失败。');
-    if(!['key','mouse'].includes(kind)||typeof code!=='string'||!code||code.length>80||typeof pressed!=='boolean'){
+    if(!['key','mouse','motion'].includes(kind)||typeof code!=='string'||!code||code.length>80||typeof pressed!=='boolean'||(kind==='motion'&&(code!=='pointer'||pressed))){
       this.interrupt('停止观察事件无法识别。');throw new Error(this.failure);
     }
     if(this.events.length>=65536){this.interrupt('停止观察容量已满。');throw new Error(this.failure);}
     const identity=`${kind}:${code}`;
-    if(pressed)this.held.add(identity);else this.held.delete(identity);
+    if(kind!=='motion'){if(pressed)this.held.add(identity);else this.held.delete(identity);}
     this.lastActivity=milliseconds;this.events.push({kind,code,pressed,milliseconds});
     // Output after acknowledgement revokes it, including an already-held key.
     if(this.acknowledged!=null){this.interrupt('确认后仍检测到输入，不能继续写入。');throw new Error(this.failure);}
@@ -84,6 +84,7 @@ export function confirmMacroStopped(request,{hid,gate,log,signal,win=window,doc=
   const buttonCode=button=>({0:'left',1:'middle',2:'right',3:'back',4:'forward'})[button];
   listen(win,'mousedown',e=>{if(!e.isTrusted||accept.contains(e.target)||cancel.contains(e.target))return;const code=buttonCode(e.button);if(!code){void fail('鼠标按钮无法识别。');return;}e.preventDefault();observed('mouse',code,true);},true);
   listen(win,'mouseup',e=>{if(!e.isTrusted)return;const code=buttonCode(e.button);if(!code){void fail('鼠标按钮无法识别。');return;}if(observation.held.has(`mouse:${code}`)||(!accept.contains(e.target)&&!cancel.contains(e.target)))observed('mouse',code,false);},true);
+  listen(win,'mousemove',e=>{if(e.isTrusted&&(e.movementX!==0||e.movementY!==0))observed('motion','pointer',false);},true);
   listen(dialog,'contextmenu',e=>e.preventDefault());
   listen(win,'wheel',e=>{if(e.isTrusted&&!list.contains(e.target))void fail('观察区出现滚动输出，停止确认已中止。');},true);
   if(signal)listen(signal,'abort',()=>void fail('用户已取消宏停止确认，停止后续发送。'));

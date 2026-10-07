@@ -20,7 +20,7 @@ enum CherryMacroCodec {
         try macro.validate(maximumEvents:maximumEvents)
         return macro.steps.flatMap{step -> [UInt8] in
             let modifier=step.kind == nil && (224...231).contains(step.usage)
-            let kind:UInt8=step.kind == .mouse ? 1:(modifier ? 9:10)
+            let kind:UInt8=step.kind == .mouseX ? 4:step.kind == .mouseY ? 5:step.kind == .mouse ? 1:(modifier ? 9:10)
             let code:UInt8=modifier ? UInt8(1 << Int(step.usage-224)):step.usage
             return [UInt8(step.delayMilliseconds & 255),UInt8(step.delayMilliseconds >> 8),kind | (step.pressed ? 0x80:0),code]
         }
@@ -31,12 +31,13 @@ enum CherryMacroCodec {
             let kind=bytes[index+2] & 0x7F;let code=bytes[index+3];let usage:UInt8
             if kind==1 {
                 guard [UInt8(1),2,4,8,16].contains(code)else{throw HardwareError(message:"鼠标宏按钮编码无效。")};usage=code
+            }else if kind==4 || kind==5 {usage=code
             }else if kind==10 {
                 guard code<224 else{throw HardwareError(message:"普通键宏包含无效修饰键编码。")};usage=code
             }else if kind==9 {
                 guard code.nonzeroBitCount==1 else{throw HardwareError(message:"修饰键宏编码必须只有一个位。")};usage=224+UInt8(code.trailingZeroBitCount)
             }else{throw HardwareError(message:"硬件宏包含尚未支持的事件类型 \(kind)。原始备份仍保留。")}
-            return .init(usage:usage,pressed:bytes[index+2] & 0x80 != 0,delayMilliseconds:Int(bytes[index]) | Int(bytes[index+1])<<8,kind:kind==1 ? .mouse:nil)
+            return .init(usage:usage,pressed:bytes[index+2] & 0x80 != 0,delayMilliseconds:Int(bytes[index]) | Int(bytes[index+1])<<8,kind:kind==4 ? .mouseX:kind==5 ? .mouseY:kind==1 ? .mouse:nil)
         }
         let macro=KeyboardMacro(name:name,steps:steps);try macro.validate(maximumEvents:maximumEvents);return macro
     }
@@ -129,7 +130,7 @@ struct MacroRecorder {
     }
     mutating func observe(usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,milliseconds:Int,repeatEvent:Bool=false)throws{
         guard active else{throw HardwareError(message:"录制已停止。")}
-        guard milliseconds>=lastMilliseconds,(kind == .mouse ? [UInt8(1),2,4,8,16].contains(usage):(4...231).contains(usage)) else{throw HardwareError(message:"录制事件或时钟无效。")}
+        guard (kind == nil || kind == .mouse),milliseconds>=lastMilliseconds,(kind == .mouse ? [UInt8(1),2,4,8,16].contains(usage):(4...231).contains(usage)) else{throw HardwareError(message:"录制事件或时钟无效。")}
         let identity=Int(usage)+(kind == .mouse ? 256:0)
         if repeatEvent || (pressed ? held.contains(identity):!held.contains(identity)){return}
         guard steps.count<maximumEvents else{throw HardwareError(message:"本次录制最多 \(maximumEvents) 个事件，请取消或缩短操作。")}
@@ -193,7 +194,7 @@ struct MacroExecutionEvidence {
     private var failure:String?
     init(macro:KeyboardMacro,playback:MacroPlayback,source:Source,startedMilliseconds:Int)throws {
         try macro.validate();try playback.validate()
-        guard !macro.steps.isEmpty else{throw HardwareError(message:"空宏没有按键输出，不能通过输入观察判定执行成功。请使用配置读回与独立触发检查。")}
+        guard !macro.steps.isEmpty,!macro.steps.contains(where:{$0.isMovement}) else{throw HardwareError(message:"空宏或位移宏不能通过当前按键观察判定执行成功，请使用独立触发／位移验收。")}
         guard startedMilliseconds>=0 else{throw HardwareError(message:"执行观察时钟无效。")}
         self.macro=macro;self.playback=playback;self.source=source;lastMilliseconds=startedMilliseconds
         requiredQuietMilliseconds=max(200,macro.steps.reduce(0){$0+$1.delayMilliseconds}+200)

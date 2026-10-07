@@ -6,6 +6,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     struct KeyChoice{let name:String;let usage:UInt8;let kind:KeyboardMacro.Step.Kind?}
     var steps:[KeyboardMacro.Step]
     var delays:[String]
+    var movements:[String]
     let choices:[KeyChoice]
     let maximumEvents:Int
     let completion:([KeyboardMacro.Step]?)->Void
@@ -14,11 +15,11 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     let message=NSTextField(wrappingLabelWithString:"每步等待在该事件执行后发生。完成编辑后采用，再保存宏；不会写入键盘。")
     var finished=false
     init(steps:[KeyboardMacro.Step],choices:[KeyChoice],maximumEvents:Int=762,completion:@escaping([KeyboardMacro.Step]?)->Void){
-        self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.choices=choices;self.maximumEvents=maximumEvents;self.completion=completion
+        self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.movements=steps.map{$0.isMovement ? String($0.movementValue):""};self.choices=choices;self.maximumEvents=maximumEvents;self.completion=completion
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:552),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         super.init(window:window);window.title="编辑宏步骤";window.delegate=self
         let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:780,height:552));window.contentView=view
-        for (id,title,width) in [("number","步骤",48.0),("key","按键",305.0),("state","动作",130.0),("delay","事件后等待（毫秒）",210.0)]{
+        for (id,title,width) in [("number","步骤",48.0),("key","事件",230.0),("state","动作",75.0),("movement","位移",90.0),("delay","事件后等待（毫秒）",190.0)]{
             let column=NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)
         }
         table.delegate=self;table.dataSource=self;table.rowHeight=32;table.intercellSpacing=NSSize(width:8,height:3);table.allowsMultipleSelection=false
@@ -26,6 +27,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         func button(_ title:String,_ action:Selector,_ x:CGFloat,_ width:CGFloat,tag:Int=0,y:CGFloat=378){let b=NSButton(title:title,target:self,action:action);b.frame=NSRect(x:x,y:y,width:width,height:30);b.tag=tag;view.addSubview(b)}
         button("添加按下／松开",#selector(addPair),18,160);button("删除",#selector(deleteStep),188,64)
         button("复制所选步骤",#selector(copyStep),18,160,y:416);button("清空本宏步骤",#selector(clearSteps),188,160,y:416)
+        button("添加 X 位移",#selector(addMovement),364,128,tag:0,y:416);button("添加 Y 位移",#selector(addMovement),502,128,tag:1,y:416)
         for (index,title) in ["置顶","上移","下移","置底"].enumerated(){button(title,#selector(moveStep),268+CGFloat(index)*76,68,tag:index)}
         insertion.addItems(withTitles:["末尾追加","所选步骤前插入","所选步骤后插入"]);insertion.frame=NSRect(x:588,y:378,width:174,height:30);insertion.setAccessibilityLabel("新增步骤的位置");view.addSubview(insertion)
         message.frame=NSRect(x:18,y:462,width:470,height:66);message.font = .systemFont(ofSize:12);view.addSubview(message)
@@ -41,14 +43,16 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         if id=="number"{let field=NSTextField(labelWithString:String(row+1));field.font = .monospacedDigitSystemFont(ofSize:13,weight:.regular);return field}
         if id=="key"{
             let picker=NSPopUpButton();picker.addItems(withTitles:choices.map{$0.name});picker.tag=row;picker.target=self;picker.action=#selector(keyChanged)
-            if let index=choices.firstIndex(where:{$0.usage==step.usage && $0.kind==step.kind}){picker.selectItem(at:index)}else{picker.addItem(withTitle:"HID \(step.usage)");picker.selectItem(at:choices.count)}
+            if let index=choices.firstIndex(where:{(step.isMovement || $0.usage==step.usage) && $0.kind==step.kind}){picker.selectItem(at:index)}else{picker.addItem(withTitle:"HID \(step.usage)");picker.selectItem(at:choices.count)}
             picker.setAccessibilityLabel("步骤 \(row+1) 按键");return picker
         }
+        if id=="state",step.isMovement{return NSTextField(labelWithString:"移动")}
+        if id=="movement"{let field=NSTextField(string:step.isMovement ? movements[row]:"—");field.isEnabled=step.isMovement;field.tag=row;field.identifier=NSUserInterfaceItemIdentifier("movement");field.delegate=self;field.setAccessibilityLabel("步骤 \(row+1) 位移，-256 到 255");return field}
         if id=="state"{let picker=NSPopUpButton();picker.addItems(withTitles:["按下","松开"]);picker.selectItem(at:step.pressed ? 0:1);picker.tag=row;picker.target=self;picker.action=#selector(stateChanged);picker.setAccessibilityLabel("步骤 \(row+1) 动作");return picker}
         let field=NSTextField(string:delays[row]);field.tag=row;field.delegate=self;field.setAccessibilityLabel("步骤 \(row+1) 事件后等待毫秒");return field
     }
-    func controlTextDidChange(_ notification:Notification){guard let field=notification.object as? NSTextField,delays.indices.contains(field.tag) else{return};delays[field.tag]=field.stringValue;message.stringValue="编辑完成后采用步骤；保存时检查按下与松开是否配对。"}
-    @objc func keyChanged(_ picker:NSPopUpButton){guard steps.indices.contains(picker.tag),choices.indices.contains(picker.indexOfSelectedItem) else{return};let key=choices[picker.indexOfSelectedItem];steps[picker.tag].usage=key.usage;steps[picker.tag].kind=key.kind}
+    func controlTextDidChange(_ notification:Notification){guard let field=notification.object as? NSTextField,delays.indices.contains(field.tag) else{return};if field.identifier?.rawValue=="movement"{movements[field.tag]=field.stringValue}else{delays[field.tag]=field.stringValue};message.stringValue="编辑完成后采用步骤；保存时检查按下与松开是否配对。"}
+    @objc func keyChanged(_ picker:NSPopUpButton){guard steps.indices.contains(picker.tag),choices.indices.contains(picker.indexOfSelectedItem) else{return};let key=choices[picker.indexOfSelectedItem];steps[picker.tag].usage=key.usage;steps[picker.tag].kind=key.kind;if steps[picker.tag].isMovement{steps[picker.tag].pressed=false};movements[picker.tag]=steps[picker.tag].isMovement ? String(steps[picker.tag].movementValue):"";table.reloadData()}
     @objc func stateChanged(_ picker:NSPopUpButton){guard steps.indices.contains(picker.tag) else{return};steps[picker.tag].pressed=picker.indexOfSelectedItem==0}
     func select(_ index:Int){table.reloadData();if steps.indices.contains(index){table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false);table.scrollRowToVisible(index)}}
     @objc func addPair(){
@@ -56,31 +60,41 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         guard steps.count<=maximumEvents-2 else{message.stringValue="最多 \(maximumEvents) 个事件，请先删除部分步骤。";return}
         guard insertion.indexOfSelectedItem==0 || steps.indices.contains(table.selectedRow) else{message.stringValue="请先选中插入位置对应的步骤。";return}
         let key=steps.indices.contains(table.selectedRow) ? steps[table.selectedRow]:.init(usage:4,pressed:true,delayMilliseconds:50)
+        guard !key.isMovement else{message.stringValue="位移是单个事件，请使用添加 X／Y 位移。";return}
         let index=insertion.indexOfSelectedItem==0 ? steps.count:table.selectedRow+(insertion.indexOfSelectedItem==2 ? 1:0)
         steps.insert(contentsOf:[.init(usage:key.usage,pressed:true,delayMilliseconds:50,kind:key.kind),.init(usage:key.usage,pressed:false,delayMilliseconds:0,kind:key.kind)],at:index)
-        delays.insert(contentsOf:["50","0"],at:index);select(index);message.stringValue="已插入按下／松开；原步骤和等待保留，采用时检查事件配对。"
+        delays.insert(contentsOf:["50","0"],at:index);movements.insert(contentsOf:["",""],at:index);select(index);message.stringValue="已插入按下／松开；原步骤和等待保留，采用时检查事件配对。"
+    }
+    @objc func addMovement(_ sender:NSButton){
+        window?.makeFirstResponder(nil)
+        guard steps.count<maximumEvents else{message.stringValue="最多 \(maximumEvents) 个事件，请先删除步骤。";return}
+        guard insertion.indexOfSelectedItem==0 || steps.indices.contains(table.selectedRow) else{message.stringValue="请先选择插入位置。";return}
+        let index=insertion.indexOfSelectedItem==0 ? steps.count:table.selectedRow+(insertion.indexOfSelectedItem==2 ? 1:0)
+        steps.insert(.init(usage:1,pressed:false,delayMilliseconds:30,kind:sender.tag==0 ? .mouseX:.mouseY),at:index)
+        delays.insert("30",at:index);movements.insert("1",at:index);select(index)
+        message.stringValue="位移范围 -256…255；负数表示反向。这是设备位移值，不是屏幕像素。"
     }
     @objc func copyStep(){
         window?.makeFirstResponder(nil);let row=table.selectedRow
         guard steps.indices.contains(row) else{message.stringValue="请先选中要复制的步骤。";return}
         guard steps.count<maximumEvents else{message.stringValue="最多 \(maximumEvents) 个事件，请先删除部分步骤。";return}
-        steps.insert(steps[row],at:row);delays.insert(delays[row],at:row);select(row)
+        steps.insert(steps[row],at:row);delays.insert(delays[row],at:row);movements.insert(movements[row],at:row);select(row)
         message.stringValue="已在原步骤前插入副本，等待值保留；采用时检查按下与松开配对。"
     }
     @objc func clearSteps(){
-        window?.makeFirstResponder(nil);steps=[];delays=[];select(-1)
+        window?.makeFirstResponder(nil);steps=[];delays=[];movements=[];select(-1)
         message.stringValue="本宏步骤已清空；可添加新步骤。取消会保留原步骤，不删除宏库或绑定。"
     }
-    @objc func deleteStep(){window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row) else{return};steps.remove(at:row);delays.remove(at:row);select(min(row,steps.count-1))}
+    @objc func deleteStep(){window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row) else{return};steps.remove(at:row);delays.remove(at:row);movements.remove(at:row);select(min(row,steps.count-1))}
     @objc func moveStep(_ sender:NSButton){
         window?.makeFirstResponder(nil);let row=table.selectedRow;guard steps.indices.contains(row),(0...3).contains(sender.tag) else{return}
         let next=[0,max(0,row-1),min(steps.count-1,row+1),steps.count-1][sender.tag]
-        guard next != row else{return};steps.insert(steps.remove(at:row),at:next);delays.insert(delays.remove(at:row),at:next);select(next)
+        guard next != row else{return};steps.insert(steps.remove(at:row),at:next);delays.insert(delays.remove(at:row),at:next);movements.insert(movements.remove(at:row),at:next);select(next)
     }
     @objc func apply(){
         window?.makeFirstResponder(nil)
         do{var result=steps
-            for index in result.indices{guard let delay=Int(delays[index]),(0...60000).contains(delay) else{throw HardwareError(message:"步骤 \(index+1) 的等待须为 0…60000 毫秒整数。")};result[index].delayMilliseconds=delay}
+            for index in result.indices{guard let delay=Int(delays[index]),(0...60000).contains(delay) else{throw HardwareError(message:"步骤 \(index+1) 的等待须为 0…60000 毫秒整数。")};result[index].delayMilliseconds=delay;if result[index].isMovement{guard let value=Int(movements[index]) else{throw HardwareError(message:"步骤 \(index+1) 的位移须为整数。")};result[index]=try .movement(axis:result[index].kind!,value:value,delayMilliseconds:delay)}}
             if !result.isEmpty{try KeyboardMacro(name:"步骤编辑",steps:result).validate(maximumEvents:maximumEvents)};finish(result)
         }catch{message.stringValue=error.localizedDescription}
     }
@@ -1066,10 +1080,16 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroText.setSelectedRange(NSRange(location:offset,length:(line as NSString).length));macroText.scrollRangeToVisible(macroText.selectedRange());updateMacroSummary()
         message.stringValue="步骤顺序已调整；保存宏时检查按下与松开是否配对。"
     }
+    func macroStepLine(_ step:KeyboardMacro.Step)->String {
+        if step.isMovement{return "\(step.kind == .mouseX ? "鼠标X":"鼠标Y") \(step.movementValue) 移动 \(step.delayMilliseconds)"}
+        return "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"
+    }
     func parsedMacroSteps()throws->[KeyboardMacro.Step]{
         let lines=macroText.string.split(separator:"\n",omittingEmptySubsequences:true)
         return try lines.map{line -> KeyboardMacro.Step in
-                let parts=line.split(whereSeparator:{$0.isWhitespace});guard parts.count>=3,let delay=Int(parts.last!),["按下","松开","down","up"].contains(String(parts[parts.count-2]))else{throw HardwareError(message:"宏格式错误：\(line)")}
+                let parts=line.split(whereSeparator:{$0.isWhitespace});guard parts.count>=3,let delay=Int(parts.last!),["按下","松开","down","up","移动"].contains(String(parts[parts.count-2]))else{throw HardwareError(message:"宏格式错误：\(line)")}
+                if parts.count==4,["鼠标X","鼠标Y"].contains(String(parts[0])),parts[2]=="移动",let value=Int(parts[1]){return try .movement(axis:parts[0]=="鼠标X" ? .mouseX:.mouseY,value:value,delayMilliseconds:delay)}
+                guard parts[parts.count-2] != "移动" else{throw HardwareError(message:"位移格式须为：鼠标X 10 移动 30。")}
                 let name=parts.dropLast(2).joined(separator:" ")
                 let mouse=self.mouseMacroKeys.first(where:{$0.0==name})
                 let usage:UInt8?
@@ -1082,10 +1102,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         do{
             let steps=try parsedMacroSteps()
             let choices=hidKeys.filter{$0.1 != 0}.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:nil)}+mouseMacroKeys.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:.mouse)}
-            let editor=MacroStepEditor(steps:steps,choices:choices,maximumEvents:macroEventLimit){[weak self] result in
+            let axisChoices:[MacroStepEditor.KeyChoice]=[.init(name:"鼠标 X 位移",usage:1,kind:.mouseX),.init(name:"鼠标 Y 位移",usage:1,kind:.mouseY)]
+            let editor=MacroStepEditor(steps:steps,choices:choices+axisChoices,maximumEvents:macroEventLimit){[weak self] result in
                 guard let self else{return};self.macroStepEditor=nil
                 guard let result else{self.message.stringValue="步骤编辑已取消，原步骤保留。";return}
-                self.macroText.string=result.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+                self.macroText.string=result.map{self.macroStepLine($0)}.joined(separator:"\n")
                 self.updateMacroSummary();self.message.stringValue="已采用 \(result.count) 个步骤，请点击保存宏。"
             }
             macroStepEditor=editor;parent.beginSheet(editor.window!)
@@ -1129,7 +1150,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let slot=keyboardLayout().first(where:{$0.id==selected}).flatMap{CherryMatrix.slot($0)}
         let playback=slot.flatMap{profile.macroBindings?[$0]==macro.name ? profile.macroModes?[$0]:nil} ?? macro.preferredPlayback ?? .once
         macroPlayback.selectItem(at:[MacroPlayback.Mode.count,.held,.toggle].firstIndex(of:playback.mode) ?? 0);macroRepeat.stringValue=String(playback.count)
-        macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? mouseMacroKeys:hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n");updateMacroSummary()
+        macroText.string=macro.steps.map{self.macroStepLine($0)}.joined(separator:"\n");updateMacroSummary()
     }
     @objc func recordMacro(){
         suspendHostTextForConfiguration()
@@ -1148,7 +1169,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let self else{return};self.macroRecordingSheet=nil
             guard let macro else{self.message.stringValue="录制已取消，原步骤保留。";return}
             self.recordingPreference=macro.recordingDelay;self.macroName.stringValue=macro.name
-            self.macroText.string=macro.steps.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
+            self.macroText.string=macro.steps.map{self.macroStepLine($0)}.joined(separator:"\n")
             self.updateMacroSummary();self.message.stringValue="已采用 \(macro.steps.count) 个录制事件，请点击保存宏。"
         }
         macroRecordingSheet=sheet;parent.beginSheet(sheet.window!)
