@@ -2615,6 +2615,50 @@ def inspect_dongle_pairing_entry(pe, skin=None):
         'limits':'Named button/message/transport workflow only. Initial hidden/disabled XML is not a target-model visibility decision. Full applicability, opened interfaces, +0x44 selector state, pairing reports and persistence still require correlation. Not ordinary default restoration or an implemented pairing feature; no hardware access.'}
 
 
+def inspect_dongle_model_gate(pe):
+    """Pin model visibility, host association predicate and selector source."""
+    bodies = {
+        (0x429e80,0x429fc8):'194d0665fe765444479ca059f04cfe33f59dd59e56d0faa47abfbe07aac8011c',
+        (0x4aef4a,0x4aef69):'846c27a6ebbe891499c054944c3d026713a84b1f7a590b5d9c8e8847edc15f2a',
+        (0x499ec0,0x49a007):'885d71f994dadc58b6bd798ac6dbf2d2fa1defa11dc96006399b39510dfa00ab',
+        (0x49a690,0x49a6dc):'1cb534ccb147130342849a4b61f07c36d0ed6f673309a8dea616d148425a2de9',
+        (0x49af20,0x49af6c):'b357d9460a9b6828943aa7d4d337bd4673d693a53410ada261a80b56e58621ca',
+        (0x4de640,0x4de684):'9737c5fdf057829f777581e4493c42c95a2e817356cc4ad1fac1cf69e918ae26',
+        (0x4f7d83,0x4f7dda):'407f6b6827d3de18f396c9400a755fcbce04a1f31ed0d76f6a9fb7188e70984b',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Dongle model gate or selector source differs")
+    name=('dongle_match_layout'+'\0').encode('utf-16le')
+    if pe.at(0x72b8cc,len(name)) != name:
+        raise ValueError("Dongle layout control differs")
+    imported=b'?IsEmpty@CDuiString@DuiLib@@QBE_NXZ\0'
+    if pe.at(pe.base+pe.pointer(0x6eb87c)+2,len(imported)) != imported:
+        raise ValueError("Association string predicate import differs")
+    return {
+        'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+        'visibility':{'method':'0x429e80','pidArgument':2,
+                      'targetCompare':'0x429f2d compares 0x01ce; equal -> 0x429f57',
+                      'layout':'dongle_match_layout','visibleVirtualOffset':'0x118','visibleArgument':1,
+                      'buttonEnabledVirtualOffset':'0x124','buttonEnabledArgument':'Boolean argument1'},
+        'dialogCall':{'address':'0x4aef64','pidSource':'device+0x1e1a',
+                      'enabledSource':'global dword 0x7cd074'},
+        'associationPredicate':{'method':'0x499ec0','tableMember':'0x12d0',
+                                'conditions':['selected row word+0x12 nonzero',
+                                              'linked row index from selected row word+0x14',
+                                              'linked row word+0x14 equals selected index',
+                                              'linked row word+0x0c nonzero',
+                                              'copied linked row string+0x18 passes nonempty predicate'],
+                                'setGlobal':'0x49a6a7 stores 1 after predicate succeeds',
+                                'clearGlobal':'0x49af37 stores 0 after predicate succeeds',
+                                'limits':'Two shown event branches only; complete event origin and row-field semantics remain unclassified'},
+        'selectorSource':{'setter':'0x4de640','setterArgument':5,'destination':'communication+0x44',
+                          'modelCall':'0x4f7dd5','receiver':'device+0xa38',
+                          'source':'device word+0x1eb4 (metadata offset0x9c from +0x1e18)',
+                          'limits':'Field source is established; runtime metadata value and all mutations are not'},
+        'limits':'The target PID is explicitly admitted by the static dialog branch. This is not observed UI, successful pairing, a complete enable-state model or authorization to send pairing reports.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2736,7 +2780,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 55,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 56,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2745,6 +2789,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightParameterSettingsSources": inspect_light_parameter_settings_sources(pe),
         "factoryCommandMethods": inspect_factory_command_methods(pe),
         "donglePairingEntry": inspect_dongle_pairing_entry(pe, skin),
+        "dongleModelGate": inspect_dongle_model_gate(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
