@@ -931,16 +931,17 @@ export function paint(s,selection,pattern,start,end,lightingMapping=null){
 
 // No I/O: focused UI adapters provide trusted observations and a monotonic clock.
 export class MacroRecorder{
-  constructor({timing='actual',fixedMilliseconds=0,startedMilliseconds}){
+  constructor({timing='actual',fixedMilliseconds=0,startedMilliseconds,maximumEvents=762}){
     requireThat(['actual','fixed','ignore'].includes(timing)&&Number.isInteger(fixedMilliseconds)&&fixedMilliseconds>=0&&fixedMilliseconds<=60000&&Number.isSafeInteger(startedMilliseconds)&&startedMilliseconds>=0,'录制间隔或时钟无效。');
-    this.timing=timing;this.fixedMilliseconds=fixedMilliseconds;this.lastMilliseconds=startedMilliseconds;this.active=true;this.steps=[];this.held=new Set();
+    requireThat(Number.isInteger(maximumEvents)&&maximumEvents>=2&&maximumEvents<=762,'录制事件上限无效。');
+    this.maximumEvents=maximumEvents;this.timing=timing;this.fixedMilliseconds=fixedMilliseconds;this.lastMilliseconds=startedMilliseconds;this.active=true;this.steps=[];this.held=new Set();
   }
   observe({usage,kind,pressed,milliseconds,repeatEvent=false}){
     requireThat(this.active,'录制已停止。');
     requireThat(Number.isSafeInteger(milliseconds)&&milliseconds>=this.lastMilliseconds&&typeof pressed==='boolean'&&(kind==null||kind==='mouse')&&Number.isInteger(usage)&&(kind==='mouse'?[1,2,4,8,16].includes(usage):usage>=4&&usage<=231),'录制事件或时钟无效。');
     const identity=`${kind==='mouse'?'mouse':'key'}:${usage}`;
     if(repeatEvent||(pressed?this.held.has(identity):!this.held.has(identity)))return;
-    requireThat(this.steps.length<762,'录制最多 762 个事件，请取消或缩短操作。');
+    requireThat(this.steps.length<this.maximumEvents,`本次录制最多 ${this.maximumEvents} 个事件，请取消或缩短操作。`);
     const delayMilliseconds=this.timing==='fixed'?this.fixedMilliseconds:this.timing==='ignore'?0:Math.min(60000,milliseconds-this.lastMilliseconds);
     // Delay follows the event in the observed USB firmware execution.
     // Startup latency and time spent clicking Stop are not macro actions.

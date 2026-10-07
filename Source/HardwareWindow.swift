@@ -7,13 +7,14 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     var steps:[KeyboardMacro.Step]
     var delays:[String]
     let choices:[KeyChoice]
+    let maximumEvents:Int
     let completion:([KeyboardMacro.Step]?)->Void
     let table=NSTableView()
     let insertion=NSPopUpButton()
     let message=NSTextField(wrappingLabelWithString:"每步等待在该事件执行后发生。完成编辑后采用，再保存宏；不会写入键盘。")
     var finished=false
-    init(steps:[KeyboardMacro.Step],choices:[KeyChoice],completion:@escaping([KeyboardMacro.Step]?)->Void){
-        self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.choices=choices;self.completion=completion
+    init(steps:[KeyboardMacro.Step],choices:[KeyChoice],maximumEvents:Int=762,completion:@escaping([KeyboardMacro.Step]?)->Void){
+        self.steps=steps;self.delays=steps.map{String($0.delayMilliseconds)};self.choices=choices;self.maximumEvents=maximumEvents;self.completion=completion
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:510),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         super.init(window:window);window.title="编辑宏步骤";window.delegate=self
         let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:780,height:510));window.contentView=view
@@ -51,7 +52,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
     func select(_ index:Int){table.reloadData();if steps.indices.contains(index){table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false);table.scrollRowToVisible(index)}}
     @objc func addPair(){
         window?.makeFirstResponder(nil)
-        guard steps.count<=760 else{message.stringValue="最多 762 个事件，请先删除部分步骤。";return}
+        guard steps.count<=maximumEvents-2 else{message.stringValue="最多 \(maximumEvents) 个事件，请先删除部分步骤。";return}
         guard insertion.indexOfSelectedItem==0 || steps.indices.contains(table.selectedRow) else{message.stringValue="请先选中插入位置对应的步骤。";return}
         let key=steps.indices.contains(table.selectedRow) ? steps[table.selectedRow]:.init(usage:4,pressed:true,delayMilliseconds:50)
         let index=insertion.indexOfSelectedItem==0 ? steps.count:table.selectedRow+(insertion.indexOfSelectedItem==2 ? 1:0)
@@ -68,7 +69,7 @@ final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableView
         window?.makeFirstResponder(nil)
         do{var result=steps
             for index in result.indices{guard let delay=Int(delays[index]),(0...60000).contains(delay) else{throw HardwareError(message:"步骤 \(index+1) 的等待须为 0…60000 毫秒整数。")};result[index].delayMilliseconds=delay}
-            try KeyboardMacro(name:"步骤编辑",steps:result).validate();finish(result)
+            try KeyboardMacro(name:"步骤编辑",steps:result).validate(maximumEvents:maximumEvents);finish(result)
         }catch{message.stringValue=error.localizedDescription}
     }
     func finish(_ result:[KeyboardMacro.Step]?){guard !finished else{return};finished=true;if let window{window.sheetParent?.endSheet(window);window.orderOut(nil)};completion(result)}
@@ -1069,7 +1070,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         do{
             let steps=try parsedMacroSteps()
             let choices=hidKeys.filter{$0.1 != 0}.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:nil)}+mouseMacroKeys.map{MacroStepEditor.KeyChoice(name:$0.0,usage:$0.1,kind:.mouse)}
-            let editor=MacroStepEditor(steps:steps,choices:choices){[weak self] result in
+            let editor=MacroStepEditor(steps:steps,choices:choices,maximumEvents:macroEventLimit){[weak self] result in
                 guard let self else{return};self.macroStepEditor=nil
                 guard let result else{self.message.stringValue="步骤编辑已取消，原步骤保留。";return}
                 self.macroText.string=result.map{step in "\((step.kind == .mouse ? self.mouseMacroKeys:self.hidKeys).first(where:{$0.1==step.usage})?.0 ?? "HID:\(step.usage)") \(step.pressed ? "按下":"松开") \(step.delayMilliseconds)"}.joined(separator:"\n")
@@ -1126,7 +1127,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let text=macroText.string as NSString,caret=min(macroText.selectedRange().location,text.length)
         let preceding=text.substring(to:caret).components(separatedBy:"\n").dropLast().filter{!$0.trimmingCharacters(in:.whitespaces).isEmpty}.count
         let selectedStep=original.indices.contains(preceding) && !text.substring(with:text.lineRange(for:NSRange(location:caret,length:0))).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? preceding:nil
-        let sheet=MacroRecordingSheet(name:macroName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "录制宏":macroName.stringValue,originalSteps:original,selectedStep:selectedStep){[weak self] macro in
+        let sheet=MacroRecordingSheet(name:macroName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "录制宏":macroName.stringValue,originalSteps:original,selectedStep:selectedStep,maximumEvents:macroEventLimit){[weak self] macro in
             guard let self else{return};self.macroRecordingSheet=nil
             guard let macro else{self.message.stringValue="录制已取消，原步骤保留。";return}
             self.recordingPreference=macro.recordingDelay;self.macroName.stringValue=macro.name
@@ -1135,7 +1136,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }
         macroRecordingSheet=sheet;parent.beginSheet(sheet.window!)
     }
+    var macroEventLimit:Int{profile?.macroStorageLayout == .officialBindings ? 762:256}
     @objc func appendMacroKey(){
+        do{guard try parsedMacroSteps().count<=macroEventLimit-2 else{message.stringValue="最多 \(macroEventLimit) 个事件，请先删除部分步骤，或启用扩展宏编辑。";return}}catch{message.stringValue=error.localizedDescription;return}
         guard let delay=Int(macroDelay.stringValue),(0...60000).contains(delay),let key=macroKey.titleOfSelectedItem else{message.stringValue="宏间隔须为 0…60000 毫秒。";return}
         macroText.string += (macroText.string.isEmpty || macroText.string.hasSuffix("\n") ? "":"\n") + "\(key) 按下 \(delay)\n\(key) 松开 0"
         updateMacroSummary()
@@ -1437,6 +1440,7 @@ final class MacroRecordingArea:NSView {
 final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     let name:String
     let originalSteps:[KeyboardMacro.Step]
+    let maximumEvents:Int
     let selectedStep:Int?
     let placement=NSPopUpButton()
     let completion:(KeyboardMacro?)->Void
@@ -1450,8 +1454,8 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     var closed=false
     static let modifiers:[UInt16:(UInt8,UInt)] = [59:(224,1),56:(225,2),58:(226,32),55:(227,8),62:(228,8192),60:(229,4),61:(230,64),54:(231,16)]
     static let nativeUsages:[UInt16:UInt8] = Dictionary(uniqueKeysWithValues:Dictionary(grouping:hidToMacKey.filter{$0.key>=4 && $0.key<=231},by:{$0.value}).compactMap{code,entries in entries.count==1 ? (code,UInt8(entries[0].key)):nil})
-    init(name:String,originalSteps:[KeyboardMacro.Step]=[],selectedStep:Int?=nil,completion:@escaping(KeyboardMacro?)->Void){
-        self.name=name;self.originalSteps=originalSteps;self.selectedStep=selectedStep;self.completion=completion
+    init(name:String,originalSteps:[KeyboardMacro.Step]=[],selectedStep:Int?=nil,maximumEvents:Int=762,completion:@escaping(KeyboardMacro?)->Void){
+        self.name=name;self.originalSteps=originalSteps;self.selectedStep=selectedStep;self.maximumEvents=maximumEvents;self.completion=completion
         let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:560,height:404),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="录制宏";super.init(window:panel);panel.delegate=self
         let root=panel.contentView!;root.wantsLayer=true;root.layer?.backgroundColor=NSColor.windowBackgroundColor.cgColor;area.owner=self
@@ -1478,10 +1482,12 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
         do{
             guard modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else{throw HardwareError(message:"请先松开修饰键，再开始录制。")}
             guard let value=Int(delay.stringValue)else{throw HardwareError(message:"请输入固定间隔毫秒。")}
+            let available=maximumEvents-(placement.indexOfSelectedItem==0 ? 0:originalSteps.count)
+            guard available>=2 else{throw HardwareError(message:"追加／插入空间不足，请删除步骤或选择替换全部步骤。")}
             if globalOption.state == .on {
                 guard globalAccessGranted() else{throw HardwareError(message:"请在系统设置 → 隐私与安全性 → 辅助功能允许此 App，然后重新打开；也可取消勾选，只录制下方区域。")}
             }
-            recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock())
+            recorder=try MacroRecorder(timing:[.actual,.fixed,.ignore][max(0,timing.indexOfSelectedItem)],fixedMilliseconds:value,startedMilliseconds:Self.clock(),maximumEvents:available)
             if globalOption.state == .on {
                 var mask:NSEvent.EventTypeMask=[.keyDown,.keyUp,.flagsChanged]
                 if mouseOption.state == .on {mask.formUnion([.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp,.scrollWheel])}
@@ -1490,7 +1496,7 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
                 }
                 globalMonitor=monitor
             }
-            controls();status.stringValue=globalOption.state == .on ? "正在录制其他应用和下方区域；完成后回来停止":"0 个事件";window?.makeFirstResponder(area)
+            controls();status.stringValue="0/\(available) 个事件"+(globalOption.state == .on ? " · 包括其他应用":"");window?.makeFirstResponder(area)
         }catch{discardRecording(error.localizedDescription)}
     }
     func externalEvent(_ event:NSEvent){
@@ -1508,14 +1514,14 @@ final class MacroRecordingSheet:NSWindowController,NSWindowDelegate {
     private func removeGlobalMonitor(){if let monitor=globalMonitor{NSEvent.removeMonitor(monitor);globalMonitor=nil}}
     func discardRecording(_ message:String){removeGlobalMonitor();recorder?.cancel();recorder=nil;controls();status.stringValue=message}
     deinit{if let monitor=globalMonitor{NSEvent.removeMonitor(monitor)}}
-    func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count) 个事件"}catch{discardRecording(error.localizedDescription)}}
+    func observe(_ usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,repeatEvent:Bool=false){guard recorder != nil else{return};do{try recorder!.observe(usage:usage,kind:kind,pressed:pressed,milliseconds:Self.clock(),repeatEvent:repeatEvent);status.stringValue="\(recorder!.steps.count)/\(recorder!.maximumEvents) 个事件"}catch{discardRecording(error.localizedDescription)}}
     func keyboard(_ event:NSEvent,pressed:Bool){guard recorder != nil else{return};guard let usage=Self.nativeUsages[event.keyCode]else{discardRecording("此按键编码不明确，请手动添加；录制已取消。");return};observe(usage,pressed:pressed,repeatEvent:event.isARepeat)}
     func modifier(_ event:NSEvent){guard let (usage,mask)=Self.modifiers[event.keyCode]else{return};observe(usage,pressed:event.modifierFlags.rawValue & mask != 0)}
     func unsupportedMouseEvent(){guard recorder != nil,mouseOption.state == .on else{return};discardRecording("滚轮或其他鼠标事件尚未支持，录制已取消；原步骤保留。")}
     func mouse(_ event:NSEvent,pressed:Bool){guard mouseOption.state == .on else{return};guard let usage=([0:UInt8(1),1:2,2:4,3:8,4:16])[event.buttonNumber] else{unsupportedMouseEvent();return};observe(usage,kind:.mouse,pressed:pressed)}
     @objc func finish(){do{guard var draft=recorder else{return};let index:Int?
         switch placement.indexOfSelectedItem{case 0:index=nil;case 1:index=originalSteps.count;default:guard let selectedStep,originalSteps.indices.contains(selectedStep) else{throw HardwareError(message:"请重新选择录制插入位置。")};index=selectedStep+(placement.indexOfSelectedItem==3 ? 1:0)}
-        let macro=try draft.finish(name:name,originalSteps:originalSteps,insertionIndex:index);complete(macro)
+        let macro=try draft.finish(name:name,originalSteps:originalSteps,insertionIndex:index);try macro.validate(maximumEvents:maximumEvents);complete(macro)
     }catch{status.stringValue=error.localizedDescription;window?.makeFirstResponder(area)}}
     @objc func cancel(){recorder?.cancel();complete(nil)}
     func complete(_ macro:KeyboardMacro?){guard !closed else{return};removeGlobalMonitor();recorder?.cancel();recorder=nil;closed=true;if let panel=window{panel.sheetParent?.endSheet(panel);panel.orderOut(nil)};completion(macro)}

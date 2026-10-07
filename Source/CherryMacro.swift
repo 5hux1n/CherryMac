@@ -118,20 +118,21 @@ struct MacroRecorder {
     enum Timing:String {case actual,fixed,ignore}
     let timing:Timing
     let fixedMilliseconds:Int
+    let maximumEvents:Int
     private(set) var active=true
     private(set) var steps:[KeyboardMacro.Step]=[]
     private var held=Set<Int>()
     private var lastMilliseconds:Int
-    init(timing:Timing,fixedMilliseconds:Int=0,startedMilliseconds:Int)throws{
-        guard (0...60000).contains(fixedMilliseconds),startedMilliseconds>=0 else{throw HardwareError(message:"录制间隔或时钟无效。")}
-        self.timing=timing;self.fixedMilliseconds=fixedMilliseconds;lastMilliseconds=startedMilliseconds
+    init(timing:Timing,fixedMilliseconds:Int=0,startedMilliseconds:Int,maximumEvents:Int=762)throws{
+        guard (0...60000).contains(fixedMilliseconds),startedMilliseconds>=0,(2...762).contains(maximumEvents) else{throw HardwareError(message:"录制间隔或时钟无效。")}
+        self.timing=timing;self.fixedMilliseconds=fixedMilliseconds;self.maximumEvents=maximumEvents;lastMilliseconds=startedMilliseconds
     }
     mutating func observe(usage:UInt8,kind:KeyboardMacro.Step.Kind?=nil,pressed:Bool,milliseconds:Int,repeatEvent:Bool=false)throws{
         guard active else{throw HardwareError(message:"录制已停止。")}
         guard milliseconds>=lastMilliseconds,(kind == .mouse ? [UInt8(1),2,4,8,16].contains(usage):(4...231).contains(usage)) else{throw HardwareError(message:"录制事件或时钟无效。")}
         let identity=Int(usage)+(kind == .mouse ? 256:0)
         if repeatEvent || (pressed ? held.contains(identity):!held.contains(identity)){return}
-        guard steps.count<762 else{throw HardwareError(message:"录制最多 762 个事件，请取消或缩短操作。")}
+        guard steps.count<maximumEvents else{throw HardwareError(message:"本次录制最多 \(maximumEvents) 个事件，请取消或缩短操作。")}
         let delay=timing == .fixed ? fixedMilliseconds:timing == .ignore ? 0:min(60000,milliseconds-lastMilliseconds)
         // USB execution captures associate the delay with the preceding event.
         // Ignore recorder startup latency and leave the final event at zero.
