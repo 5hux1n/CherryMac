@@ -3,7 +3,7 @@ import IOKit.hid
 
 // Main-thread snapshot adapter. The caller supplies already discovered devices;
 // no manager is created, no device is opened, and no HID report is sent here.
-// Report capability must still be checked by the eventual transport adapter.
+// Candidate admission requires the expected input/output report layout.
 @MainActor
 final class ReceiverPairingDiscovery {
     private struct Entry {
@@ -31,7 +31,9 @@ final class ReceiverPairingDiscovery {
                   registryID != 0 else { continue }
             let candidate = ReceiverPairingCandidate(token: entries[registryID]?.candidate.token ?? UUID().uuidString,
                 vendorID: vendor, productID: product, usagePage: page, usage: usage)
-            guard candidate.role != nil else { continue }
+            guard candidate.role != nil,
+                  let descriptor = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data,
+                  ReceiverPairingReports.supportsConfiguration(descriptor) else { continue }
             next[registryID] = Entry(device: device, candidate: candidate)
         }
         entries = next
