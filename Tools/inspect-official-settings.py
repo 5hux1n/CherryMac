@@ -2414,6 +2414,9 @@ def inspect_macro_step_save_semantics(pe):
         if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
             raise ValueError("Unexpected macro step save method")
     checks = {
+        0x4F6131: "81c100400000",
+        0x4F6137: "e8d4ccf8ff",
+        0x482E22: "c70074d17700",
         0x453086: "6a008d8d58fcffffe84d2e0f00",
         0x4530CA: "688cab7300",
         0x4531B2: "8b8dd0fcffff3b8dbcfcffff0f8d74030000",
@@ -2445,11 +2448,11 @@ def inspect_macro_step_save_semantics(pe):
             "eventListCount": "macro_action_list count at 0x453106; zero count skips loop to 0x453538",
             "hostEventValue": "Local value starts with constructor type 0; event indexing promotes it to type 6. With zero events, stored macroControl+0x928 retains type 0, whose writer emits null, not []",
             "hostActionUpdate": "0x44c680 copies macroControl+0x928; 0x5128b4..0x5128d6 assigns ActionContent.ActionMacroEvents; 0x51290b updates host action at its existing index",
-            "hostVirtualDispatch": {"offset":"0x300","target":"0x4fb2f0","nested":"device+0x4000 vtable+4; nested implementation not established here"},
+            "hostVirtualDispatch": {"offset":"0x300","target":"0x4fb2f0","nested":"device+0x4000 CKeyboardProfiledata, constructed at 0x4f6137 by 0x482e10 with vtable 0x77d174; +4 -> 0x47cac0 -> +8 -> 0x47c9a0", "fileStorageEvidence":"profileFileStorage: 0x485490 getter, selected Device row update and 0x485330 Json::StyledWriter / basic_ofstream setter"},
             "targetEventCount": "0x4fff96 calls 0x547130; JSON type 0 selects zero-size return 0x547176. Count is stored as word; 0x50000f skips event loop for zero count",
             "distinction": "No collected bindings means no bank send, while an existing bound macro with null/zero events is a separate case; do not treat both as a bank erase request",
             "hardwareWriteAuthorized": False,
-            "limits": "Static selected host update and event-count paths only. Final file persistence, every binding path and firmware execution of a zero-event macro remain unverified. Does not authorize empty macros or change product guards."}
+            "limits": "Static selected host update and event-count paths only. The joined named file-save chain is established statically; actual disk-write success, every binding path and firmware execution of a zero-event macro remain unverified. Does not authorize empty macros or change product guards."}
 
 
 def inspect_macro_step_list_actions(pe):
@@ -3009,7 +3012,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 62,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 63,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},

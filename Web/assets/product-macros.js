@@ -120,3 +120,16 @@ export async function lastMacroTransaction(){
 }
 
 export async function macroLocalRecords(){return record('readonly',store=>store.getAll());}
+
+// Pending editor content is separate from metadata matched to hardware reads.
+// Reading hardware never adopts this record automatically.
+export async function saveMacroEditorDraft(profile){
+  validateProfile(profile);const saved=clone(profile);
+  requireThat(new TextEncoder().encode(JSON.stringify(saved)).length<=3_000_000,'宏编辑草稿超过 3 MB，请导出配置文件。');
+  await save({id:'latest-editor-draft',kind:'editorDraft',format:'CherryMacMacroEditorDraft',version:1,date:new Date().toISOString(),profile:saved});
+}
+export async function loadMacroEditorDraft(){
+  const saved=await record('readonly',store=>store.get('latest-editor-draft'));
+  requireThat(saved?.kind==='editorDraft'&&saved.format==='CherryMacMacroEditorDraft'&&saved.version===1,'没有已保存的本机宏编辑草稿。');
+  requireThat(new TextEncoder().encode(JSON.stringify(saved.profile)).length<=3_000_000,'宏编辑草稿超过 3 MB。');validateProfile(saved.profile);return clone(saved.profile);
+}
