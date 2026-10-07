@@ -767,6 +767,32 @@ def inspect_factory_related_storage(image):
 
 
 
+def inspect_backup_boundaries(image):
+    """Pin strict versus inclusive bounds; does not create a capture plan."""
+    bodies = {
+        (0x2f250,0x2f25e):'a166799587f90eb918baec488fc933ef0af5cf65e52d563e4bae5ebf52b35d32',
+        (0x2f3ba,0x2f3cc):'d5335e97216eac624076cbac6d2de4650bf14c71731bb801fe551d17a2b07f50',
+        (0x2f3f4,0x2f426):'cf616b3f9f4bed726b16334dfa97f90509dc17d00e2a653a2d4d31170571463a',
+        (0x2f43e,0x2f470):'57f4d3c339a819ea1d0d8a636a90c099ff16dfc041e388e70ae216163c603200',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(image[start-0x10000:end-0x10000]).hexdigest()!=expected:
+            raise ValueError("Backup access boundaries differ")
+    return {
+        'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+        'parameters':{'readGuard':'0x2f3ba','writeGuard':'0x2f250',
+                      'offsetMaximumInclusive':63,'offsetPlusLengthMaximumInclusive':63,
+                      'maximumPositiveLengthPrefix':63,'uncoveredLastOffsetIn64ByteRegion':63},
+        'keymap':{'readGuard':'0x2f3f4','writeGuard':'0x2f412',
+                  'offsetMaximumExclusive':512,'offsetPlusLengthMaximumExclusive':512,
+                  'maximumPositiveLengthPrefix':511,'uncoveredLastOffsetIn512ByteRegion':511},
+        'colors':{'readGuard':'0x2f43e','writeGuard':'0x2f45c',
+                  'offsetMaximumExclusive':512,'offsetPlusLengthMaximumExclusive':512,
+                  'maximumPositiveLengthPrefix':511,'uncoveredLastOffsetIn512ByteRegion':511},
+        'macroReference':'reportDispatcher independently pins strict3072 boundary and3071-byte prefix',
+        'limits':'Positive-length access through these specific command guards only. Other interfaces, tail-byte uses, installed firmware identity and reset effects in current hardware are unproved. Ordinary378-byte snapshots are not complete512-byte preservation evidence. No capture or write plan is generated.'}
+
+
 def inspect_zero_length_record_semantics(image):
     """Pin empty-record serialization and load-time filtering of named values."""
     def at(address, size):
@@ -884,7 +910,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 17,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 18,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -910,6 +936,7 @@ def inspect(path):
             'factoryEventIdentityBranches': inspect_factory_event_identity_branches(image),
             'factoryRelatedStorage': inspect_factory_related_storage(image),
             'zeroLengthRecordSemantics': inspect_zero_length_record_semantics(image),
+            'backupBoundaries': inspect_backup_boundaries(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
