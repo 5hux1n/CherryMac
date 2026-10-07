@@ -2659,6 +2659,46 @@ def inspect_dongle_model_gate(pe):
         'limits':'The target PID is explicitly admitted by the static dialog branch. This is not observed UI, successful pairing, a complete enable-state model or authorization to send pairing reports.'}
 
 
+def inspect_pairing_transport_routes(pe):
+    """Pin actual I/O dispatch; do not execute or construct pairing reports."""
+    bodies = {
+        (0x41213a,0x412143):'9d40890fc258d6c7a80eb330e25859c33de2ed30c80da5d553c1400f9b1b1081',
+        (0x4121d3,0x4121dc):'e104872c68d21711277523f00173c7d9d5f4a86933a9543475030f3fc2f184ed',
+        (0x41226c,0x412275):'461676093cb9f1356730e707aa5286aa54f6bb462fb63301601d3c010e26cc14',
+        (0x4d947a,0x4d9582):'c4084ef610a6c9f07f6927b4040b39abe317b6a9a392602002f552c37cb17346',
+        (0x4d95b7,0x4d969b):'41ff327edb3542b2039fdeaecee7400dde4ff91f27e7a299d99127f9b3fd3bda',
+        (0x545360,0x545420):'13bf5a9b8a610539fc0071f5a11414608093f05eae451ae5e4b969b0436f2973',
+        (0x545420,0x5454e0):'6231f5da74050ac23a0fa9a0e2229cd53ec682b26294606933022deb66fd3cd0',
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Pairing transport route or initializer differs")
+    imports={0x6ebc8c:b'WriteFile',0x6ebc54:b'ReadFile',
+             0x6ebd0c:b'WaitForMultipleObjects',0x6ebbe8:b'GetOverlappedResult',
+             0x6ebbe4:b'CancelIo'}
+    for slot,name in imports.items():
+        if pe.at(pe.base+pe.pointer(slot)+2,len(name)+1) != name+b'\0':
+            raise ValueError("Pairing I/O import differs")
+    return {
+        'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+        'targetRegistryInitializers':[
+            {'row':hex(row),'selectorAddress':hex(row+0x9c),'value':0,'store':hex(store)}
+            for row,store in [(0x83b148,0x41213c),(0x83b1e8,0x4121d5),(0x83b288,0x41226e)]],
+        'routing':{'selector':'communication dword+0x684',
+                   'zero':{'interfaceOffset':'0x54','deviceMember':'0xa8c',
+                           'writeCall':'0x4d9577 -> 0x545420','readCall':'0x4d9690 -> 0x545360',
+                           'waitArgument':1000},
+                   'nonzeroTarget':{'interfaceOffset':'0x32c','deviceMember':'0xd64',
+                                    'writeCall':'0x4d954a -> 0x545420','readCall':'0x4d9669 -> 0x545360',
+                                    'waitArgument':5000},
+                   'derivation':'Device communication member0xa38 plus the two interface offsets equals the members opened by the pairing workflow',
+                   'otherModelBranch':'046a:0142 and 046a:0144 use wait argument2000 on the nonzero path'},
+        'io':{'write':'0x545420 uses WriteFile','read':'0x545360 uses ReadFile',
+              'completion':'Both wait on two handles then GetOverlappedResult for wait index1; other nonzero wait results enter CancelIo',
+              'imports':{hex(k):v.decode('ascii') for k,v in imports.items()}},
+        'limits':'Initial registry values and named dispatch only. Enumeration mutation, actual selected path identities, successful I/O and pairing persistence are unproved. No pairing requests are generated or sent.'}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -2780,7 +2820,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 56,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 57,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2790,6 +2830,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "factoryCommandMethods": inspect_factory_command_methods(pe),
         "donglePairingEntry": inspect_dongle_pairing_entry(pe, skin),
         "dongleModelGate": inspect_dongle_model_gate(pe),
+        "pairingTransportRoutes": inspect_pairing_transport_routes(pe),
         "defaultConfigurationPath": inspect_default_configuration_path(pe, defaults_dir),
         "defaultMacroSemantics": inspect_default_macro_semantics(pe),
         "defaultFinalRefresh": inspect_default_final_refresh(pe),
