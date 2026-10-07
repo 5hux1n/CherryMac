@@ -2397,6 +2397,61 @@ def inspect_macro_binding_collection_and_editor_limit(pe):
             "limits": "Static named official paths. Editor per-macro limit is separate from total bound-record byte capacity. Does not establish firmware execution of 762 events or authorize expanded writes. CherryMac currently uses a shared library and 32/256 policy; migration of existing profiles requires explicit compatibility handling."}
 
 
+def inspect_macro_step_save_semantics(pe):
+    """Separate host event-list storage, null events and target bank sending."""
+    bodies = {
+        (0x4B3400, 0x4B347B): "4e79dd1acb9efd0a363235030ee63db9a8de8c4493e4fc8b9df2f60f970adfce",
+        (0x512770, 0x512A43): "b3f84edde6ad6b65f0a83b9dee9f2520ea6fbb5a5edad1d68ba0815829e7f482",
+        (0x452F60, 0x452F73): "87a964eb486fd20937117fcdaffef853abcffab1fa306cf8559e03d7b001885f",
+        (0x452F90, 0x45302C): "850fa690af27b47f171bc8d2a047a6e89d671fcd04456a8123784e795f17a746",
+        (0x453030, 0x4535EB): "affe734324216651391848359eccc8e411450230bb8aa9bb08156dc969fec987",
+        (0x44C680, 0x44C6B3): "175a16f8bd324a51021c053f04a0788d4fa64246587bea88b40d305c3c2abab3",
+        (0x545EE0, 0x545FB2): "402b9a74e30b77ae0751120b1a4f2bdfd07c3f74ec60b0081301e71ff0d4ed7a",
+        (0x4FB2F0, 0x4FB312): "f2302c797ea802eda180f4939f0edd52d36a1349e4b0118773679fd0856e85f9",
+        (0x547130, 0x54717C): "ce3176af096b1a8eea0e7a8390641b6062ca4c3472c564fc1a2b47663374e742",
+    }
+    for (start,end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
+            raise ValueError("Unexpected macro step save method")
+    checks = {
+        0x453086: "6a008d8d58fcffffe84d2e0f00",
+        0x4530CA: "688cab7300",
+        0x4531B2: "8b8dd0fcffff3b8dbcfcffff0f8d74030000",
+        0x453406: "8b8dd0fcffff518d8d58fcffffe828420f00c645fc098bc8",
+        0x453543: "8d9558fcffff52e8d12c0f0089858cfcffff8b8dc4fcffff81c128090000e8da2f0f00",
+        0x5128B4: "68fceb76006810ec76008d8d10ffffffe8175303008bc8e810530300c645fc018bc8",
+        0x5129E8: "8b8568ffffff8b108b8d68ffffff8b8200030000ffd08b8d68ffffffe877b2ffff",
+        0x545F07: "8b4508884608",
+        0x54745F: "8a470884c0744b3c067443",
+        0x5474B1: "c645e006",
+        0x550710: "0fbe430883f8070f87f1020000ff24852c0a550068cc0d7800",
+        0x4FFF96: "e895710400668985ccfcffff",
+        0x500008: "0fb78dccfcffff3bc10f8dc1000000",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address,len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Unexpected macro step save instruction")
+    if pe.pointer(0x77F604 + 0x300) != 0x4FB2F0:
+        raise ValueError("Unexpected target host-config update dispatch")
+    if pe.pointer(0x550A2C) != 0x550724 or pe.pointer(0x54717C) != 0x547176:
+        raise ValueError("Unexpected JSON null writer/size case")
+    for address,value in [(0x76EBFC,"ActionMacroEvents"),(0x76EC10,"ActionContent"),(0x780DCC,"null")]:
+        raw = (value + "\0").encode("ascii")
+        if pe.at(address,len(raw)) != raw:
+            raise ValueError("Unexpected macro JSON save field")
+    return {"instructionChecks": len(checks),
+            "functionBodies": [{"method":hex(a),"endExclusive":hex(b),"SHA256":h} for (a,b),h in bodies.items()],
+            "stepChange": "0x4b3400 -> 0x512770 -> 0x452f60 -> 0x452f90 -> 0x453030",
+            "eventListCount": "macro_action_list count at 0x453106; zero count skips loop to 0x453538",
+            "hostEventValue": "Local value starts with constructor type 0; event indexing promotes it to type 6. With zero events, stored macroControl+0x928 retains type 0, whose writer emits null, not []",
+            "hostActionUpdate": "0x44c680 copies macroControl+0x928; 0x5128b4..0x5128d6 assigns ActionContent.ActionMacroEvents; 0x51290b updates host action at its existing index",
+            "hostVirtualDispatch": {"offset":"0x300","target":"0x4fb2f0","nested":"device+0x4000 vtable+4; nested implementation not established here"},
+            "targetEventCount": "0x4fff96 calls 0x547130; JSON type 0 selects zero-size return 0x547176. Count is stored as word; 0x50000f skips event loop for zero count",
+            "distinction": "No collected bindings means no bank send, while an existing bound macro with null/zero events is a separate case; do not treat both as a bank erase request",
+            "hardwareWriteAuthorized": False,
+            "limits": "Static selected host update and event-count paths only. Final file persistence, every binding path and firmware execution of a zero-event macro remain unverified. Does not authorize empty macros or change product guards."}
+
+
 def inspect_macro_step_list_actions(pe):
     """Pin current-step toolbar dispatch, distinct from the ActionInfo library."""
     bodies = {
@@ -2954,7 +3009,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 61,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 62,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -2993,6 +3048,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
+        "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),
