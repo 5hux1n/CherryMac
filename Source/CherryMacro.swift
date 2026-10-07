@@ -26,7 +26,7 @@ enum CherryMacroCodec {
         }
     }
     static func decodeEvents(_ bytes:[UInt8],name:String,maximumEvents:Int = 256) throws -> KeyboardMacro {
-        guard !bytes.isEmpty,bytes.count % 4==0,(1...762).contains(maximumEvents),bytes.count<=maximumEvents*4 else{throw HardwareError(message:"硬件宏事件长度无效。")}
+        guard bytes.count % 4==0,(1...762).contains(maximumEvents),bytes.count<=maximumEvents*4 else{throw HardwareError(message:"硬件宏事件长度无效。")}
         let steps=try stride(from:0,to:bytes.count,by:4).map{index -> KeyboardMacro.Step in
             let kind=bytes[index+2] & 0x7F;let code=bytes[index+3];let usage:UInt8
             if kind==1 {
@@ -72,7 +72,7 @@ enum CherryMacroCodec {
             let start=word(16+index*2)
             guard start>=cursor,start+4<=length else{throw HardwareError(message:"宏偏移重叠或越界。")}
             let steps=word(start),end=start+4+steps*4
-            guard steps>0,steps<=maximumEvents,end<=length else{throw HardwareError(message:"宏事件越界或数量无效。")}
+            guard steps<=maximumEvents,end<=length else{throw HardwareError(message:"宏事件越界或数量无效。")}
             var macro=try decodeEvents(Array(bytes[start+4..<end]),name:"硬件宏 \(index+1)",maximumEvents:maximumEvents)
             let reserved=Array(bytes[start+2..<start+4]);if reserved.contains(where:{$0 != 0}){macro.hardwareReserved=reserved}
             macros.append(macro);cursor=end
@@ -193,6 +193,7 @@ struct MacroExecutionEvidence {
     private var failure:String?
     init(macro:KeyboardMacro,playback:MacroPlayback,source:Source,startedMilliseconds:Int)throws {
         try macro.validate();try playback.validate()
+        guard !macro.steps.isEmpty else{throw HardwareError(message:"空宏没有按键输出，不能通过输入观察判定执行成功。请使用配置读回与独立触发检查。")}
         guard startedMilliseconds>=0 else{throw HardwareError(message:"执行观察时钟无效。")}
         self.macro=macro;self.playback=playback;self.source=source;lastMilliseconds=startedMilliseconds
         requiredQuietMilliseconds=max(200,macro.steps.reduce(0){$0+$1.delayMilliseconds}+200)

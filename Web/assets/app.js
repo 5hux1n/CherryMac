@@ -102,7 +102,7 @@ function renderMacroSummary(){
   try{
     const used=macroStorageUsage(profile);
     const library=`宏库 ${profile.macros.length} · 已绑定 ${Object.keys(profile.macroBindings).length} 个键 · 写入数据 ${used}/3071 字节`;
-    if(!steps.length){element.textContent=library+' · 添加或录制步骤后显示本次保存容量。';return;}
+    if(!steps.length){element.textContent=library+' · 当前步骤为空，可保存为空宏；绑定仍保留，清空宏库或解除绑定须另行操作。';return;}
     try{
       const macro={name:$('macro-name').value.trim(),steps:clone(steps)},draft=clone(profile),index=draft.macros.findIndex(m=>m.name===$('macro-list').value);
       if(index<0)draft.macros.push(macro);else{const old=draft.macros[index].name;draft.macros[index]=macro;for(const [slot,name] of Object.entries(draft.macroBindings??{}))if(name===old)draft.macroBindings[slot]=macro.name;}

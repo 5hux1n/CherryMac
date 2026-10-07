@@ -1166,7 +1166,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         do{
             let used=try profile.macroStorageUsage()
             let library="宏库 \(profile.macros.count) · 已绑定 \(profile.macroBindings?.count ?? 0) 个键 · 写入数据 \(used)/3071 字节"
-            guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{macroSummary.stringValue=library+"\n添加或录制步骤后显示本次保存容量。";return}
+            guard !macroText.string.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{macroSummary.stringValue=library+"\n当前步骤为空，可保存为空宏；绑定仍保留，解除绑定须另行操作。";return}
             do{
                 let steps=try parsedMacroSteps(),macro=KeyboardMacro(name:macroName.stringValue,steps:steps)
                 var draft=profile;let index=macroPicker.indexOfSelectedItem-1

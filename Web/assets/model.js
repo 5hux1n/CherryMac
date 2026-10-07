@@ -163,7 +163,7 @@ function validateMacroWithin(m,maximumEvents){
   if(m?.hardwareReserved!=null)requireThat(bytes(m.hardwareReserved,2),'宏保留数据长度无效。');
   if(m?.preferredPlayback!=null)validatePlayback(m.preferredPlayback);
   if(m?.windowsActionIndex!=null)requireThat(Number.isInteger(m.windowsActionIndex)&&m.windowsActionIndex>=0,'宏来源动作索引无效。');
-  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length>0&&m.steps.length<=maximumEvents,'宏名称或步骤数量无效。');
+  requireThat(m&&typeof m.name==='string'&&m.name.trim()&&[...m.name.normalize('NFC')].length<=80&&Array.isArray(m.steps)&&m.steps.length<=maximumEvents,'宏名称或步骤数量无效。');
   if(m.recordingDelay!=null)requireThat(typeof m.recordingDelay==='object'&&typeof m.recordingDelay.fixed==='boolean'&&Number.isInteger(m.recordingDelay.milliseconds)&&m.recordingDelay.milliseconds>=0&&m.recordingDelay.milliseconds<=60000,'固定间隔选项须为 0…60000 毫秒。');
   const held=new Set();
   for(const s of m.steps){
@@ -196,7 +196,7 @@ function decodeBankWithin(bank,maximumRecords,maximumEvents){
   let cursor=16+count*2;const macros=[];
   for(let i=0;i<count;i++){
     const start=word(16+i*2);requireThat(start>=cursor&&start+4<=length,'宏偏移重叠或越界。');
-    const n=word(start),end=start+4+n*4;requireThat(n>0&&n<=maximumEvents&&end<=length,'宏事件越界。');
+    const n=word(start),end=start+4+n*4;requireThat(n<=maximumEvents&&end<=length,'宏事件越界。');
     const m={name:`硬件宏 ${i+1}`,steps:[]};
     const reserved=bank.slice(start+2,start+4);if(reserved.some(b=>b!==0))m.hardwareReserved=reserved;
     for(let o=start+4;o<end;o+=4){const kind=bank[o+2]&127,code=bank[o+3];let usage;
@@ -294,31 +294,37 @@ export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'coun
   return {ActionType:2,ActionName:m.name,ActionContent:{
     ActionMacroType:['count','held','toggle'].indexOf(playback.mode),ActionMacroLoopValue:playback.count,
     ActionMacroFixTimeIsSelected:m.recordingDelay?.fixed?1:0,ActionMacroFixTimeValue:m.recordingDelay?.milliseconds??0,
-    ActionMacroEvents:m.steps.map(s=>{const mouse=s.kind==='mouse',modifier=!mouse&&s.usage>=224;
-      return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};})
+    ActionMacroEvents:m.steps.length?m.steps.map(s=>{const mouse=s.kind==='mouse',modifier=!mouse&&s.usage>=224;
+      return {Type:mouse?1:modifier?9:10,Button:modifier?1<<(s.usage-224):s.usage,Action:s.pressed?'down':'up',Delay:s.delayMilliseconds};}):null
   }};
 }
 export function canonicalJSON(value){
   const sorted=x=>Array.isArray(x)?x.map(sorted):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])])):x;
   return JSON.stringify(sorted(value));
 }
+function officialMacroEvents(content){
+  requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Object.hasOwn(content,'ActionMacroEvents'),'Windows 宏缺少事件字段。');
+  const events=content.ActionMacroEvents;requireThat(events===null||Array.isArray(events)&&events.length<=762,'Windows 宏事件无效。');return events??[];
+}
 function mergeOfficialMacro(original,next){
   const content=original.ActionContent;
-  requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
+  requireThat(content&&typeof content==='object'&&!Array.isArray(content),'官方宏模板结构无效。');
   const result={...clone(original),...next,ActionContent:{...clone(content),...next.ActionContent}};
   const known=['Type','Button','Action','Delay'];
-  content.ActionMacroEvents.forEach((event,i)=>{
+  const events=officialMacroEvents(content);officialMacroEvents(next.ActionContent);
+  events.forEach((event,i)=>{
     requireThat(event&&typeof event==='object'&&!Array.isArray(event),'官方宏事件模板无效。');
     const extras=Object.fromEntries(Object.entries(event).filter(([k])=>!known.includes(k)));
     if(!Object.keys(extras).length)return;
-    const target=result.ActionContent.ActionMacroEvents[i];
+    const target=result.ActionContent.ActionMacroEvents?.[i];
     requireThat(target&&winInt(event.Type,'Type',0,127)===target.Type&&winInt(event.Button,'Button',0,255)===target.Button&&event.Action===target.Action,'宏步骤变化后无法对应未知事件字段，不能无损导出。');
     result.ActionContent.ActionMacroEvents[i]={...extras,...target};
-  });return result;
+  });if(!officialMacroEvents(result.ActionContent).length&&!events.length)result.ActionContent.ActionMacroEvents=clone(content.ActionMacroEvents);return result;
 }
 function hasOfficialMacroExtras(action){
-  const content=action.ActionContent;requireThat(content&&typeof content==='object'&&!Array.isArray(content)&&Array.isArray(content.ActionMacroEvents),'官方宏模板结构无效。');
-  return Object.keys(action).some(k=>!['ActionType','ActionName','ActionContent'].includes(k))||Object.keys(content).some(k=>!['ActionMacroType','ActionMacroLoopValue','ActionMacroFixTimeIsSelected','ActionMacroFixTimeValue','ActionMacroEvents'].includes(k))||content.ActionMacroEvents.some(e=>Object.keys(e??{}).some(k=>!['Type','Button','Action','Delay'].includes(k)));
+  const content=action.ActionContent;requireThat(content&&typeof content==='object'&&!Array.isArray(content),'官方宏模板结构无效。');
+  const events=officialMacroEvents(content);
+  return Object.keys(action).some(k=>!['ActionType','ActionName','ActionContent'].includes(k))||Object.keys(content).some(k=>!['ActionMacroType','ActionMacroLoopValue','ActionMacroFixTimeIsSelected','ActionMacroFixTimeValue','ActionMacroEvents'].includes(k))||events.some(e=>Object.keys(e??{}).some(k=>!['Type','Button','Action','Delay'].includes(k)));
 }
 export function officialMacroSource(profile,macro){
   if(macro.windowsActionIndex==null)return null;
@@ -443,8 +449,8 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
     if(imported.has(index))return;const a=actions[index],c=a?.ActionContent;requireThat(c&&typeof c==='object'&&!Array.isArray(c),'Windows 宏内容无效。');
 
     const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
-    requireThat(Array.isArray(c.ActionMacroEvents),'Windows 宏事件无效。');
-    const steps=c.ActionMacroEvents.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
+    const events=officialMacroEvents(c);
+    const steps=events.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
       if(type===1&&[1,2,4,8,16].includes(button))usage=button;
       else if(type===10&&button>=4&&button<224)usage=button;
       else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
@@ -982,6 +988,7 @@ export class MacroExecutionEvidence {
   #matched=0;#observed=0;#afterStop=0;#stop=null;#stopSource=null;#failure=null;
   constructor({macro,playback,source,startedMilliseconds}){
     validateMacro(macro);validatePlayback(playback);
+    requireThat(macro.steps.length>0,'空宏没有按键输出，不能通过输入观察判定执行成功。请使用配置读回与独立触发检查。');
     requireThat(['hid','focusedBrowser','simulation'].includes(source)&&Number.isSafeInteger(startedMilliseconds)&&startedMilliseconds>=0,'执行观察来源或时钟无效。');
     this.#macro=clone(macro);this.#playback=clone(playback);this.#source=source;this.#last=startedMilliseconds;
     this.#requiredQuiet=Math.max(200,macro.steps.reduce((n,s)=>n+s.delayMilliseconds,0)+200);

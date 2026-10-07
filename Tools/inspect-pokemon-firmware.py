@@ -12,6 +12,40 @@ EXPECTED_SHA256 = "188836c15eb1560d0282ae3c2485b4a4d2edd5dfb69a91d4510b273c61047
 IMAGE_SHA256 = "31d0a07361ad531fa16867412d46e496737b126efc90482f86baa7e6bd5051bd"
 
 
+def inspect_macro_zero_event_path(image):
+    """Pin selected macro-count load and zero-event branch, not live execution."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):
+            raise ValueError("Macro path exceeds fixed image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x2F780,0x2F7F2):"004a95a5e6174cda172ead0b7a474fe58050363960f74d8ee052c4aa37870ecc",
+        (0x2F7FC,0x2F85A):"f63a55619cabe5465bb81738c4b0a8ae3e89e5e26aea9dea7a8dbea3e6810fa9",
+    }
+    for (start,end),expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=expected:
+            raise ValueError("Unexpected macro zero-event path")
+    checks={
+        0x2F79A:"714d288800282cd0",
+        0x2F7A2:"704e704a3188043189b28c1831808a5c",
+        0x2F7FC:"5e4b5f491b78002b36d00223013b01200b70107070bd",
+        0x2F812:"5b4b54491d78544b514c187c102303eb45035d185b5c6d7803eb05239bb2544dc95a2180",
+    }
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Unexpected macro zero-count instruction")
+    if struct.unpack("<I",at(0x2F968,4))[0]!=0x200054EC:
+        raise ValueError("Unexpected macro bank literal")
+    return {'entry':'0x2f780','instructionChecks':len(checks),
+            'codeSegments':[{'start':hex(a),'endExclusive':hex(b),'SHA256':h} for (a,b),h in bodies.items()],
+            'bankLiteral':{'address':'0x2f968','value':'0x200054ec'},
+            'recordHeader':'0x2f826..0x2f834 loads offset from bank+16+2*ordinal, then loads halfword event count and stores it in execution state',
+            'zeroCount':'0x2f79c loads remaining event count; 0x2f7a0 branches to 0x2f7fc when zero, bypassing the four-byte event read path at 0x2f7a2..0x2f7f0',
+            'completionBranch':'0x2f7fc..0x2f810 handles completion/rearm state; other completion paths call 0x2f6c4 and 0x2ae54 outside these pinned segments',
+            'limits':'Fixed official image and selected segments only, excluding the TBB data at 0x2f7f2..0x2f7fc. Does not establish installed firmware identity, every stop/trigger producer, scheduler timing, actual output or power retention. No firmware execution or hardware access.'}
+
+
 def inspect_report_dispatcher(image, banks):
     base = 0x10000
 
@@ -910,7 +944,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 18,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 19,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -920,6 +954,7 @@ def inspect(path):
                             'usbDescriptorOffset': hex(descriptor_offset), 'vendorID': 0x046A, 'productID': 0x01CE,
                             'descriptorBCDDevice': 0x0104, 'initialVectorWords': list(struct.unpack_from('<4I', image)),
                             'candidateLinkBase': '0x10000', 'pointerAnchors': anchors, 'storageNames': banks},
+            'macroZeroEventPath': inspect_macro_zero_event_path(image),
             'reportDispatcher': inspect_report_dispatcher(image, banks),
             'storageSavePaths': inspect_storage_save_paths(image),
             'saveScheduler': inspect_save_scheduler(image),

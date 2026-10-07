@@ -27,7 +27,7 @@ struct KeyboardMacro: Codable, Equatable {
         try preferredPlayback?.validate()
         if let recordingDelay{guard (0...60000).contains(recordingDelay.milliseconds) else{throw HardwareError(message:"固定间隔选项须为 0…60000 毫秒。")}}
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.precomposedStringWithCanonicalMapping.unicodeScalars.count <= 80,
-              !steps.isEmpty, steps.count <= maximumEvents else { throw HardwareError(message: "宏名称或步骤数量无效。") }
+              steps.count <= maximumEvents else { throw HardwareError(message: "宏名称或步骤数量无效。") }
         var held = Set<Int>()
         for step in steps {
             guard (step.kind == .mouse ? [UInt8(1),2,4,8,16].contains(step.usage):(4...231).contains(step.usage)), (0...60000).contains(step.delayMilliseconds) else { throw HardwareError(message: "宏按键或延迟超出范围。") }

@@ -336,24 +336,32 @@ enum WindowsProfile {
             "ActionMacroType":mode,"ActionMacroLoopValue":selected.count,
             "ActionMacroFixTimeIsSelected":macro.recordingDelay?.fixed == true ? 1:0,
             "ActionMacroFixTimeValue":macro.recordingDelay?.milliseconds ?? 0,
-            "ActionMacroEvents":events]]
+            "ActionMacroEvents":events.isEmpty ? NSNull():events]]
+    }
+    private static func macroEvents(_ content:[String:Any])throws->[[String:Any]] {
+        guard let value=content["ActionMacroEvents"] else{throw HardwareError(message:"Windows 宏缺少事件字段。")}
+        if value is NSNull{return []}
+        guard let events=value as? [[String:Any]],events.count<=762 else{throw HardwareError(message:"Windows 宏事件无效。")}
+        return events
     }
     private static let macroFields:Set<String>=["ActionMacroType","ActionMacroLoopValue","ActionMacroFixTimeIsSelected","ActionMacroFixTimeValue","ActionMacroEvents"]
     private static let eventFields:Set<String>=["Type","Button","Action","Delay"]
     private static func hasMacroExtras(_ action:[String:Any])throws->Bool {
-        guard let content=action["ActionContent"] as? [String:Any],let events=content["ActionMacroEvents"] as? [[String:Any]] else{throw HardwareError(message:"官方宏模板结构无效。")}
+        guard let content=action["ActionContent"] as? [String:Any] else{throw HardwareError(message:"官方宏模板结构无效。")}
+        let events=try macroEvents(content)
         return !Set(action.keys).subtracting(["ActionType","ActionName","ActionContent"]).isEmpty || !Set(content.keys).subtracting(macroFields).isEmpty || events.contains{!Set($0.keys).subtracting(eventFields).isEmpty}
     }
     private static func mergeMacro(_ original:[String:Any],_ next:[String:Any])throws->[String:Any] {
-        guard var content=original["ActionContent"] as? [String:Any],let events=content["ActionMacroEvents"] as? [[String:Any]] else{throw HardwareError(message:"官方宏模板结构无效。")}
-        let updated=next["ActionContent"] as! [String:Any];var steps=updated["ActionMacroEvents"] as! [[String:Any]]
+        guard var content=original["ActionContent"] as? [String:Any] else{throw HardwareError(message:"官方宏模板结构无效。")}
+        let events=try macroEvents(content),updated=next["ActionContent"] as! [String:Any];var steps=try macroEvents(updated)
+        let originalEvents=content["ActionMacroEvents"]!
         for (i,event) in events.enumerated(){
             let extras=event.filter{!eventFields.contains($0.key)};if extras.isEmpty{continue}
             guard steps.indices.contains(i),try integer(event["Type"],"Type",range:0...127)==steps[i]["Type"] as! Int,
                   try integer(event["Button"],"Button",range:0...255)==steps[i]["Button"] as! Int,event["Action"] as? String==steps[i]["Action"] as? String else{throw HardwareError(message:"宏步骤变化后无法对应未知事件字段，不能无损导出。")}
             steps[i]=extras.merging(steps[i]){_,new in new}
         }
-        content.merge(updated){_,new in new};content["ActionMacroEvents"]=steps
+        content.merge(updated){_,new in new};content["ActionMacroEvents"]=steps.isEmpty ? (events.isEmpty ? originalEvents:NSNull()):steps
         var result=original.merging(next){_,new in new};result["ActionContent"]=content;return result
     }
     static func macroSource(_ profile:HardwareProfile,macro:KeyboardMacro)throws->[String:Any]? {
@@ -1452,7 +1460,7 @@ enum WindowsProfile {
             guard let content=actions[index]["ActionContent"] as? [String:Any] else{throw HardwareError(message:"Windows 宏内容无效。")}
             let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
             let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
-            guard let events=content["ActionMacroEvents"] as? [[String:Any]],!events.isEmpty,events.count<=762 else{throw HardwareError(message:"Windows 宏事件无效。")}
+            let events=try macroEvents(content)
             let steps=try events.map{event->KeyboardMacro.Step in
                 let type=try integer(event["Type"],"宏 Type",range:0...127)
                 let button=try integer(event["Button"],"宏 Button",range:0...255)
