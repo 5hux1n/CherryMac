@@ -267,6 +267,8 @@ export function parseProfile(text,baseline,options={}){
   return p;
 }
 const winInt=(v,name,min,max)=>{if(typeof v==='string'&&/^-?\d+$/.test(v))v=Number(v);requireThat(Number.isInteger(v)&&v>=min&&v<=max,`Windows ${name} 数据无效。`);return v;};
+// Official defaults use JSON booleans for these two flags; exports also use integers.
+const winLightFlag=(v,name,max=1)=>winInt(typeof v==='boolean'?Number(v):v,name,0,max);
 function physicalSlot(v){
   if(v>>16===0x20&&((v>>8)&255)===0){const slot=SLOTS[v&255];return [10,75].includes(slot)?undefined:slot;}
   return ({[0xa00300]:6,[0xa00100]:71,[0x200100]:5,[0x200200]:4,[0x200400]:17,[0x200800]:11,[0x201000]:83,[0x202000]:82,[0x204000]:65,[0x309201]:102,[0x30b600]:108,[0x30cd00]:114,[0x30b500]:120})[v];
@@ -524,8 +526,8 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
     }p.snapshot.keymap.splice(slot*3,3,...b);
   });
   const l=root.LightInfo;if(l){const mode=MODE_CODES[winInt(l.SelectItem,'模式',0,24)];requireThat(modes.some(([v])=>v===mode),'此内置灯效尚未验证。');
-    p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winInt(l.MultiColor,'彩虹',0,1),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));
-    if(Object.hasOwn(l,'LightOpenFlag'))p.snapshot.parameters[21]=winInt(l.LightOpenFlag,'LightOpenFlag',0,255);}
+    p.snapshot.parameters.splice(1,8,mode,winInt(l.Light,'亮度',0,4),4-winInt(l.Speed,'速度',0,4),winInt(l.Fx,'方向',0,1),winLightFlag(l.MultiColor,'彩虹'),...['Red','Green','Blue'].map(k=>winInt(l[k],k,0,255)));
+    if(Object.hasOwn(l,'LightOpenFlag'))p.snapshot.parameters[21]=winLightFlag(l.LightOpenFlag,'LightOpenFlag',255);}
   const groups=root.CustomLightMode?.LightColorInfo;if(root.CustomLightMode){requireThat(Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'逐键颜色组不匹配。');groups[0].forEach((c,i)=>{requireThat(c&&typeof c==='object'&&!Array.isArray(c),'逐键颜色记录结构无效。');const rgb=['Red','Green','Blue'].map(k=>winInt(c[k],k,0,255));if(Object.hasOwn(c,'Alpha'))winInt(c.Alpha,'Alpha',0,255);const slot=lightingSlots===null?physicalSlot(WINDOWS_DEFAULTS[i]):lightingSlots[i];if(slot!=null)p.snapshot.colors.splice(slot*3,3,...rgb);});}
   if(root.CustomLightMode)p.lightingColorEncoding='officialRGB';
   if(!equal(p.macroBindings,old)||imported.size)p.snapshot=resolveMacros(p);validateProfile(p);return p;
@@ -545,8 +547,8 @@ export function importWindowsLightingDraft(profile,template){
   const mode=MODE_CODES[winInt(light.SelectItem,'SelectItem',0,24)];requireThat(modes.some(([code])=>code===mode),'此灯效模式尚未支持。');
   const result=clone(profile),root=typeof profile.windowsTemplateJSON==='string'?JSON.parse(profile.windowsTemplateJSON):clone(source);
   if(typeof profile.windowsTemplateJSON!=='string')delete root.SystemStages;
-  result.snapshot.parameters.splice(1,8,mode,winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winInt(light.MultiColor,'MultiColor',0,1),...['Red','Green','Blue'].map(key=>winInt(light[key],key,0,255)));
-  result.snapshot.parameters[21]=winInt(light.LightOpenFlag,'LightOpenFlag',0,255);
+  result.snapshot.parameters.splice(1,8,mode,winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winLightFlag(light.MultiColor,'MultiColor'),...['Red','Green','Blue'].map(key=>winInt(light[key],key,0,255)));
+  result.snapshot.parameters[21]=winLightFlag(light.LightOpenFlag,'LightOpenFlag',255);
   root.LightInfo=clone(light);
   if(Object.hasOwn(source,'CustomLightMode')){
     const custom=source.CustomLightMode,groups=custom?.LightColorInfo;
@@ -977,8 +979,8 @@ export function prepareOfficialLightingParameters(template,bank){
   validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=255&&template.LightInfo,'需要完整官方灯效参数和可表示为单字节的配置编号。');
   const light=template.LightInfo,selected=winInt(light.SelectItem,'SelectItem',0,24);
-  const head=[bank,MODE_CODES[selected],winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winInt(light.MultiColor,'MultiColor',0,1),...['Red','Green','Blue'].map(name=>winInt(light[name],name,0,255))];
-  return {head,lightOpenFlag:winInt(light.LightOpenFlag,'LightOpenFlag',0,255)};
+  const head=[bank,MODE_CODES[selected],winInt(light.Light,'Light',0,4),4-winInt(light.Speed,'Speed',0,4),winInt(light.Fx,'Fx',0,1),winLightFlag(light.MultiColor,'MultiColor'),...['Red','Green','Blue'].map(name=>winInt(light[name],name,0,255))];
+  return {head,lightOpenFlag:winLightFlag(light.LightOpenFlag,'LightOpenFlag',255)};
 }
 export function prepareOfficialCustomColors(template,baseline,lightingMapping){
   validateSnapshot(baseline,true);validateWindowsTemplate(template,new TextEncoder().encode(JSON.stringify(template)).length);
