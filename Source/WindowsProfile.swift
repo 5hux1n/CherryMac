@@ -260,6 +260,12 @@ enum WindowsProfile {
         }else if let text=object as? String{value=Int(text)}else{value=nil}
         guard let value,range.contains(value)else{throw HardwareError(message:"Windows 配置中的 \(name) 应为 \(range.lowerBound)–\(range.upperBound) 的整数。")};return value
     }
+    // Official defaults use JSON booleans; regular exports also use integers.
+    // Keep this compatibility limited to the two lighting flag fields.
+    static func lightingFlag(_ object:Any?,_ name:String,maximum:Int=1)throws->Int{
+        if let number=object as? NSNumber,CFGetTypeID(number)==CFBooleanGetTypeID(){return try integer(number.boolValue ? 1:0,name,range:0...maximum)}
+        return try integer(object,name,range:0...maximum)
+    }
     static func record(_ value:Int)throws->[UInt8]{
         let bytes=[UInt8((value>>16)&255),UInt8((value>>8)&255),UInt8(value&255)]
         guard bytes[0]==0x20 || bytes[0]==0x30 else{throw HardwareError(message:"Windows 配置包含尚未支持的按键动作。")}
@@ -849,10 +855,10 @@ enum WindowsProfile {
             UInt8(try integer(light["Light"],"Light",range:0...4)),
             UInt8(4 - (try integer(light["Speed"],"Speed",range:0...4))),
             UInt8(try integer(light["Fx"],"Fx",range:0...1)),
-            UInt8(try integer(light["MultiColor"],"MultiColor",range:0...1))] +
+            UInt8(try lightingFlag(light["MultiColor"],"MultiColor"))] +
             (try ["Red","Green","Blue"].map{UInt8(try integer(light[$0],$0,range:0...255))})
         result.snapshot.parameters.replaceSubrange(1..<9,with:parameters)
-        result.snapshot.parameters[21]=UInt8(try integer(light["LightOpenFlag"],"LightOpenFlag",range:0...255))
+        result.snapshot.parameters[21]=UInt8(try lightingFlag(light["LightOpenFlag"],"LightOpenFlag",maximum:255))
         var root=try profile.windowsTemplateJSON.map{try templateRoot(Data($0.utf8))} ?? source
         if profile.windowsTemplateJSON==nil{root.removeValue(forKey:"SystemStages")}
         root["LightInfo"]=light
@@ -1471,9 +1477,9 @@ enum WindowsProfile {
         guard (0...255).contains(bank),let light=root["LightInfo"] as? [String:Any]else{throw HardwareError(message:"需要完整官方灯效参数和可表示为单字节的配置编号。")}
         let selected=try integer(light["SelectItem"],"SelectItem",range:0...24)
         let brightness=try integer(light["Light"],"Light",range:0...4),speed=try integer(light["Speed"],"Speed",range:0...4)
-        let direction=try integer(light["Fx"],"Fx",range:0...1),multi=try integer(light["MultiColor"],"MultiColor",range:0...1)
+        let direction=try integer(light["Fx"],"Fx",range:0...1),multi=try lightingFlag(light["MultiColor"],"MultiColor")
         let colors=try ["Red","Green","Blue"].map{UInt8(try integer(light[$0],$0,range:0...255))}
-        let flag=UInt8(try integer(light["LightOpenFlag"],"LightOpenFlag",range:0...255))
+        let flag=UInt8(try lightingFlag(light["LightOpenFlag"],"LightOpenFlag",maximum:255))
         return ([UInt8(bank),modeCodes[selected],UInt8(brightness),UInt8(4-speed),UInt8(direction),UInt8(multi)]+colors,flag)
     }
     // Offline preparation for the specifically traced custom-color load path.
@@ -1648,7 +1654,7 @@ enum WindowsProfile {
         if let lighting=root["LightInfo"] as? [String:Any] {
             // Preserve the current byte when an older file omits the field.
             // Its representation is known; physical on/off semantics are not.
-            if let flag=lighting["LightOpenFlag"]{result.snapshot.parameters[21]=UInt8(try integer(flag,"LightOpenFlag",range:0...255))}
+            if let flag=lighting["LightOpenFlag"]{result.snapshot.parameters[21]=UInt8(try lightingFlag(flag,"LightOpenFlag",maximum:255))}
             let selected=try integer(lighting["SelectItem"],"SelectItem",range:0...modeCodes.count-1)
             let mode=modeCodes[selected]
             guard CherryLighting.modes.contains(where:{$0.1==mode})else{throw HardwareError(message:"此 Windows 灯效不在本型号已验证的 12 个模式中。")}
@@ -1656,7 +1662,7 @@ enum WindowsProfile {
             result.snapshot.parameters[2]=UInt8(try integer(lighting["Light"],"Light",range:0...4))
             result.snapshot.parameters[3]=UInt8(4-(try integer(lighting["Speed"],"Speed",range:0...4)))
             result.snapshot.parameters[4]=UInt8(try integer(lighting["Fx"],"Fx",range:0...1))
-            result.snapshot.parameters[5]=UInt8(try integer(lighting["MultiColor"],"MultiColor",range:0...1))
+            result.snapshot.parameters[5]=UInt8(try lightingFlag(lighting["MultiColor"],"MultiColor"))
             for (offset,key) in ["Red","Green","Blue"].enumerated(){result.snapshot.parameters[6+offset]=UInt8(try integer(lighting[key],key,range:0...255))}
         }
         if let custom=root["CustomLightMode"] as? [String:Any] {
