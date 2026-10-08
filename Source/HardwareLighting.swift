@@ -475,11 +475,21 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     }
     func confirmation(_ title:String)->Bool{let alert=NSAlert();alert.messageText=title;alert.informativeText="将实际发送灯效配置。请关闭其他配置程序、松开全部按键，保持此窗口前台。自动备份与日志保存后才发送；不自动重试。";alert.addButton(withTitle:"全部已松开，继续");alert.addButton(withTitle:"取消");return alert.runModal() == .alertFirstButtonReturn}
     func saveSnapshot(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(snapshot).write(to:directory.appendingPathComponent("snapshot-\(log.url.lastPathComponent)"),options:.atomic)}
-    func backup(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let url=directory.appendingPathComponent("backup-\(UUID().uuidString).json");try encoder.encode(snapshot).write(to:url,options:.atomic);let read=try JSONDecoder().decode(HardwareSnapshot.self,from:Data(contentsOf:url));guard read==snapshot else{throw HardwareError(message:"备份读回不一致。")};log.record("backup",url.path);try log.requireStorageHealthy()}
+    func saveVerifiedLightingFile(_ data:Data,to url:URL)throws {
+        try data.write(to:url,options:.atomic)
+        let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize()
+        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"恢复资料读回不一致，停止后续发送。")}
+    }
+    func backup(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        let url=directory.appendingPathComponent("backup-\(UUID().uuidString).json");try saveVerifiedLightingFile(encoder.encode(snapshot),to:url)
+        let read=try JSONDecoder().decode(HardwareSnapshot.self,from:Data(contentsOf:url));guard read==snapshot else{throw HardwareError(message:"备份读回不一致。")}
+        log.record("backup",url.path);try log.requireStorageHealthy()
+    }
     func persist<T:Encodable>(_ record:T,_ log:HardwareOperationLog)throws {
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(record)
         let filename="record-\(log.url.lastPathComponent)"
-        try data.write(to:directory.appendingPathComponent(filename),options:.atomic)
+        try saveVerifiedLightingFile(data,to:directory.appendingPathComponent(filename))
         if log.string("recoveryRecordFile")==nil{log.record("recoveryRecordFile",filename)}
         try log.requireStorageHealthy();DispatchQueue.main.async{self.recoveryData=data}
     }

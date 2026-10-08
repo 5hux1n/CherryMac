@@ -3,7 +3,7 @@ import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
 import {selectLightingDevice,recordLightingOperation,lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,takeLightingHandoff,saveBackup,download} from './storage.js?v=0.6.0';
-import {saveLog} from './logs.js?v=0.6.0';
+import {saveLog,saveVerifiedLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
 let editorRecord=null,pendingEditorRecord=null,editorReview=null,connectionRevision=0,returnChannel=null;
@@ -25,11 +25,11 @@ function render(){
   $('lighting-power-off').disabled=busy||!writtenTarget||powerCycle?.disconnectedAt==null||online||powerCycle?.returnedAt!=null;
   $('lighting-retention').disabled=busy||!online||!writtenTarget||powerCycle?.powerOffAt==null;
 }
-async function persistSession(){await saveLog({id:`lighting-session-${runID}`,at:artifacts.startedAt,kind:'lightingAcceptance',session:clone(artifacts)});}
+async function persistSession(){await saveVerifiedLog({id:`lighting-session-${runID}`,at:artifacts.startedAt,kind:'lightingAcceptance',session:clone(artifacts)});}
 async function backup(snapshot){const record=await saveBackup(snapshot);artifacts.backups.push(clone(record));await persistSession();}
 async function persist(record){
   // Store completed transaction before exposing it as the latest recovery source.
-  await saveLog({id:`lighting-record-${record.operationID}`,at:new Date().toISOString(),kind:'lightingRecovery',record:clone(record)});
+  await saveVerifiedLog({id:`lighting-record-${record.operationID}`,at:new Date().toISOString(),kind:'lightingRecovery',record:clone(record)});
   latestRecord=clone(record);
   const index=artifacts.records.findIndex(r=>r.operationID===record.operationID);
   if(index<0)artifacts.records.push(clone(record));else artifacts.records[index]=clone(record);
