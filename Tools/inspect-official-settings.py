@@ -2923,6 +2923,44 @@ def inspect_macro_step_files(pe):
             "limits":"Import/export controls are visible=false in source resource. Constant-time menu entries are commented out. Static handlers exist; target running UI visibility and Windows import application remain unverified. No EXE or device execution."}
 
 
+def inspect_system_lighting_priority_boundary(pe,skin=None):
+    """Distinguish LightOpenFlag from the unrelated system priority control."""
+    bodies={
+        "priorityVisibility":(0x446EA0,0x446EF2,"1337e400f6e3ccc1155e5f804ac4124aa1cb368126d9eee9e13dda1bfb2d61c1"),
+        "prioritySelectionSetter":(0x446F00,0x446F54,"46e927d70dbdb1142aa3eb70ade2a4a3166d4cd4a2c52117ad49b4b4aa92cfe2"),
+        "prioritySelectionGetter":(0x446F60,0x446FA4,"659a5b461b875aaa7c66e12bc83ca9df6fb62df75b310ddcd14f9e80a9fe199b"),
+        "priorityNotification":(0x4B9ED0,0x4B9FA9,"b179d207c213e5d282f299de1b458698c888d1006c71176c554ef7ab65d8d9d4"),
+        "model47HiddenInitialization":(0x4F7223,0x4F7236,"e8b8730aa0b78cfa89b3a6011de8535f2bb0221ac1626d296ec9ee83551a7f64"),
+        "priorityRefresh":(0x53BA24,0x53BA3D,"36fcf43f3094b4fa2c07d39a06ab1c2a02e2076006bcf242a8adec261e5d167e"),
+        "lightJSONSetter":(0x47B320,0x47BF32,"1b74ea677658920317d244abd8a4ca7b8cc2f0d515da3d9d6ca85e14bc186aaf"),
+        "priorityNotifyDispatch":(0x490953,0x490973,"2cbe6bf1e35ffff09638a9fd843251975c6fc3de0ff0119ff45c230d96c1e35b"),
+        "targetLightHostSave":(0x4FB970,0x4FB9BB,"6ac61c1ce05e2b0585cbeb86eedd9705e6acb7d65419c93f5781f6c6287b0ade"),
+    }
+    for name,(start,end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("System lighting boundary differs: "+name)
+    fields={0x7459BC:"LightOpenFlag",0x745BC4:"IsSysLightFirst"}
+    for address,name in fields.items():
+        if pe.at(address,len(name)+1)!=name.encode()+b"\0":
+            raise ValueError("System lighting field differs")
+    checks={0x47B56E:"0fb64d13",0x47BE83:"0fb64d36",0x4B9F05:"837dbc03",0x4B9F1E:"e83dd0f8ff",0x4B9F32:"8a45b88845fa",0x4F7223:"6a00",0x4F7231:"e86afcf4ff",0x49096E:"e85d950200"}
+    for address,raw in checks.items():
+        if pe.at(address,len(bytes.fromhex(raw)))!=bytes.fromhex(raw):raise ValueError("System lighting instruction differs")
+    resource=None
+    if skin is not None:
+        data=(Path(skin)/"XML/CustomControlXML/LightControl.xml").read_bytes()
+        text=re.sub(r"<!--.*?-->","",data.decode("utf-8-sig"),flags=re.S)
+        node=re.search(r'<VerticalLayout\b[^>]*\bname="Sys_light_first_Layout"[^>]*>',text)
+        if node is None or 'visible="false"' not in node.group(0):raise ValueError("System lighting priority resource differs")
+        resource={"sha256":hashlib.sha256(data).hexdigest(),"layout":"Sys_light_first_Layout","initiallyVisible":False}
+    return {"functionBodies":{name:{"start":hex(a),"endExclusive":hex(b),"sha256":h} for name,(a,b,h) in bodies.items()},
+            "instructions":{hex(a):raw for a,raw in checks.items()},"resource":resource,
+            "fields":{"LightOpenFlag":{"structureByte":11,"deviceByte":"0x2167","parameterByte":21},"IsSysLightFirst":{"structureByte":46,"deviceByte":"0x218a"}},
+            "targetInitialization":"CEevisionKeyboardDevice/model47 passes 0 to priority layout visibility at 0x4f7231",
+            "notificationGate":"Sys_light_first_Check dispatch 0x49096e -> 0x4b9ed0; family getter must equal 3; checkbox byte updates structure offset 46",
+            "limits":"These are separate JSON fields. Priority control is hidden at the traced target initialization and notification is family-gated; no whole-program visibility proof. LightOpenFlag physical semantics remain unconfirmed. No new control or hardware access."}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -3044,7 +3082,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 65,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 66,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3085,6 +3123,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
+        "systemLightingPriorityBoundary": inspect_system_lighting_priority_boundary(pe,skin),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),
