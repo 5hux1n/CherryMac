@@ -14,7 +14,7 @@ import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
-let defaultInspection=null;
+let defaultInspection=null,selectedDefaultLightingFile=null;
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
@@ -61,6 +61,8 @@ function render(){
   $('review-lighting').disabled=busy||!baseline;
   $('review-default-lighting').disabled=$('review-default-lighting-file').disabled=busy||!baseline||!profile.lightingMapping;
   if($('open-default-lighting-acceptance'))$('open-default-lighting-acceptance').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null;
+  if($('open-selected-default-lighting-acceptance'))$('open-selected-default-lighting-acceptance').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null||selectedDefaultLightingFile===null;
+  $('selected-default-lighting-name').textContent=selectedDefaultLightingFile?`已选择：${selectedDefaultLightingFile.name}`:'尚未选择其他默认灯效文件。';
   $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   updatePaletteControls();
   $('save-local-lighting').disabled=busy||!baseline||!baselineLightingMapping||!profile.lightingMapping||!['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding);
@@ -282,6 +284,7 @@ function handoffLightingAcceptance(makeReview,{defaultPlan=false}={}){
 }
 if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>handoffLightingAcceptance(()=>reviewLightingDraft(profile,baseline));
 if($('open-default-lighting-acceptance'))$('open-default-lighting-acceptance').onclick=()=>handoffLightingAcceptance(()=>reviewDefaultLighting(null,baseline,profile.lightingMapping),{defaultPlan:true});
+if($('open-selected-default-lighting-acceptance'))$('open-selected-default-lighting-acceptance').onclick=()=>handoffLightingAcceptance(()=>{requireThat(selectedDefaultLightingFile,'请先选择其他官方默认文件。');return reviewDefaultLighting(selectedDefaultLightingFile.text,baseline,profile.lightingMapping);},{defaultPlan:true});
 $('discard-lighting-result').onclick=()=>{
   if(busy||!lightingReconnectSnapshot)return;
   if(!confirm('放弃待核对的返回结果？当前草稿仍保留，但下次普通读取会替换草稿，请先导出保存。此操作不修改键盘。'))return;
@@ -309,7 +312,12 @@ $('review-default-lighting').onclick=()=>operation(()=>exportDefaultLightingRevi
 $('review-default-lighting-file').onclick=()=>{if(!busy)$('default-lighting-file').click();};
 $('default-lighting-file').onchange=()=>{
   const file=$('default-lighting-file').files[0];$('default-lighting-file').value='';if(!file)return;
-  return operation(async()=>{requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');exportDefaultLightingReview(await file.text());},{localOnly:true});
+  selectedDefaultLightingFile=null;
+  return operation(async()=>{
+    requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');requireThat(baseline&&profile.lightingMapping,'请先读取完整配置和实际灯光映射。');
+    const text=await file.text();reviewDefaultLighting(text,baseline,profile.lightingMapping);selectedDefaultLightingFile={name:file.name,text};
+    exportDefaultLightingReview(text);
+  },{localOnly:true});
 };
 $('review-lighting').onclick=()=>operation(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
@@ -359,7 +367,7 @@ $('connect').onclick=()=>{
   });
 };
 $('read').onclick=()=>operation(read);$('disconnect').onclick=()=>operation(async()=>{if(hid)await hid.close();hid=null;status('已断开配置接口，键盘仍可正常输入。');});
-$('discard').onclick=()=>act(async()=>{const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot,baselineLightingMapping)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping){profile.lightingMapping=clone(baselineLightingMapping);profile.macroStorageLayout??='officialBindings';}else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
+$('discard').onclick=()=>act(async()=>{requireLightingResultReconciled();const snapshot=baseline??demo;profile=await recalledMacroProfile(snapshot,baselineLightingMapping)??safeProfile(snapshot);if(baseline){if(baselineLightingMapping){profile.lightingMapping=clone(baselineLightingMapping);profile.macroStorageLayout??='officialBindings';}else delete profile.lightingMapping;}refreshMacros();loadMacro();loadPlayback();syncLights();status('已撤销编辑区修改，实体键盘没有变化。');});
 function requireLightingResultReconciled(){requireThat(lightingReconnectSnapshot===null,'请先重新读取核对灯效结果，或放弃待核对结果；草稿可先导出保存。');}
 function adoptImportedProfile(next,name){
   requireLightingResultReconciled();
@@ -439,6 +447,7 @@ $('export-default-recorded-recovery').onclick=()=>operation(()=>{
 },{localOnly:true});
 $('import-default').onclick=()=>$('default-file').click();
 $('default-file').onchange=()=>operation(async()=>{
+  requireLightingResultReconciled();
   const file=$('default-file').files[0];$('default-file').value='';if(!file)return;
   requireThat(baseline,'请先读取键盘，再载入官方默认草稿。');
   requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
