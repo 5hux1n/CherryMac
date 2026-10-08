@@ -1331,9 +1331,13 @@ enum WindowsProfile {
         // Advisory only: mapped raw colors lost during official host encoding.
         var encodedBlackColorSlots:[Int]? = nil
     }
-    static func reviewDefaultLighting(_ data:Data,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->LightingDraftReview{
+    static func reviewDefaultLighting(_ data:Data? = nil,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->LightingDraftReview{
         try baseline.validate();guard baseline.deviceInfo[5]==126,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认灯效需要本型号完整配置和 126 个颜色位置。")}
-        let template=try extractDefaultTemplate(data),parameters=try prepareOfficialLightingParameters(template,bank:0),slots=try mapping.slots(for:baseline)
+        // Model 47 LightInfo is identical in official DefaultData0…4; bank 0 only.
+        let parameters:(head:[UInt8],lightOpenFlag:UInt8)
+        if let data{parameters=try prepareOfficialLightingParameters(extractDefaultTemplate(data),bank:0)}
+        else{parameters=([0,23,4,2,0,1,0,255,0],0)}
+        let slots=try mapping.slots(for:baseline)
         let red:Set<Int>=[44,64,65,66,96,113,114,115];var colors=[UInt8](repeating:0,count:378)
         for (logical,slot) in slots.enumerated(){guard let slot else{continue};colors[slot*3]=254;colors[slot*3+1]=red.contains(logical) ? 0:254;colors[slot*3+2]=red.contains(logical) ? 0:254}
         var plan=assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:nil,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)

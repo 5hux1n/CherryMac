@@ -714,7 +714,8 @@ export async function executeDefaultTransaction(review,{recovery=null,source,ope
 }
 export function reviewDefaultLighting(text,baseline,mapping){
   validateSnapshot(baseline,true);requireThat(baseline.deviceInfo[5]===126,'默认灯效需要本型号完整配置和 126 个颜色位置。');
-  const template=extractOfficialDefaultTemplate(text),parameters=prepareOfficialLightingParameters(template,0),slots=lightingMappingSlots(mapping,baseline),red=new Set([44,64,65,66,96,113,114,115]),colors=Array(378).fill(0);
+  // Official DefaultData0…4 agree for model 47; no profile selection needed at bank 0.
+  const parameters=text==null?{head:[0,23,4,2,0,1,0,255,0],lightOpenFlag:0}:prepareOfficialLightingParameters(extractOfficialDefaultTemplate(text),0),slots=lightingMappingSlots(mapping,baseline),red=new Set([44,64,65,66,96,113,114,115]),colors=Array(378).fill(0);
   slots.forEach((slot,logical)=>{if(slot!=null)colors.splice(slot*3,3,254,red.has(logical)?0:254,red.has(logical)?0:254);});
   const options={bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true},plan=assembleLightingPlan(parameters,null,options);
   plan.defaultColorData=colors;plan.stages.unshift({name:'defaultColors',beginRequired:true,beginCommand:1,writes:Array.from({length:Math.ceil(378/56)},(_,i)=>({command:0x0b,offset:i*56,flag:0,data:colors.slice(i*56,(i+1)*56)})),finishCommand:2,finishDelayMilliseconds:10});

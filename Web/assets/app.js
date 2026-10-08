@@ -59,7 +59,7 @@ function render(){
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
-  $('review-default-lighting').disabled=busy||!baseline||!profile.lightingMapping;
+  $('review-default-lighting').disabled=$('review-default-lighting-file').disabled=busy||!baseline||!profile.lightingMapping;
   $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   updatePaletteControls();
   $('save-local-lighting').disabled=busy||!baseline||!baselineLightingMapping||!profile.lightingMapping||profile.lightingColorEncoding!=='officialRGB';
@@ -287,16 +287,18 @@ $('lighting-draft-file').onchange=()=>{
     status('已仅载入官方灯效与配色到编辑区。键位、宏、文本及设备设置保留，尚未写入。');
   },{localOnly:true});
 };
-$('review-default-lighting').onclick=()=>{if(!busy)$('default-lighting-file').click();};
+function exportDefaultLightingReview(text=null){
+  requireThat(baseline&&profile.lightingMapping,'请先读取完整配置和 LED 映射。');
+  const review=reviewDefaultLighting(text,baseline,profile.lightingMapping);
+  const summary=`${text==null?'内置官方默认灯效':'所选文件默认灯效'}：默认配色表先于灯效参数；颜色将改变 ${review.changedColorSlots.length} 个位置，参数将改变 ${review.changedParameterOffsets.length} 项。按键、宏和文本保持当前配置；这里只导出计划，不改变编辑草稿或键盘。`;
+  $('lighting-review-summary').textContent=summary;if(!confirm(summary+' 导出计划？'))return;
+  download(review,'CherryMac-默认灯效核对.json');status('已导出默认灯效计划，尚未写入；可在灯效验收流程载入。');
+}
+$('review-default-lighting').onclick=()=>operation(()=>exportDefaultLightingReview(),{localOnly:true});
+$('review-default-lighting-file').onclick=()=>{if(!busy)$('default-lighting-file').click();};
 $('default-lighting-file').onchange=()=>{
   const file=$('default-lighting-file').files[0];$('default-lighting-file').value='';if(!file)return;
-  return operation(async()=>{
-    requireThat(baseline&&profile.lightingMapping,'请先读取完整配置和 LED 映射。');requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
-    const review=reviewDefaultLighting(await file.text(),baseline,profile.lightingMapping);
-    const summary=`默认配色表先于灯效参数；颜色将改变 ${review.changedColorSlots.length} 个位置，参数将改变 ${review.changedParameterOffsets.length} 项。按键、宏和文本保持当前配置；这里只导出计划，不改变编辑草稿或键盘。`;
-    $('lighting-review-summary').textContent=summary;if(!confirm(summary+' 导出计划？'))return;
-    download(review,'CherryMac-默认灯效核对.json');status('已导出默认灯效计划，尚未写入；可在灯效验收流程载入。');
-  },{localOnly:true});
+  return operation(async()=>{requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');exportDefaultLightingReview(await file.text());},{localOnly:true});
 };
 $('review-lighting').onclick=()=>operation(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');

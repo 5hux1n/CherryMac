@@ -1,0 +1,111 @@
+{
+  "format": "CherryMacOfficialDefaultLightingSource",
+  "version": 1,
+  "utilityVersion": "2.3.28.7",
+  "scope": "Static model47 LightInfo only; bank 0; no hardware verification",
+  "files": [
+    {
+      "file": "DefaultData0.json",
+      "sha256": "cd424509061bdf4effcd4616344000491a07f3cd2f638d721f37971b68dc6e3d",
+      "model": 47,
+      "LightInfo": {
+        "Blue": 0,
+        "Green": 255,
+        "Light": 4,
+        "Fx": 0,
+        "MultiColor": true,
+        "Red": 0,
+        "SelectItem": 23,
+        "Speed": 2,
+        "LightOpenFlag": false
+      }
+    },
+    {
+      "file": "DefaultData1.json",
+      "sha256": "fb0963692acbad88034875ef8a99c3abee63c2bc96e55a6a42d2997a1c502e85",
+      "model": 47,
+      "LightInfo": {
+        "Blue": 0,
+        "Green": 255,
+        "Light": 4,
+        "Fx": 0,
+        "MultiColor": true,
+        "Red": 0,
+        "SelectItem": 23,
+        "Speed": 2,
+        "LightOpenFlag": false
+      }
+    },
+    {
+      "file": "DefaultData2.json",
+      "sha256": "8318efa92a7dd2c24af2874e4d91b311c0c01ab29716f62e360208fd9c64383e",
+      "model": 47,
+      "LightInfo": {
+        "Blue": 0,
+        "Green": 255,
+        "Light": 4,
+        "Fx": 0,
+        "MultiColor": true,
+        "Red": 0,
+        "SelectItem": 23,
+        "Speed": 2,
+        "LightOpenFlag": false
+      }
+    },
+    {
+      "file": "DefaultData3.json",
+      "sha256": "6f5bc6885b806c6930840424cfe9b07fccac89e24781fe998f4e3b61fe07d8f9",
+      "model": 47,
+      "LightInfo": {
+        "Blue": 0,
+        "Green": 255,
+        "Light": 4,
+        "Fx": 0,
+        "MultiColor": true,
+        "Red": 0,
+        "SelectItem": 23,
+        "Speed": 2,
+        "LightOpenFlag": false
+      }
+    },
+    {
+      "file": "DefaultData4.json",
+      "sha256": "9e9c1489e6c3162de29c60c2f1c691524e7e14170128dd81ae359f2552c9dff6",
+      "model": 47,
+      "LightInfo": {
+        "Blue": 0,
+        "Green": 255,
+        "Light": 4,
+        "Fx": 0,
+        "MultiColor": true,
+        "Red": 0,
+        "SelectItem": 23,
+        "Speed": 2,
+        "LightOpenFlag": false
+      }
+    }
+  ],
+  "encodedParameterHead": [
+    0,
+    23,
+    4,
+    2,
+    0,
+    1,
+    0,
+    255,
+    0
+  ],
+  "lightOpenFlag": 0,
+  "paletteSource": "Utility 4FA0E0; actual device LED mapping required",
+  "defaultRedLogicalIndices": [
+    44,
+    64,
+    65,
+    66,
+    96,
+    113,
+    114,
+    115
+  ]
+}

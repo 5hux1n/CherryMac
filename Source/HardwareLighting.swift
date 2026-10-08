@@ -108,13 +108,21 @@ extension HardwareWindowController {
     }
     @objc func reviewDefaultLighting(){
         guard !busy,baselineWasRead,let baseline,let mapping=profile?.lightingMapping else{message.stringValue="请先读取完整配置和 LED 映射。";return}
-        let input=NSOpenPanel();input.canChooseDirectories=false;input.allowsMultipleSelection=false;input.message="选择官方 DefaultData0～4.json，只准备本型号默认灯效与配色计划。"
-        guard input.runModal() == .OK,let url=input.url else{return}
-        do{guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
-            let review=try WindowsProfile.reviewDefaultLighting(Data(contentsOf:url),baseline:baseline,mapping:mapping)
-            let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复所选文件的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。这里只导出计划，不改变编辑草稿或键盘。"
-            alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回")
-            guard alert.runModal() == .alertFirstButtonReturn else{return}
+        exportDefaultLightingReview(nil)
+    }
+    private func exportDefaultLightingReview(_ data:Data?){
+        guard let baseline,let mapping=profile?.lightingMapping else{return}
+        do{let review=try WindowsProfile.reviewDefaultLighting(data,baseline:baseline,mapping:mapping)
+            let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复\(data == nil ? "内置官方默认" : "所选文件")的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。这里只导出计划，不改变编辑草稿或键盘。"
+            alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回");alert.addButton(withTitle:"选择其他官方默认文件…")
+            let response=alert.runModal()
+            if response == .alertThirdButtonReturn{
+                let input=NSOpenPanel();input.canChooseDirectories=false;input.allowsMultipleSelection=false
+                guard input.runModal() == .OK,let url=input.url else{return}
+                guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
+                exportDefaultLightingReview(try Data(contentsOf:url));return
+            }
+            guard response == .alertFirstButtonReturn else{return}
             let output=NSSavePanel();output.nameFieldStringValue="CherryMac-默认灯效核对.json";guard output.runModal() == .OK,let destination=output.url else{return}
             let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:destination,options:.atomic)
             message.stringValue="已导出默认灯效计划，配色先于参数；尚未写入。可在灯效验收流程载入。"
