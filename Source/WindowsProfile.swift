@@ -407,6 +407,20 @@ enum WindowsProfile {
             }
             let next=actions.count;actions.append(merged.first ?? generated);emitted.append(macro);variants[identity]=next;return next
         }
+        var keyVariants:[Int:Int]=[:]
+        func addKeyAction(_ bytes:[UInt8])->Int {
+            let value=Int(bytes[0])*65536+Int(bytes[1])*256+Int(bytes[2])
+            if let index=keyVariants[value]{return index}
+            let media=bytes[0]==0x30 ? mediaCodes.firstIndex(of:UInt16(bytes[1]) | UInt16(bytes[2])<<8):nil
+            if let existing=actions.firstIndex(where:{action in
+                guard let content=action["ActionContent"] as? [String:Any],let type=try? integer(action["ActionType"],"ActionType",range:0...4) else{return false}
+                if type==1{return (try? integer(content["ActionKey"],"ActionKey",range:1...0xFFFFFF))==value}
+                return type==4 && media != nil && (try? integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1))==media
+            }){keyVariants[value]=existing;return existing}
+            let index=actions.count
+            let content:[String:Any]=["ActionKey":media == nil ? value:0,"ActionMedia":media ?? 0,"ActionMacroFixTimeIsSelected":0,"ActionMacroFixTimeValue":0,"ActionMacroLoopValue":1,"ActionMacroMskeyIsSelected":0,"ActionMacroType":0,"ActionText":""]
+            actions.append(["ActionType":media == nil ? 1:4,"ActionName":"按键配置 \(index+1)","ActionContent":content]);keyVariants[value]=index;return index
+        }
         for (index,macro) in profile.macros.enumerated(){_ = try add(index,macro.preferredPlayback ?? .once)}
         for i in keys.indices {
             guard let slot=physicalSlot(defaults[i]),![6,71].contains(slot) else{
@@ -429,7 +443,9 @@ enum WindowsProfile {
                 keys[i]["ActionLink"]=1;keys[i]["ActionLinkIndex"]=try add(index,playback);keys[i]["Assignment"]=keys[i]["DefaultAssignment"]
             }else{
                 guard [UInt8(0x20),0x30].contains(bytes[0]) else{throw HardwareError(message:"此按键动作尚不能导出到官方格式。")}
-                keys[i]["Assignment"]=Int(bytes[0])*65536+Int(bytes[1])*256+Int(bytes[2]);keys[i]["ActionLink"]=0;keys[i]["ActionLinkIndex"] = -1
+                keys[i]["Assignment"]=Int(bytes[0])*65536+Int(bytes[1])*256+Int(bytes[2])
+                let isFactory=profile.lightingMapping.map{Array($0.factoryKeymap[slot*3..<slot*3+3])==bytes} ?? false
+                keys[i]["ActionLink"]=isFactory ? 0:1;keys[i]["ActionLinkIndex"]=isFactory ? -1:addKeyAction(bytes)
             }
         }
         // Distinct playback variants become separate macros on official import.

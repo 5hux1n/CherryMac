@@ -358,6 +358,14 @@ export function exportWindowsKeysAndMacros(profile,template,{preservingTextIndic
       variants.set(identity,actions.length);actions.push(merged[0]??next);emitted.push(macro);}return variants.get(identity);};
   // Emit every library item, including unbound macros; a shared binding reuses
   // one action, while different modes need distinct official ActionContent.
+  const keyVariants=new Map();
+  const addKeyAction=b=>{
+    const value=b[0]*65536+b[1]*256+b[2];if(keyVariants.has(value))return keyVariants.get(value);
+    const media=b[0]===0x30?MEDIA_CODES.indexOf(b[1]+b[2]*256):-1;
+    const existing=actions.findIndex(action=>{try{const type=winInt(action.ActionType,'ActionType',0,4),content=action.ActionContent;if(type===1)return winInt(content?.ActionKey,'ActionKey',1,0xffffff)===value;return type===4&&media>=0&&winInt(content?.ActionMedia,'ActionMedia',0,MEDIA_CODES.length-1)===media;}catch{return false;}});
+    if(existing>=0){keyVariants.set(value,existing);return existing;}const index=actions.length;
+    actions.push({ActionType:media>=0?4:1,ActionName:`按键配置 ${index+1}`,ActionContent:{ActionKey:media>=0?0:value,ActionMedia:Math.max(0,media),ActionMacroFixTimeIsSelected:0,ActionMacroFixTimeValue:0,ActionMacroLoopValue:1,ActionMacroMskeyIsSelected:0,ActionMacroType:0,ActionText:''}});keyVariants.set(value,index);return index;
+  };
   profile.macros.forEach((m,i)=>add(i,m.preferredPlayback??{mode:'count',count:1}));
   root.KeyList.forEach((k,i)=>{const slot=physicalSlot(WINDOWS_DEFAULTS[i]);
     if(slot===undefined||[6,71].includes(slot)){
@@ -369,7 +377,7 @@ export function exportWindowsKeysAndMacros(profile,template,{preservingTextIndic
       const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,old.length-1);requireThat(remap.has(index),'文本动作索引无效，无法导出。');
       const plan=officialHostTextPlan(old[index]);requireThat(!equal(b,[0xa1,0,0])||plan.marker!==null,'已安装文本键对应空定义，无法导出。');k.ActionLinkIndex=remap.get(index);
     }else if([0x70,0x71].includes(b[0])){const index=profile.macros.findIndex(m=>sameMacroName(m.name,profile.macroBindings?.[slot]));requireThat(index>=0,'宏库与绑定名称不一致，不能导出。');const playback=profile.macroModes?.[slot]??{mode:'count',count:1};k.ActionLink=1;k.ActionLinkIndex=add(index,playback);k.Assignment=k.DefaultAssignment;}
-    else{requireThat([0x20,0x30].includes(b[0]),'此按键动作尚不能导出到官方格式。');k.Assignment=b[0]*65536+b[1]*256+b[2];k.ActionLink=0;k.ActionLinkIndex=-1;}
+    else{requireThat([0x20,0x30].includes(b[0]),'此按键动作尚不能导出到官方格式。');k.Assignment=b[0]*65536+b[1]*256+b[2];const isFactory=profile.lightingMapping&&equal(b,profile.lightingMapping.factoryKeymap.slice(slot*3,slot*3+3));k.ActionLink=isFactory?0:1;k.ActionLinkIndex=isFactory?-1:addKeyAction(b);}
   });
   // Official actions with different modes import as separate library items.
   // Check that representation still fits before returning a usable document.

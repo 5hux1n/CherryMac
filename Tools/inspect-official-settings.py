@@ -950,6 +950,13 @@ def inspect_default_key_action_branch(pe):
         if pe.pointer(0x77F604 + offset) != target:
             raise ValueError("Unexpected default key/action dispatch")
     checks = {
+        0x4FC28C: "e83f00feff", 0x4FC297: "81c730270000",
+        0x4FC29D: "b980000000", 0x4FC2A8: "f3a5",
+        0x4DC320: "0fb75144", 0x4DC324: "83fa01",
+        0x4DC331: "c6440dbc87", 0x4DC340: "c64405bc07",
+        0x4FF1C2: "83bd40fdffff00", 0x4FF1D1: "c1fa10",
+        0x4FF1E0: "c1f808", 0x4FF1EF: "888de8fdffff",
+
         0x47E9E0: "b914000000", 0x47EA6C: "83c214",
         0x47D544: "c745dc00000000",  # record starts with action link = 0
         0x47D54D: "8945e0", 0x47D550: "8945e4",
@@ -1002,6 +1009,8 @@ def inspect_default_key_action_branch(pe):
         "recordLayout": {"bytes": 20, "actionLinkOffset": 0, "actionIndexOffset": 4,
                          "assignmentBytes": [10, 11, 12], "defaultAssignmentBytes": [16, 17, 18]},
         "missingActionFields": {"ActionLink": 0, "ActionLinkIndex": -1},
+        "initialTableSource": {"defaultReader":"0x4dc2d0", "caller":"0x4fc28c", "copy":"0x4fc297..0x4fc2a8 -> device+0x2730", "primaryReadCommand":7,"alternateReadCommand":"0x87 when word(transport+0x44)==1","limits":"Named initialization path only; not a whole-program alias/write inventory or a live device read"},
+        "directKeyAction": {"type":1,"branch":"0x4ff199..0x4ff1f5","field":"ActionContent.ActionKey","nonzeroValue":"high/middle/low bytes copied verbatim to the three-byte record", "disabledRecord":"0x200000 is nonzero and therefore is copied", "exportImplication":"Assignment plus ActionLink=0 does not encode a changed key in this named sender; use a nonzero action reference for a nondefault record"},
         "factoryCopy": {"member": "0x2730", "length": "3 * byte(device+0x1df9)",
                         "copyCall": "0x4ff07d", "actionlessBranch": "0x4ff0fd -> 0x4ff515",
                         "conclusion": "Zero ActionLink skips action lookup/encoding and retains the copied factory record; JSON Assignment is not used to override it in this branch."},
@@ -3012,7 +3021,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 63,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 64,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
