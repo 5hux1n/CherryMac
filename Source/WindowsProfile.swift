@@ -1390,6 +1390,25 @@ enum WindowsProfile {
         var result=profile;result.snapshot.colors=Array(repeating:0,count:378);result.snapshot.parameters[1]=8;result.lightingColorEncoding = .officialRGB
         try result.validate();return result
     }
+    // Official 509C00 clears every logical RGB entry, including hidden entries;
+    // it preserves alpha and other fields and is not a selected-key operation.
+    static func clearCustomLightingDraft(_ profile:HardwareProfile)throws->HardwareProfile {
+        var result=try newCustomLightingDraft(profile)
+        if let text=result.windowsTemplateJSON {
+            var root=try templateRoot(Data(text.utf8))
+            if let value=root["CustomLightMode"],!(value is NSNull){
+                guard var custom=value as? [String:Any],var groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126 else{throw HardwareError(message:"官方逐键颜色表无效，不能清空。")}
+                for i in groups[0].indices {
+                    for name in ["Red","Green","Blue"]{_ = try integer(groups[0][i][name],name,range:0...255);groups[0][i][name]=0}
+                    if let alpha=groups[0][i]["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
+                }
+                custom["LightColorInfo"]=groups;root["CustomLightMode"]=custom
+                let data=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys,.withoutEscapingSlashes]);guard data.count<=1_000_000 else{throw HardwareError(message:"官方模板过大。")}
+                result.windowsTemplateJSON=String(decoding:data,as:UTF8.self)
+            }
+        }
+        try result.validate();return result
+    }
     private static func editorLightingParameters(_ snapshot:HardwareSnapshot,bank:Int,transportSelector:Int,chunkCapacity:Int)throws->(head:[UInt8],lightOpenFlag:UInt8) {
         try snapshot.validate()
         guard snapshot.colors != nil,snapshot.macroData != nil,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity)else{throw HardwareError(message:"需要完整配置，且配置地址、传输分支和报告容量须在离线计划范围内。")}

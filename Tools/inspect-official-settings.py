@@ -2971,6 +2971,29 @@ def inspect_light_flag_readback_source(pe):
             "limits":"A concrete readback-structure transfer; not a new UI producer or proof of physical on/off semantics. Other producers and indirect writes are not excluded."}
 
 
+def inspect_cancel_custom_light_dispatch(pe):
+    """Positive fixed branch evidence; no whole-program or USB-write claim."""
+    bodies = {
+        0x48F28B: (0x48F313, "735c676e80e3ef469cf1fb0c526b9a681d39c536e30e79a74390ac6e3325e2fc"),
+        0x4B13B0: (0x4B13E9, "9ee385366884f753044e35f5bcb10a8379fbe25469b1a274ab5edf793724b2c0"),
+        0x509C00: (0x509CE5, "2c6b9f211f89644f41fa79c7431c25d1ea9bbd9cfc5e0defdf6cdc3c75a84305"),
+    }
+    for start, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Unexpected cancel-custom-light method")
+    name = "custom_color_cancel_btn".encode("utf-16le") + b"\0\0"
+    if pe.at(0x75BD80, len(name)) != name or pe.at(0x77F604+0x300,4) != struct.pack("<I",0x4FB2F0):
+        raise ValueError("Unexpected cancel-custom-light control or target UI virtual")
+    return {"control": "custom_color_cancel_btn", "confirmBranch": "0x48f303 -> 0x4b13b0",
+            "familyGuard": "0x5414d0 == 1", "target": "0x509c00",
+            "selectedItemGuard": 21, "hardwareMode": 8,
+            "scope": "All entries of model color vector +0x2150; RGB bytes 0,1,2 zeroed, alpha untouched",
+            "serialize": "0x483410 -> model CustomLightMode +0x4000",
+            "refresh": "target virtual+0x300 = 0x4fb2f0; color control 0x446500(1)",
+            "functionBodies": {hex(a): {"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+            "limits": "Static host table/branch facts; does not establish USB submission, current device behavior or power persistence"}
+
+
 def inspect_default_light_reset_dispatch(pe):
     bodies={"notify":(0x48E97F,0x48E9A4,"8ed2357c3ce6b93d9535a1ba282d9ed64b6b763a487e7f4cfe807687fa36985f"),
             "controller":(0x4ABC30,0x4ABE9D,"2ceb12e155cdd5cfe711d7a6d3fa531d2992369d6590a512f311681a79a2f470"),
@@ -3111,7 +3134,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 68,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 69,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3155,6 +3178,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "systemLightingPriorityBoundary": inspect_system_lighting_priority_boundary(pe,skin),
         "lightFlagReadbackSource": inspect_light_flag_readback_source(pe),
         "defaultLightResetDispatch": inspect_default_light_reset_dispatch(pe),
+        "cancelCustomLightDispatch": inspect_cancel_custom_light_dispatch(pe),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),

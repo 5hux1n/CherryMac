@@ -754,6 +754,20 @@ export function newCustomLightingDraft(profile){
   const result=clone(profile);result.snapshot.colors=Array(378).fill(0);result.snapshot.parameters[1]=8;result.lightingColorEncoding='officialRGB';
   validateProfile(result);return result;
 }
+// Official 509C00 clears the entire logical RGB table, retaining alpha/extras.
+export function clearCustomLightingDraft(profile){
+  const result=newCustomLightingDraft(profile);
+  if(typeof result.windowsTemplateJSON==='string'){
+    const root=JSON.parse(result.windowsTemplateJSON);validateWindowsTemplate(root,new TextEncoder().encode(result.windowsTemplateJSON).length);
+    if(root.CustomLightMode!=null){
+      const custom=root.CustomLightMode,groups=custom.LightColorInfo;
+      requireThat(custom&&typeof custom==='object'&&!Array.isArray(custom)&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'官方逐键颜色表无效，不能清空。');
+      for(const color of groups[0]){requireThat(color&&typeof color==='object'&&!Array.isArray(color),'官方颜色项无效。');for(const name of ['Red','Green','Blue']){winInt(color[name],name,0,255);color[name]=0;}if(Object.hasOwn(color,'Alpha'))winInt(color.Alpha,'Alpha',0,255);}
+      result.windowsTemplateJSON=JSON.stringify(root);requireThat(new TextEncoder().encode(result.windowsTemplateJSON).length<=1_000_000,'官方模板过大。');
+    }
+  }
+  validateProfile(result);return result;
+}
 function editorLightingParameters(snapshot,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(snapshot,true);
   requireThat(Number.isInteger(bank)&&bank>=0&&bank<=127&&[0,1].includes(transportSelector)&&Number.isInteger(chunkCapacity)&&chunkCapacity>=1&&chunkCapacity<=56&&typeof beginRequired==='boolean','配置地址、传输分支或报告容量超出离线计划范围。');

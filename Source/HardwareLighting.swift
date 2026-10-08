@@ -107,7 +107,7 @@ extension HardwareWindowController {
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func reviewDefaultLighting(){
-        guard !busy,baselineWasRead,let baseline,let mapping=profile?.lightingMapping else{message.stringValue="请先读取完整配置和 LED 映射。";return}
+        guard !busy,baselineWasRead,baseline != nil,profile?.lightingMapping != nil else{message.stringValue="请先读取完整配置和 LED 映射。";return}
         exportDefaultLightingReview(nil)
     }
     private func exportDefaultLightingReview(_ data:Data?){
@@ -168,7 +168,8 @@ extension HardwareWindowController {
         place(lightStrengthLabel,275,105,51,23,in:colors)
         lightPattern.addItems(withTitles:CherryLighting.patterns);controls.append(lightPattern);place(lightPattern,337,99,188,28,in:colors)
         place(label("渐变终点",12),548,105,66,23,in:colors);endColor.color = .systemBlue;controls.append(endColor);place(endColor,625,97,55,31,in:colors)
-        let paintButton=button("应用到所选键",#selector(stageColor)),offButton=button("熄灭所选键",#selector(stageLightOff));paletteEditButtons=[paintButton,offButton]
+        let paintButton=button("应用到所选键",#selector(stageColor)),offButton=button("熄灭所选键",#selector(stageLightOff));let clearButton=button("清空全部配色…",#selector(clearAllLightingColors));paletteEditButtons=[paintButton,offButton,clearButton]
+        place(clearButton,708,98,156,30,in:colors)
         place(paintButton,8,158,192,30,in:colors);place(offButton,218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
         let savePalette=button("保存本机配色",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的原始 RGB；未写入草稿请导出 JSON。不会写入键盘。"
@@ -240,6 +241,17 @@ extension HardwareWindowController {
             draft.snapshot.parameters[2]=UInt8(level);profile=draft;brightness.doubleValue=Double(level);update()
             message.stringValue="配色全局亮度已保存到草稿，原始 RGB 保留；尚未写入。"
         }catch{message.stringValue=error.localizedDescription;updatePaletteControls()}
+    }
+    @objc func clearAllLightingColors(){
+        guard !busy,let draft=profile else{return}
+        do{
+            try requireEditablePalette()
+            let alert=NSAlert();alert.messageText="清空全部逐键配色？";alert.informativeText="全部 RGB（包含隐藏位置和官方模板颜色）设为黑色，并选择自定义模式。按键、宏、亮度和其他参数保留。只改编辑区，尚未写入；可用撤销编辑恢复最近读回。"
+            alert.addButton(withTitle:"清空配色");alert.addButton(withTitle:"取消")
+            guard alert.runModal() == .alertFirstButtonReturn else{return}
+            profile=try WindowsProfile.clearCustomLightingDraft(draft);loadLighting();update()
+            message.stringValue="全部逐键配色已清空，尚未写入。"
+        }catch{message.stringValue=error.localizedDescription}
     }
     @objc func stageColor(){
         guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
