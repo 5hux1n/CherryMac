@@ -1297,6 +1297,9 @@ export function validateLightingColorLibrary(value){
   requireThat(value.colors.every(color=>typeof color==='string'&&/^#[0-9A-F]{6}$/.test(color)),'收藏颜色格式无效。');return clone(value);
 }
 
+export function parseLightingColorLibrary(text){
+  requireThat(typeof text==='string'&&new TextEncoder().encode(text).length<=4096,'颜色收藏文件不能超过 4 KB。');return validateLightingColorLibrary(JSON.parse(text));
+}
 export function paintLightingProfile(profile,selection,pattern,start,end){
   validateProfile(profile);requireThat(['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding),'颜色来源未知，请先读取键盘或导入已知配色。');
   const next=clone(profile);paint(next.snapshot,selection,pattern,start,end,next.lightingMapping);

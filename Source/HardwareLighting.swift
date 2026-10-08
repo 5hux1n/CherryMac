@@ -256,14 +256,31 @@ extension HardwareWindowController {
             message.stringValue="配色全局亮度已保存到草稿，原始 RGB 保留；尚未写入。"
         }catch{message.stringValue=error.localizedDescription;updatePaletteControls()}
     }
+    private func importLightingColorLibraryFile()throws->LightingColorLibrary?{
+        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        guard panel.runModal() == .OK,let url=panel.url else{return nil}
+        guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=4096 else{throw HardwareError(message:"颜色收藏文件不能超过 4 KB。")}
+        let next=try LightingColorLibrary.decode(Data(contentsOf:url))
+        let confirm=NSAlert();confirm.messageText="导入 20 个颜色收藏？";confirm.informativeText="将替换这台 Mac 的全部收藏。需要保留旧收藏时，请先返回导出。颜色输入和键盘草稿不会改变。";confirm.addButton(withTitle:"替换收藏");confirm.addButton(withTitle:"取消")
+        guard confirm.runModal() == .alertFirstButtonReturn else{return nil}
+        try next.save();message.stringValue="已导入并核对 20 个颜色收藏；颜色输入和键盘草稿保持原样。";return next
+    }
+    private func exportLightingColorLibraryFile(_ library:LightingColorLibrary)throws{
+        let data=try library.encoded(),panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-color-library.json"
+        guard panel.runModal() == .OK,let url=panel.url else{return}
+        try data.write(to:url,options:.atomic)
+        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"颜色收藏文件保存核对失败。")}
+        message.stringValue="已导出 20 个颜色收藏，可在网页版或另一台 Mac 导入。"
+    }
     @objc func openLightingColorLibrary(_ sender:NSButton){
         guard !busy else{return}
         do{
             var library:LightingColorLibrary
             do{library=try LightingColorLibrary.load()}catch{
-                let alert=NSAlert();alert.messageText="颜色收藏无法读取";alert.informativeText=error.localizedDescription+" 可恢复官方默认 20 色，这会替换已有收藏；不更改键盘配置。";alert.addButton(withTitle:"恢复默认收藏");alert.addButton(withTitle:"返回")
-                guard alert.runModal() == .alertFirstButtonReturn else{return}
-                library = .defaults;try library.save()
+                let alert=NSAlert();alert.messageText="颜色收藏无法读取";alert.informativeText=error.localizedDescription+" 可恢复官方默认 20 色，这会替换已有收藏；不更改键盘配置。";alert.addButton(withTitle:"恢复默认收藏");alert.addButton(withTitle:"导入收藏文件…");alert.addButton(withTitle:"返回")
+                let choice=alert.runModal()
+                if choice == .alertSecondButtonReturn{guard let imported=try importLightingColorLibraryFile()else{return};library=imported}
+                else if choice == .alertFirstButtonReturn{library = .defaults;try library.save()}else{return}
             }
             let target=NSPopUpButton(frame:NSRect(x:0,y:104,width:310,height:28));target.addItems(withTitles:["内置单色","逐键／渐变起点","渐变终点"]);target.selectItem(at:sender.tag)
             let presets=NSPopUpButton(frame:NSRect(x:0,y:68,width:310,height:28));presets.addItems(withTitles:LightingColorLibrary.defaultColors.enumerated().map{"官方色卡 \($0.offset+1) · \($0.element)"});presets.selectItem(at:7)
@@ -271,10 +288,19 @@ extension HardwareWindowController {
             while true{
                 let panel=NSView(frame:NSRect(x:0,y:0,width:310,height:136));for view in [target,presets,favorites]{view.removeFromSuperview();panel.addSubview(view)}
                 let alert=NSAlert();alert.messageText="色卡与颜色收藏";alert.informativeText="官方预设和 20 个本机收藏槽。选色只更新颜色输入，之后再应用到按键或保存内置单色。收藏保存在这台 Mac，不写入键盘。";alert.accessoryView=panel
-                for title in ["使用官方色卡","使用收藏色","用当前颜色替换收藏槽","返回"]{alert.addButton(withTitle:title)}
+                for title in ["使用官方色卡","使用收藏色","管理收藏…","返回"]{alert.addButton(withTitle:title)}
                 let response=alert.runModal().rawValue;let index=target.indexOfSelectedItem
                 guard response != 1003 else{return}
                 if response==1002{
+                    let manage=NSAlert();manage.messageText="管理颜色收藏";manage.informativeText="收藏文件可在 Mac 和网页版之间迁移，不含键位、宏或硬件写入计划。导入前可先导出已有收藏。"
+                    for title in ["用当前颜色替换此槽","导入收藏文件…","导出全部收藏…","返回"]{manage.addButton(withTitle:title)}
+                    let choice=manage.runModal().rawValue
+                    if choice==1001{
+                        if let imported=try importLightingColorLibraryFile(){library=imported;let selected=favorites.indexOfSelectedItem;favorites.removeAllItems();favorites.addItems(withTitles:library.colors.enumerated().map{"收藏槽 \($0.offset+1) · \($0.element)"});favorites.selectItem(at:selected)}
+                        continue
+                    }
+                    if choice==1002{try exportLightingColorLibraryFile(library);continue}
+                    guard choice==1000 else{continue}
                     let value:LightRGB
                     if index==0{value=rgb(globalLightColor.color)}else if index==1{value=try readLightColor()}else{value=rgb(endColor.color)}
                     let confirm=NSAlert();confirm.messageText="替换收藏槽 \(favorites.indexOfSelectedItem+1)？";confirm.informativeText="保存 \(value.hex)，旧色 \(library.colors[favorites.indexOfSelectedItem]) 将替换。只保存颜色收藏。";confirm.addButton(withTitle:"替换");confirm.addButton(withTitle:"取消")

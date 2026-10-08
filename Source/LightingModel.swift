@@ -40,10 +40,17 @@ struct LightingColorLibrary:Codable {
         guard format=="CherryMacLightingColorLibrary",version==1,colors.count==20 else{throw HardwareError(message:"颜色收藏必须包含 20 个色卡。")}
         for value in colors{guard value.count==7,value.first=="#",value.dropFirst().unicodeScalars.allSatisfy({CharacterSet(charactersIn:"0123456789ABCDEF").contains($0)}) else{throw HardwareError(message:"收藏颜色格式无效。")}}
     }
-    static func load()throws->Self{
-        guard let data=UserDefaults.standard.data(forKey:"hardware.lightingColorLibrary")else{return defaults}
+    static func decode(_ data:Data)throws->Self{
         guard data.count<=4096 else{throw HardwareError(message:"颜色收藏资料过大。")}
         let value=try JSONDecoder().decode(Self.self,from:data);try value.validate();return value
+    }
+    func encoded()throws->Data{
+        try validate();let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        let data=try encoder.encode(self);guard data.count<=4096 else{throw HardwareError(message:"颜色收藏资料过大。")};return data
+    }
+    static func load()throws->Self{
+        guard let data=UserDefaults.standard.data(forKey:"hardware.lightingColorLibrary")else{return defaults}
+        return try decode(data)
     }
     func save()throws{
         try validate();let data=try JSONEncoder().encode(self);let key="hardware.lightingColorLibrary"
