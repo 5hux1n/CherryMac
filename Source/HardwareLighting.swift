@@ -81,12 +81,17 @@ extension HardwareWindowController {
             profile=next;loadLighting();loadLightColor();update();message.stringValue="本机灯效草稿已载入，其他模块保留，尚未写入。"
         }catch{message.stringValue="灯效草稿无法载入："+error.localizedDescription}
     }
+    var matchedLightingMetadata:RawLightingMetadata?{
+        guard baselineWasRead,lightingReconnectSnapshot==nil,let current=baseline,let draft=profile,
+              let mapping=baselineLightingMapping,mapping==draft.lightingMapping else{return nil}
+        return try? RawLightingMetadata.capture(draft,current:current)
+    }
     @objc func saveRawLightingDraft(){
-        guard !busy,baselineWasRead,let baseline,let draft=profile else{message.stringValue="请先读取键盘。";return}
+        guard !busy else{return}
         do{
-            guard let mapping=baselineLightingMapping,draft.lightingMapping==mapping else{throw HardwareError(message:"请先读取实际 LED 映射；导入的映射资料不能替代本次读取。")}
-            guard try rememberRawLighting(draft,current:baseline) else{throw HardwareError(message:"当前原始配色或灯效参数与最近读回不一致。尚未写入的草稿请在配置与备份中导出 JSON 保存。")}
-            message.stringValue="已将与最近读回一致的配色及位置来源保存到本机；下次读取并核对一致后可继续编辑。未写入键盘。"
+            guard let metadata=matchedLightingMetadata else{throw HardwareError(message:"当前配色尚未与实际读回和映射匹配；请使用“本机草稿”保存未写入的灯效。")}
+            try saveLightingRawMetadata(metadata,to:backupDirectory)
+            message.stringValue="已保存与最近读回一致的配色及位置来源；下次实际读取匹配后才采用。未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func newCustomLightingDraft(){
@@ -197,7 +202,7 @@ extension HardwareWindowController {
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
         place(button("本机草稿…",#selector(lightingDraftOptions(_:))),300,4,145,30,in:pane)
-        let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="读取后保存内置灯效即可核对，无需官方文件；逐键配色仍需原始颜色。仅导出计划。";place(review,690,4,210,30,in:pane)
+        let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="读取后保存内置灯效即可核对，无需官方文件；逐键配色可使用读取底色与改动位置来源。仅导出计划。";place(review,690,4,210,30,in:pane)
         #if CHERRY_LIGHTING_TEST
         place(button("独立灯效验收…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
         #endif
@@ -239,7 +244,7 @@ extension HardwareWindowController {
         place(clearButton,708,98,156,30,in:colors)
         place(paintButton,8,158,192,30,in:colors);place(offButton,218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
-        let savePalette=button("保存匹配颜色资料",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的配色及位置来源；未写入草稿请导出 JSON。不会写入键盘。"
+        let savePalette=button("保存匹配颜色资料",#selector(saveRawLightingDraft));matchedLightingSaveButton=savePalette;savePalette.toolTip="只保存与实际读回和映射一致的逐键颜色资料；未写入的编辑使用顶部“本机草稿”。"
         place(savePalette,708,158,156,30,in:colors)
         place(label("配色全局亮度",12),8,207,105,24,in:colors)
         paletteBrightness.numberOfTickMarks=5;paletteBrightness.allowsTickMarkValuesOnly=true;paletteBrightness.target=self;paletteBrightness.action=#selector(stagePaletteBrightness);controls.append(paletteBrightness)
@@ -292,6 +297,7 @@ extension HardwareWindowController {
     }
     var paletteEditable:Bool{(profile?.lightingColorEncoding == .officialRGB || profile?.lightingColorEncoding == .hardwareRGB) && profile?.lightingMapping != nil && profile?.snapshot.colors != nil}
     func updatePaletteControls(){
+        matchedLightingSaveButton?.isEnabled = !busy && matchedLightingMetadata != nil
         let editable = !busy && paletteEditable
         paletteEditButtons.forEach{$0.isEnabled=editable};paletteBrightness.isEnabled=editable
         let level=Int(profile?.snapshot.parameters[2] ?? 0);paletteBrightness.doubleValue=Double(level);paletteBrightnessLabel.stringValue="\(level)/4"

@@ -201,6 +201,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let paletteBrightness=NSSlider(value:4,minValue:0,maxValue:4,target:nil,action:nil)
     let paletteBrightnessLabel=NSTextField(labelWithString:"4/4")
     let paletteHelp=NSTextField(wrappingLabelWithString:"")
+    var matchedLightingSaveButton:NSButton?
     var paletteEditButtons:[NSButton]=[]
     let lightMultiple = NSButton(checkboxWithTitle:"多选",target:nil,action:nil)
     let lightRegion = NSPopUpButton()
