@@ -864,7 +864,7 @@ enum WindowsProfile {
                 if let alpha=entry["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
                 if let slot=(mapping == nil ? physicalSlot(defaults[index]):mapping![index]){result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes)}
             }
-            root["CustomLightMode"]=value;result.lightingColorEncoding = .officialRGB
+            root["CustomLightMode"]=value;result.lightingColorEncoding = .officialRGB;result.lightingRawSlots=nil
         }else if mode==8{throw HardwareError(message:"自定义模式缺少官方原始颜色表。")}
         let encoded=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys])
         _ = try templateRoot(encoded);result.windowsTemplateJSON=String(decoding:encoded,as:UTF8.self)
@@ -1362,6 +1362,7 @@ enum WindowsProfile {
         var encodedBlackColorSlots:[Int]? = nil
         if target.parameters[1]==8,let mapping=profile.lightingMapping,let raw=profile.snapshot.colors{
             encodedBlackColorSlots=try Set(mapping.slots(for:profile.snapshot).compactMap{$0}).sorted().filter{slot in
+                guard profile.lightingColorEncoding == .officialRGB || (profile.lightingRawSlots ?? []).contains(slot)else{return false}
                 raw[slot*3..<slot*3+3].contains(where:{$0 != 0}) && target.colors![slot*3..<slot*3+3].allSatisfy{$0==0}
             }
         }
@@ -1390,11 +1391,21 @@ enum WindowsProfile {
     }
     // Direct editing reuses the traced sender without inventing an official
     // document or treating stored RGB as an unscaled color source.
+    static func paintLightingDraft(_ profile:HardwareProfile,keys:[KeySpec],selection:Set<String>,pattern:Int,start:LightRGB,end:LightRGB)throws->HardwareProfile{
+        try profile.validate();guard profile.lightingColorEncoding == .officialRGB || profile.lightingColorEncoding == .hardwareRGB,let colors=profile.snapshot.colors,let mapping=profile.lightingMapping else{throw HardwareError(message:"颜色来源未知，请先读取完整配置和 LED 映射。")}
+        var next=profile;next.snapshot.colors=try CherryLighting.paint(colors,keys:keys,selected:selection,pattern:pattern,start:start,end:end,lightingMapping:mapping);next.snapshot.parameters[1]=8
+        if next.lightingColorEncoding == .hardwareRGB{
+            var raw=Set(next.lightingRawSlots ?? [])
+            for key in keys where selection.contains(key.id){guard let logical=CherryMatrix.slot(key),let slot=mapping.colorSlot(logical)else{throw HardwareError(message:"所选键没有有效 LED 映射。")};raw.insert(slot)}
+            next.lightingRawSlots=raw.sorted()
+        }
+        try next.validate();return next
+    }
     static func newCustomLightingDraft(_ profile:HardwareProfile)throws->HardwareProfile {
         try profile.validate();try profile.snapshot.validate()
         guard profile.snapshot.colors != nil,profile.snapshot.macroData != nil,let mapping=profile.lightingMapping else{throw HardwareError(message:"请先读取完整配置及 LED 映射。")}
         _ = try mapping.slots(for:profile.snapshot)
-        var result=profile;result.snapshot.colors=Array(repeating:0,count:378);result.snapshot.parameters[1]=8;result.lightingColorEncoding = .officialRGB
+        var result=profile;result.snapshot.colors=Array(repeating:0,count:378);result.snapshot.parameters[1]=8;result.lightingColorEncoding = .officialRGB;result.lightingRawSlots=nil
         try result.validate();return result
     }
     // Official 509C00 clears every logical RGB entry, including hidden entries;
@@ -1431,12 +1442,14 @@ enum WindowsProfile {
     static func planCustomLighting(_ profile:HardwareProfile,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)throws->OfficialLightingPlan {
         try profile.validate()
         let parameters=try editorLightingParameters(profile.snapshot,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity)
-        guard parameters.head[1]==8,profile.lightingColorEncoding == .officialRGB else{throw HardwareError(message:"请先新建逐键配色，或导入 Windows 官方原始配色；不能将读回颜色直接当作原始 RGB。")}
+        guard parameters.head[1]==8,(profile.lightingColorEncoding == .officialRGB || profile.lightingColorEncoding == .hardwareRGB) else{throw HardwareError(message:"请先读取已知存储色和 LED 映射，或新建／导入原始配色。")}
         guard let mapping=profile.lightingMapping else{throw HardwareError(message:"逐键配色需要有效 LED 映射。")}
         let slots=try mapping.slots(for:profile.snapshot),coefficient=CherryLighting.officialBrightnessCoefficients[Int(parameters.head[2])]
-        var colors=[UInt8](repeating:0,count:378)
-        // Match Utility's zero-filled output bank; scale raw RGB only once.
-        for slot in slots.compactMap({$0}){for channel in 0..<3{colors[slot*3+channel]=UInt8((Int(profile.snapshot.colors![slot*3+channel])*coefficient)>>8)}}
+        var colors=profile.lightingColorEncoding == .officialRGB ? [UInt8](repeating:0,count:378):profile.snapshot.colors!
+        let raw=profile.lightingColorEncoding == .officialRGB ? Set(slots.compactMap{$0}):Set(profile.lightingRawSlots ?? [])
+        // Official palettes match the zero-filled Utility path. Stored-base
+        // drafts preserve untouched bytes and encode only marked raw slots.
+        for slot in raw{for channel in 0..<3{colors[slot*3+channel]=UInt8((Int(profile.snapshot.colors![slot*3+channel])*coefficient)>>8)}}
         return assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:colors,bank:bank,transportSelector:transportSelector,chunkCapacity:chunkCapacity,beginRequired:beginRequired)
     }
     private static func assembleLightingPlan(head:[UInt8],lightOpenFlag:UInt8,colors:[UInt8]?,bank:Int,transportSelector:Int,chunkCapacity:Int,beginRequired:Bool)->OfficialLightingPlan {
@@ -1500,7 +1513,7 @@ enum WindowsProfile {
             return try encodeLightingDraft(profile.snapshot,template:prepared,lightingMapping:profile.lightingMapping)
         }
         let p=profile.snapshot.parameters
-        guard p[1] != 8 else{throw HardwareError(message:"自定义配色需要新建或导入原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。")}
+        guard p[1] != 8 else{throw HardwareError(message:"当前逐键草稿包含存储色，无法无损导出完整 Windows 原始 RGB 表；请导出 CherryMac JSON 保存位置来源。")}
         guard var light=root["LightInfo"] as? [String:Any],CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数或官方模板无效，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
         light["LightOpenFlag"]=Int(p[21])
@@ -1637,7 +1650,7 @@ enum WindowsProfile {
                 guard let slot=(lightingSlots == nil ? physicalSlot(defaults[index]):lightingSlots![index])else{continue}
                 result.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:bytes);colorCount+=1
             }
-            result.lightingColorEncoding = .officialRGB
+            result.lightingColorEncoding = .officialRGB;result.lightingRawSlots=nil
         }
         // Rebuild only when bindings changed; an import without macros must
         // preserve the original bank and its reserved bytes byte-for-byte.

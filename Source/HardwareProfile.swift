@@ -90,10 +90,18 @@ struct HardwareProfile: Codable, Equatable {
     var lightingMapping:LightingMappingContext? = nil
     enum LightingColorEncoding:String,Codable {case hardwareRGB,officialRGB}
     var lightingColorEncoding:LightingColorEncoding? = nil
+    // Stored RGB base; only these physical LED slots contain newly chosen raw RGB.
+    var lightingRawSlots:[Int]? = nil
     func validate() throws {
         guard format == "CherryMacProfile", version == 1, macroStorageLayout == .officialBindings || macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         if let lightingMapping{_ = try lightingMapping.slots(for:snapshot)}
+        if let raw=lightingRawSlots{
+            guard lightingColorEncoding == .hardwareRGB,snapshot.colors != nil,let mapping=lightingMapping,raw==Array(Set(raw)).sorted(),raw.count<=126 else{throw HardwareError(message:"逐键颜色来源记录无效。")}
+            _ = try mapping.slots(for:snapshot)
+            let mapped=Set(mapping.ledIndices.filter{$0<126}.map{Int($0)})
+            guard raw.allSatisfy({mapped.contains($0)})else{throw HardwareError(message:"原始颜色位置不在实际 LED 映射中。")}
+        }
         if let windowsTemplateJSON{_ = try WindowsProfile.templateRoot(Data(windowsTemplateJSON.utf8))}
         if let hostTextJSON{_ = try WindowsProfile.validateHostTextDefinition(Data(hostTextJSON.utf8))}
         for macro in macros { try macro.validate(maximumEvents:macroStorageLayout == .officialBindings ? 762:256); _ = try WindowsProfile.macroSource(self,macro:macro) }
@@ -212,7 +220,7 @@ struct HardwareProfile: Codable, Equatable {
         guard restored.snapshot.deviceInfo==before.deviceInfo,restored.snapshot.keymap==before.keymap,restored.snapshot.parameters==before.parameters,restored.snapshot.colors==before.colors,restored.snapshot.macroData==before.macroData else{throw HardwareError(message:"宏恢复读回与原配置不一致，未合并编辑区。")}
         guard let previous,previous.snapshot.deviceInfo==restored.snapshot.deviceInfo else{return restored}
         try previous.validate();var result=restored
-        result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors;result.lightingColorEncoding=previous.lightingColorEncoding
+        result.snapshot.parameters=previous.snapshot.parameters;result.snapshot.colors=previous.snapshot.colors;result.lightingColorEncoding=previous.lightingColorEncoding;result.lightingRawSlots=previous.lightingRawSlots
         result.lightingMapping=previous.lightingMapping;result.hostTextJSON=previous.hostTextJSON
         if let template=previous.windowsTemplateJSON {
             var root=try WindowsProfile.templateRoot(Data(template.utf8))
@@ -338,17 +346,18 @@ struct RawLightingMetadata:Codable {
     let snapshot:HardwareSnapshot
     let rawColors:[UInt8]
     let lightingMapping:LightingMappingContext
+    var rawSlots:[Int]? = nil
     func validate()throws {
         try snapshot.validate();_ = try lightingMapping.slots(for:snapshot)
-        guard format=="CherryMacRawLightingMetadata",version==1,rawColors.count==378,snapshot.parameters[1]==8 else{throw HardwareError(message:"本地原始配色资料无效。")}
-        var draft=HardwareProfile(snapshot:snapshot,lightingMapping:lightingMapping,lightingColorEncoding:.officialRGB)
+        guard format=="CherryMacRawLightingMetadata",[1,2].contains(version),rawColors.count==378,(version==1 ? rawSlots==nil:rawSlots != nil),snapshot.parameters[1]==8 else{throw HardwareError(message:"本地原始配色资料无效。")}
+        var draft=HardwareProfile(snapshot:snapshot,lightingMapping:lightingMapping,lightingColorEncoding:version==1 ? .officialRGB:.hardwareRGB,lightingRawSlots:rawSlots)
         draft.snapshot.colors=rawColors
         let plan=try WindowsProfile.planCustomLighting(draft,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         guard try plan.expectedReadback(from:snapshot).colors==snapshot.colors else{throw HardwareError(message:"本地原始配色与保存的硬件颜色不一致。")}
     }
     static func capture(_ draft:HardwareProfile,current:HardwareSnapshot)throws->RawLightingMetadata? {
         try draft.validate();try current.validate()
-        guard draft.lightingColorEncoding == .officialRGB,current.parameters[1]==8,
+        guard (draft.lightingColorEncoding == .officialRGB || draft.lightingColorEncoding == .hardwareRGB),current.parameters[1]==8,
               let mapping=draft.lightingMapping,let colors=draft.snapshot.colors else{return nil}
         // A local palette does not require a firmware transaction's commit
         // flag. Match actual lighting controls and colors, preserving all
@@ -358,14 +367,15 @@ struct RawLightingMetadata:Codable {
               offsets.allSatisfy({draft.snapshot.parameters[$0]==current.parameters[$0]}) else{return nil}
         let plan=try WindowsProfile.planCustomLighting(draft,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         guard try plan.expectedReadback(from:current).colors==current.colors else{return nil}
-        let value=RawLightingMetadata(snapshot:current,rawColors:colors,lightingMapping:mapping)
+        var value=RawLightingMetadata(snapshot:current,rawColors:colors,lightingMapping:mapping)
+        if draft.lightingColorEncoding == .hardwareRGB{value.version=2;value.rawSlots=draft.lightingRawSlots ?? []}
         try value.validate();return value
     }
     func adopting(into profile:HardwareProfile)throws->HardwareProfile? {
         try validate();try profile.validate()
         guard profile.lightingMapping==lightingMapping,profile.snapshot.deviceInfo==snapshot.deviceInfo,
               profile.snapshot.parameters==snapshot.parameters,profile.snapshot.colors==snapshot.colors else{return nil}
-        var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = .officialRGB
+        var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = version==1 ? .officialRGB:.hardwareRGB;next.lightingRawSlots=rawSlots
         try next.validate();return next
     }
 }
@@ -385,7 +395,7 @@ struct MacroMetadataRecord:Codable {
         return try? prepare(decoded,snapshot:snapshot)
     }
     static func prepare(_ draft:HardwareProfile,snapshot:HardwareSnapshot,before:HardwareSnapshot?=nil)throws->Self {
-        var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;try saved.validate()
+        var saved=draft;saved.snapshot=snapshot;saved.lightingColorEncoding = .hardwareRGB;saved.lightingRawSlots=nil;try saved.validate()
         let resolved=try saved.resolvedMacros()
         guard resolved.deviceInfo==snapshot.deviceInfo,resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称与设备数据不一致，未保存名称。")}
         var receipt:OfficialMacroDraftReceipt?
@@ -405,7 +415,7 @@ struct MacroMetadataRecord:Codable {
                   receipt.modes==(profile.macroModes ?? [:]) else{throw HardwareError(message:"官方宏名称记录缺少匹配的草稿或实际默认映射。")}
             _ = try receipt.reconcile(observed:snapshot,factoryKeymap:mapping.factoryKeymap)
         }else if receipt != nil{throw HardwareError(message:"宏名称记录的存储方式不一致。")}
-        var saved=profile;if saved.macroStorageLayout==nil{saved.macroStorageLayout = .sharedLibrary};saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB
+        var saved=profile;if saved.macroStorageLayout==nil{saved.macroStorageLayout = .sharedLibrary};saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB;saved.lightingRawSlots=nil
         let resolved=try saved.resolvedMacros()
         guard resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{throw HardwareError(message:"宏名称记录与完整读回数据不一致。")}
         return saved

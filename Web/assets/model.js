@@ -240,6 +240,7 @@ export function fromHardware(snapshot){
 export function validateProfile(p){
   requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&(p.macroStorageLayout==='officialBindings'||p.macros.length<=32),'配置格式或版本不受支持。');validateSnapshot(p.snapshot);requireThat(p.macroStorageLayout==null||['sharedLibrary','officialBindings'].includes(p.macroStorageLayout),'宏存储方式无效。');p.macros.forEach(m=>validateMacroWithin(m,p.macroStorageLayout==='officialBindings'?762:256));if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
   if(p.lightingColorEncoding!=null)requireThat(['hardwareRGB','officialRGB'].includes(p.lightingColorEncoding),'灯效颜色来源无效。');
+  if(p.lightingRawSlots!=null){requireThat(p.lightingColorEncoding==='hardwareRGB'&&p.snapshot.colors!=null&&Array.isArray(p.lightingRawSlots)&&p.lightingRawSlots.length<=126&&equal(p.lightingRawSlots,[...new Set(p.lightingRawSlots)].sort((a,b)=>a-b)),'逐键颜色来源记录无效。');lightingMappingSlots(p.lightingMapping,p.snapshot);const mapped=new Set(p.lightingMapping.ledIndices.filter(slot=>slot<126));requireThat(p.lightingRawSlots.every(slot=>Number.isInteger(slot)&&mapped.has(slot)),'原始颜色位置不在实际 LED 映射中。');}
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
   if(p.hostTextJSON!=null){requireThat(typeof p.hostTextJSON==='string','文本配置定义无效。');validateHostTextDefinition(JSON.parse(p.hostTextJSON));}
   p.macros.forEach(m=>officialMacroSource(p,m));
@@ -259,7 +260,7 @@ export function parseProfile(text,baseline,options={}){
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
   // Raw backups acquire an editable library only when the firmware bank is recognized.
-  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);if(p.lightingColorEncoding!=null)editable.lightingColorEncoding=p.lightingColorEncoding;else delete editable.lightingColorEncoding;return editable;}catch{}}
+  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);if(p.lightingRawSlots!=null)editable.lightingRawSlots=clone(p.lightingRawSlots);if(p.lightingColorEncoding!=null)editable.lightingColorEncoding=p.lightingColorEncoding;else delete editable.lightingColorEncoding;return editable;}catch{}}
   if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
@@ -449,7 +450,7 @@ export function exportProfileWindowsLightingDraft(profile,template){
     }
     return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
   }
-  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'自定义配色需要新建或导入原始配色；读回或来源未知的 RGB 不能直接导出，以免重复降低亮度。');
+  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'当前逐键草稿包含存储色，无法无损导出完整 Windows 原始 RGB 表；请导出 CherryMac JSON 保存位置来源。');
   const light=root.LightInfo,selected=MODE_CODES.indexOf(p[1]);
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数或官方模板无效，不能导出。');
   Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8],LightOpenFlag:p[21]});
@@ -540,7 +541,7 @@ export function importWindowsLightingDraft(profile,template){
       const bytes=['Red','Green','Blue'].map(key=>winInt(entry[key],key,0,255));if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);
       const slot=mapping===null?physicalSlot(WINDOWS_DEFAULTS[index]):mapping[index];if(slot!=null)result.snapshot.colors.splice(slot*3,3,...bytes);
     });
-    root.CustomLightMode=clone(custom);result.lightingColorEncoding='officialRGB';
+    root.CustomLightMode=clone(custom);result.lightingColorEncoding='officialRGB';delete result.lightingRawSlots;
   }else requireThat(mode!==8,'自定义模式缺少官方原始颜色表。');
   result.windowsTemplateJSON=JSON.stringify(root);validateProfile(result);return result;
 }
@@ -733,7 +734,7 @@ export function reviewLightingDraft(profile,baseline){
       ?planOfficialLighting(exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON)),baseline,profile.lightingMapping,options)
       :planBuiltInLighting(profile.snapshot,options);
   const target=officialLightingReadbackTarget(plan,baseline);
-  const encodedBlackColorSlots=target.parameters[1]===8?[...new Set(lightingMappingSlots(profile.lightingMapping,profile.snapshot).filter(slot=>slot!=null))].sort((a,b)=>a-b).filter(slot=>profile.snapshot.colors.slice(slot*3,slot*3+3).some(byte=>byte!==0)&&target.colors.slice(slot*3,slot*3+3).every(byte=>byte===0)):null;
+  const encodedBlackColorSlots=target.parameters[1]===8?[...new Set(lightingMappingSlots(profile.lightingMapping,profile.snapshot).filter(slot=>slot!=null))].sort((a,b)=>a-b).filter(slot=>(profile.lightingColorEncoding==='officialRGB'||(profile.lightingRawSlots??[]).includes(slot))&&profile.snapshot.colors.slice(slot*3,slot*3+3).some(byte=>byte!==0)&&target.colors.slice(slot*3,slot*3+3).every(byte=>byte===0)):null;
   const review={format:'CherryMacLightingDraftReview' ,version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{}),...(encodedBlackColorSlots!==null?{encodedBlackColorSlots}:{})};
   if(target.parameters[1]===8){const rawDraft=clone(profile);rawDraft.snapshot.parameters[0]=target.parameters[0];review.rawLightingMetadata=captureRawLightingMetadata(rawDraft,target);requireThat(review.rawLightingMetadata!==null,'无法保存与逐键计划对应的原始配色，请重新准备。');}
   return review;
@@ -753,7 +754,7 @@ export function planOfficialLighting(template,baseline,lightingMapping,{bank,tra
 export function newCustomLightingDraft(profile){
   validateProfile(profile);validateSnapshot(profile.snapshot,true);
   requireThat(profile.lightingMapping!=null,'请先读取键盘，取得 LED 映射。');lightingMappingSlots(profile.lightingMapping,profile.snapshot);
-  const result=clone(profile);result.snapshot.colors=Array(378).fill(0);result.snapshot.parameters[1]=8;result.lightingColorEncoding='officialRGB';
+  const result=clone(profile);result.snapshot.colors=Array(378).fill(0);result.snapshot.parameters[1]=8;result.lightingColorEncoding='officialRGB';delete result.lightingRawSlots;
   validateProfile(result);return result;
 }
 // Official 509C00 clears the entire logical RGB table, retaining alpha/extras.
@@ -784,12 +785,14 @@ export function planBuiltInLighting(snapshot,options){
 }
 export function planCustomLighting(profile,options){
   validateProfile(profile);const parameters=editorLightingParameters(profile.snapshot,options);
-  requireThat(parameters.head[1]===8&&profile.lightingColorEncoding==='officialRGB','请先新建逐键配色，或导入 Windows 官方原始配色；不能将读回颜色直接当作原始 RGB。');
+  requireThat(parameters.head[1]===8&&['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding),'请先读取已知存储色和 LED 映射，或新建／导入原始配色。');
   requireThat(profile.lightingMapping!=null,'逐键配色需要有效 LED 映射。');
-  const slots=lightingMappingSlots(profile.lightingMapping,profile.snapshot),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[parameters.head[2]],colors=Array(378).fill(0);
+  const slots=lightingMappingSlots(profile.lightingMapping,profile.snapshot),coefficient=OFFICIAL_BRIGHTNESS_COEFFICIENTS[parameters.head[2]],colors=profile.lightingColorEncoding==='officialRGB'?Array(378).fill(0):clone(profile.snapshot.colors);
+  const rawSlots=profile.lightingColorEncoding==='officialRGB'?new Set(slots.filter(slot=>slot!=null)):new Set(profile.lightingRawSlots??[]);
   // Utility zeroes the color bank and only fills logical entries with LEDs.
-  // The editable RGB values are raw; apply global brightness exactly once.
-  for(const slot of slots)if(slot!=null)for(let channel=0;channel<3;channel++)colors[slot*3+channel]=(profile.snapshot.colors[slot*3+channel]*coefficient)>>8;
+  // Full official palettes start zeroed; stored-base drafts retain untouched bytes.
+  // Only positions with known raw RGB receive host brightness encoding.
+  for(const slot of rawSlots)for(let channel=0;channel<3;channel++)colors[slot*3+channel]=(profile.snapshot.colors[slot*3+channel]*coefficient)>>8;
   return assembleLightingPlan(parameters,colors,options);
 }
 function assembleLightingPlan(parameters,colors,{bank,transportSelector,chunkCapacity,beginRequired}){
@@ -1153,29 +1156,30 @@ export function clearMacros(profile,mode='disabled'){
 
 // Editor-only raw RGB provenance, separate from verified hardware backups.
 export function validateRawLightingMetadata(value){
-  requireThat(value?.format==='CherryMacRawLightingMetadata'&&value.version===1&&bytes(value.rawColors,378),'本地原始配色资料无效。');
+  requireThat(value?.format==='CherryMacRawLightingMetadata'&&[1,2].includes(value.version)&&bytes(value.rawColors,378)&&(value.version===1?value.rawSlots==null:Array.isArray(value.rawSlots)),'本地原始配色资料无效。');
   validateSnapshot(value.snapshot,true);lightingMappingSlots(value.lightingMapping,value.snapshot);
   requireThat(value.snapshot.parameters[1]===8,'本地配色资料不是逐键模式。');
-  const draft={format:'CherryMacProfile',version:1,snapshot:clone(value.snapshot),macros:[],lightingMapping:clone(value.lightingMapping),lightingColorEncoding:'officialRGB'};
+  const draft={format:'CherryMacProfile',version:1,snapshot:clone(value.snapshot),macros:[],lightingMapping:clone(value.lightingMapping),lightingColorEncoding:value.version===1?'officialRGB':'hardwareRGB',...(value.version===2?{lightingRawSlots:clone(value.rawSlots)}:{})};
   draft.snapshot.colors=clone(value.rawColors);
   const plan=planCustomLighting(draft,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
   requireThat(equal(officialLightingReadbackTarget(plan,value.snapshot).colors,value.snapshot.colors),'本地原始配色与保存的硬件颜色不一致。');
 }
 export function captureRawLightingMetadata(profile,current){
   validateProfile(profile);validateSnapshot(current,true);
-  if(profile.lightingColorEncoding!=='officialRGB'||current.parameters[1]!==8||profile.lightingMapping==null)return null;
+  if(!['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding)||current.parameters[1]!==8||profile.lightingMapping==null)return null;
   // Matching local editor provenance is separate from authorizing a write;
   // do not require an unrelated firmware commit marker to have value 1.
   if(!equal(profile.snapshot.deviceInfo,current.deviceInfo)||![0,1,2,3,4,5,6,7,8,21].every(offset=>profile.snapshot.parameters[offset]===current.parameters[offset]))return null;
   const plan=planCustomLighting(profile,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
   if(!equal(officialLightingReadbackTarget(plan,current).colors,current.colors))return null;
   const value={format:'CherryMacRawLightingMetadata',version:1,snapshot:clone(current),rawColors:clone(profile.snapshot.colors),lightingMapping:clone(profile.lightingMapping)};
+  if(profile.lightingColorEncoding==='hardwareRGB'){value.version=2;value.rawSlots=clone(profile.lightingRawSlots??[]);}
   validateRawLightingMetadata(value);return value;
 }
 export function adoptRawLightingMetadata(profile,value){
   validateRawLightingMetadata(value);validateProfile(profile);
   if(!equal(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
-  const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding='officialRGB';validateProfile(next);return next;
+  const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding=value.version===1?'officialRGB':'hardwareRGB';if(value.version===2)next.lightingRawSlots=clone(value.rawSlots);else delete next.lightingRawSlots;validateProfile(next);return next;
 }
 
 // Offline official layout only. The production writer uses resolveMacros and
@@ -1275,4 +1279,15 @@ export function defaultLightingColorLibrary(){return {format:'CherryMacLightingC
 export function validateLightingColorLibrary(value){
   requireThat(value&&value.format==='CherryMacLightingColorLibrary'&&value.version===1&&Array.isArray(value.colors)&&value.colors.length===20,'颜色收藏必须包含 20 个色卡。');
   requireThat(value.colors.every(color=>typeof color==='string'&&/^#[0-9A-F]{6}$/.test(color)),'收藏颜色格式无效。');return clone(value);
+}
+
+export function paintLightingProfile(profile,selection,pattern,start,end){
+  validateProfile(profile);requireThat(['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding),'颜色来源未知，请先读取键盘或导入已知配色。');
+  const next=clone(profile);paint(next.snapshot,selection,pattern,start,end,next.lightingMapping);
+  if(next.lightingColorEncoding==='hardwareRGB'){
+    lightingMappingSlots(next.lightingMapping,next.snapshot);const raw=new Set(next.lightingRawSlots??[]);
+    for(const key of keys.filter(key=>selection.has(key.id))){const slot=lightingColorSlot(next,key.slot);requireThat(slot!=null,'所选键没有有效 LED 映射。');raw.add(slot);}
+    next.lightingRawSlots=[...raw].sort((a,b)=>a-b);
+  }
+  validateProfile(next);return next;
 }

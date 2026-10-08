@@ -775,7 +775,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         // Compare the projected write target so a completed write is not
         // displayed as a pending change solely because brightness was applied.
         var lightingComparisonColors=profile?.snapshot.colors
-        if lightingTab,let draft=profile,let baseline,draft.lightingColorEncoding == .officialRGB,
+        if lightingTab,let draft=profile,let baseline,(draft.lightingColorEncoding == .officialRGB || draft.lightingColorEncoding == .hardwareRGB),
            let review=try? WindowsProfile.reviewLightingDraft(draft,baseline:baseline){
             lightingComparisonColors=review.target.colors
         }
@@ -806,7 +806,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let size=try? url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=7_000_000,let data=try? Data(contentsOf:url) else{continue}
             if let record=try? JSONDecoder().decode(MacroMetadataRecord.self,from:data),let restored=try? record.restore(snapshot:snapshot,mapping:mapping){return restored}
             guard var saved=try? HardwareProfile.decode(data),saved.macroStorageLayout != .officialBindings,saved.snapshot.deviceInfo==snapshot.deviceInfo else{continue}
-            saved.macroStorageLayout = .sharedLibrary;saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB
+            saved.macroStorageLayout = .sharedLibrary;saved.snapshot=snapshot;saved.lightingMapping=mapping;saved.lightingColorEncoding = .hardwareRGB;saved.lightingRawSlots=nil
             guard let resolved=try? saved.resolvedMacros(),resolved.keymap==snapshot.keymap,resolved.macroData==snapshot.macroData else{continue}
             return saved
         };return nil
@@ -907,7 +907,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
                         let url=self.backupDirectory.appendingPathComponent("USB-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
-                        var backup=self.profile!;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB
+                        var backup=self.profile!;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB;backup.lightingRawSlots=nil
                         try backup.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
                     if let error=read.mappingError{self.message.stringValue += "\n灯光映射未取得：\(error) 按键和宏读取结果已保留。"}

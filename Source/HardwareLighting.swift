@@ -34,7 +34,7 @@ extension HardwareWindowController {
         do{
             guard let mapping=baselineLightingMapping,draft.lightingMapping==mapping else{throw HardwareError(message:"请先读取实际 LED 映射；导入的映射资料不能替代本次读取。")}
             guard try rememberRawLighting(draft,current:baseline) else{throw HardwareError(message:"当前原始配色或灯效参数与最近读回不一致。尚未写入的草稿请在配置与备份中导出 JSON 保存。")}
-            message.stringValue="已将与最近读回一致的原始配色保存到本机；下次读取并核对一致后可继续编辑。未写入键盘。"
+            message.stringValue="已将与最近读回一致的配色及位置来源保存到本机；下次读取并核对一致后可继续编辑。未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func newCustomLightingDraft(){
@@ -186,7 +186,7 @@ extension HardwareWindowController {
         place(clearButton,708,98,156,30,in:colors)
         place(paintButton,8,158,192,30,in:colors);place(offButton,218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
-        let savePalette=button("保存本机配色",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的原始 RGB；未写入草稿请导出 JSON。不会写入键盘。"
+        let savePalette=button("保存本机配色",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的配色及位置来源；未写入草稿请导出 JSON。不会写入键盘。"
         place(savePalette,708,158,156,30,in:colors)
         place(label("配色全局亮度",12),8,207,105,24,in:colors)
         paletteBrightness.numberOfTickMarks=5;paletteBrightness.allowsTickMarkValuesOnly=true;paletteBrightness.target=self;paletteBrightness.action=#selector(stagePaletteBrightness);controls.append(paletteBrightness)
@@ -237,17 +237,17 @@ extension HardwareWindowController {
         if let first=keyboardLayout().first(where:{lightSelection.contains($0.id)}){selected=first.id}
         update();loadLightColor()
     }
-    var paletteEditable:Bool{profile?.lightingColorEncoding == .officialRGB && profile?.lightingMapping != nil && profile?.snapshot.colors != nil}
+    var paletteEditable:Bool{(profile?.lightingColorEncoding == .officialRGB || profile?.lightingColorEncoding == .hardwareRGB) && profile?.lightingMapping != nil && profile?.snapshot.colors != nil}
     func updatePaletteControls(){
         let editable = !busy && paletteEditable
         paletteEditButtons.forEach{$0.isEnabled=editable};paletteBrightness.isEnabled=editable
         let level=Int(profile?.snapshot.parameters[2] ?? 0);paletteBrightness.doubleValue=Double(level);paletteBrightnessLabel.stringValue="\(level)/4"
-        if !paletteEditable{paletteHelp.stringValue="请新建逐键配色或导入官方原始配色；读回颜色仅供查看，不能反推原始 RGB。"}
-        else if level==0{paletteHelp.stringValue="全局亮度为 0，配色将全部熄灭；原始 RGB 保留。此处调整直接保存到草稿。"}
-        else{paletteHelp.stringValue="原始配色可编辑。全局亮度与所选键 RGB 强度分别设置；不会自动写入。"}
+        if !paletteEditable{paletteHelp.stringValue="请读取完整配置和 LED 映射；来源未知的旧草稿不能编辑。"}
+        else if level==0{paletteHelp.stringValue="全局亮度为 0；来源记录保留，实际灯光受固件全局亮度影响。此处调整直接保存到草稿。"}
+        else{paletteHelp.stringValue="配色可编辑；读取底色只对改动键编码，其余存储色保留。全局亮度也影响实际灯光；不会自动写入。"}
     }
     func requireEditablePalette()throws{
-        guard paletteEditable else{throw HardwareError(message:"请先新建逐键配色或导入官方原始配色，取得 LED 映射；读回 RGB 不能直接作为原始配色编辑。")}
+        guard paletteEditable else{throw HardwareError(message:"请先读取完整配置和 LED 映射，或导入已知来源的配色。")}
     }
     @objc func stagePaletteBrightness(){
         guard !busy,var draft=profile else{return}
@@ -303,18 +303,18 @@ extension HardwareWindowController {
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func stageColor(){
-        guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
+        guard !busy,var draft=profile,draft.snapshot.colors != nil else{message.stringValue="请先读取键盘。";return}
         do{
             try requireEditablePalette();let start=try readLightColor()
-            draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:lightPattern.indexOfSelectedItem,start:start,end:rgb(endColor.color),lightingMapping:draft.lightingMapping)
+            draft=try WindowsProfile.paintLightingDraft(draft,keys:keyboardLayout(),selection:lightSelection,pattern:lightPattern.indexOfSelectedItem,start:start,end:rgb(endColor.color))
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1)
             message.stringValue="已为 \(lightSelection.count) 键加入配色，并选择自定义模式。编辑仅用于预览，尚未写入键盘。"
             update();loadLightColor()
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func stageLightOff(){
-        guard !busy,var draft=profile,let colors=draft.snapshot.colors else{message.stringValue="请先读取键盘。";return}
-        do{try requireEditablePalette();draft.snapshot.colors=try CherryLighting.paint(colors,keys:keyboardLayout(),selected:lightSelection,pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0),lightingMapping:draft.lightingMapping)
+        guard !busy,var draft=profile,draft.snapshot.colors != nil else{message.stringValue="请先读取键盘。";return}
+        do{try requireEditablePalette();draft=try WindowsProfile.paintLightingDraft(draft,keys:keyboardLayout(),selection:lightSelection,pattern:0,start:LightRGB(0,0,0),end:LightRGB(0,0,0))
             draft.snapshot.parameters[1]=8;profile=draft;modePicker.selectItem(at:1);update();loadLightColor()
             message.stringValue="已将所选 \(lightSelection.count) 键设为熄灭。编辑仅用于预览，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}

@@ -31,6 +31,7 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   if(!previous||!equal(previous.snapshot.deviceInfo,restored.snapshot.deviceInfo))return clone(restored);
   validateProfile(previous);const result=clone(restored);
   result.snapshot.parameters=clone(previous.snapshot.parameters);result.snapshot.colors=clone(previous.snapshot.colors);
+  if(previous.lightingRawSlots!=null)result.lightingRawSlots=clone(previous.lightingRawSlots);else delete result.lightingRawSlots;
   if(previous.lightingColorEncoding!=null)result.lightingColorEncoding=previous.lightingColorEncoding;else delete result.lightingColorEncoding;
   for(const field of ['lightingMapping','hostTextJSON']){
     if(previous[field]!=null)result[field]=clone(previous[field]);else delete result[field];
@@ -56,7 +57,7 @@ export function mergeMacroRecoveryDraft(restored,previous,before,target){
   validateProfile(result);return result;
 }
 export function prepareMacroMetadata(profile,snapshot,before=snapshot){
-  const saved=clone(profile);saved.snapshot=clone(snapshot);saved.lightingColorEncoding='hardwareRGB';validateProfile(saved);
+  const saved=clone(profile);saved.snapshot=clone(snapshot);saved.lightingColorEncoding='hardwareRGB';delete saved.lightingRawSlots;validateProfile(saved);
   const resolved=resolveMacros(saved);
   requireThat(['deviceInfo','keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称与设备数据不一致，未保存名称。');
   const receipt=saved.macroStorageLayout==='officialBindings'?officialMacroReceipt(saved,before):null;
@@ -72,7 +73,7 @@ export function restoreMacroMetadata(saved,snapshot,mapping=null){
     requireThat(canonicalJSON(saved.receipt.macros)===canonicalJSON(saved.profile.macros)&&canonicalJSON(saved.receipt.bindings)===canonicalJSON(saved.profile.macroBindings)&&canonicalJSON(saved.receipt.modes)===canonicalJSON(saved.profile.macroModes??{}),'宏名称记录与草稿不一致。');
     reconcileOfficialMacroDraftReceipt(saved.receipt,snapshot,mapping.factoryKeymap);
   }else requireThat(saved.receipt==null,'宏名称记录的存储方式不一致。');
-  const profile=clone(saved.profile);profile.macroStorageLayout??='sharedLibrary';profile.snapshot=clone(snapshot);profile.lightingColorEncoding='hardwareRGB';
+  const profile=clone(saved.profile);profile.macroStorageLayout??='sharedLibrary';profile.snapshot=clone(snapshot);profile.lightingColorEncoding='hardwareRGB';delete profile.lightingRawSlots;
   if(mapping)profile.lightingMapping=clone(mapping);else delete profile.lightingMapping;
   const resolved=resolveMacros(profile);
   requireThat(['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])),'宏名称记录与完整读回数据不一致。');return profile;
@@ -83,7 +84,7 @@ export async function rememberMacroProfile(profile,snapshot,before=snapshot){
 }
 export async function rememberMacroProfileIfMatching(profile,snapshot){
   if(!snapshot||!equal(profile.snapshot.deviceInfo,snapshot.deviceInfo))return false;
-  const candidate=clone(profile);candidate.snapshot=clone(snapshot);candidate.lightingColorEncoding='hardwareRGB';let resolved;
+  const candidate=clone(profile);candidate.snapshot=clone(snapshot);candidate.lightingColorEncoding='hardwareRGB';delete candidate.lightingRawSlots;let resolved;
   try{resolved=resolveMacros(candidate);}catch{return false;}
   if(!['keymap','macroData'].every(key=>equal(resolved[key],snapshot[key])))return false;
   await rememberMacroProfile(candidate,snapshot);return true;
