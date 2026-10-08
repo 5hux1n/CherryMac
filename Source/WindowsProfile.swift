@@ -1363,7 +1363,7 @@ enum WindowsProfile {
         if target.parameters[1]==8,let mapping=profile.lightingMapping,let raw=profile.snapshot.colors{
             encodedBlackColorSlots=try Set(mapping.slots(for:profile.snapshot).compactMap{$0}).sorted().filter{slot in
                 guard profile.lightingColorEncoding == .officialRGB || (profile.lightingRawSlots ?? []).contains(slot)else{return false}
-                raw[slot*3..<slot*3+3].contains(where:{$0 != 0}) && target.colors![slot*3..<slot*3+3].allSatisfy{$0==0}
+                return raw[slot*3..<slot*3+3].contains(where:{$0 != 0}) && target.colors![slot*3..<slot*3+3].allSatisfy{$0==0}
             }
         }
         var rawMetadata:RawLightingMetadata? = nil
