@@ -1,5 +1,5 @@
 // File validation and fresh-read preparation only. No transport or browser APIs.
-import {clone,equal,requireThat,lightingMappingSlots,officialLightingReports,officialLightingReadbackTarget,assessLightingRecoveryRecord,assessLightingRestoreAttempt,lightingRestorePlanFromRecord} from './model.js?v=0.6.0';
+import {validateRawLightingMetadata,clone,equal,requireThat,lightingMappingSlots,officialLightingReports,officialLightingReadbackTarget,assessLightingRecoveryRecord,assessLightingRestoreAttempt,lightingRestorePlanFromRecord} from './model.js?v=0.6.0';
 export function lightingAcceptanceInput(value){
   const input=clone(value);
   if(input?.format==='CherryMacLightingDraftReview'){
@@ -9,6 +9,7 @@ export function lightingAcceptanceInput(value){
     requireThat(equal(target,input.target),'灯效计划与预计读回不一致。');
     requireThat((target.parameters[1]!==8&&input.plan.defaultColorData==null)||input.lightingMapping!=null,'逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。');
     if(input.lightingMapping!=null)lightingMappingSlots(input.lightingMapping,input.original);
+    if(input.rawLightingMetadata!=null){validateRawLightingMetadata(input.rawLightingMetadata);requireThat(equal(input.rawLightingMetadata.snapshot,target)&&equal(input.rawLightingMetadata.lightingMapping,input.lightingMapping),'原始配色资料与灯效目标／映射不一致。');}
     return {kind:'write',value:input,target};
   }
   if(input?.format==='CherryMacLightingRecoveryRecord'){assessLightingRecoveryRecord(input);return {kind:'restore',value:input,target:clone(input.original)};}

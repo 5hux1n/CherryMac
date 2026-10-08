@@ -1330,6 +1330,7 @@ enum WindowsProfile {
         var lightingMapping:LightingMappingContext? = nil
         // Advisory only: mapped raw colors lost during official host encoding.
         var encodedBlackColorSlots:[Int]? = nil
+        var rawLightingMetadata:RawLightingMetadata? = nil
     }
     static func reviewDefaultLighting(_ data:Data? = nil,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->LightingDraftReview{
         try baseline.validate();guard baseline.deviceInfo[5]==126,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认灯效需要本型号完整配置和 126 个颜色位置。")}
@@ -1364,7 +1365,13 @@ enum WindowsProfile {
                 raw[slot*3..<slot*3+3].contains(where:{$0 != 0}) && target.colors![slot*3..<slot*3+3].allSatisfy{$0==0}
             }
         }
-        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]},lightingMapping:profile.lightingMapping,encodedBlackColorSlots:encodedBlackColorSlots)
+        var rawMetadata:RawLightingMetadata? = nil
+        if target.parameters[1]==8{
+            var rawDraft=profile;rawDraft.snapshot.parameters[0]=target.parameters[0]
+            rawMetadata=try RawLightingMetadata.capture(rawDraft,current:target)
+            guard rawMetadata != nil else{throw HardwareError(message:"无法保存与逐键计划对应的原始配色，请重新准备。")}
+        }
+        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]},lightingMapping:profile.lightingMapping,encodedBlackColorSlots:encodedBlackColorSlots,rawLightingMetadata:rawMetadata)
     }
     // A candidate sequence for the traced parameter/custom-load methods only.
     // This is not HardwareWritePlan and cannot authorize any USB operation.

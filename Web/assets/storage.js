@@ -116,6 +116,10 @@ const rawLightingDB=databaseOpener('CherryMacRawLighting',1,value=>{
 },'原始配色数据库被其他页面占用。');
 export async function rememberRawLightingMetadata(profile,current){
   const metadata=captureRawLightingMetadata(profile,current);if(metadata===null)return false;
+  await saveRawLightingMetadata(metadata);return true;
+}
+export async function saveRawLightingMetadata(value){
+  const metadata=clone(value);validateRawLightingMetadata(metadata);requireThat(new TextEncoder().encode(JSON.stringify(metadata)).length<=100_000,'原始配色资料过大。');
   const record={id:crypto.randomUUID(),date:new Date().toISOString(),metadata},database=await rawLightingDB();
   await new Promise((resolve,reject)=>{
     const t=database.transaction('palettes','readwrite'),store=t.objectStore('palettes');let verified=false;

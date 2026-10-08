@@ -1,15 +1,21 @@
 import AppKit
 
+// Predicted RGB provenance is inert until a fresh snapshot and LED map match it.
+private func saveLightingRawMetadata(_ value:RawLightingMetadata,to directory:URL)throws {
+    try value.validate();let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];let data=try encoder.encode(value)
+    guard data.count<=100_000 else{throw HardwareError(message:"原始配色资料过大。")}
+    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+    let url=directory.appendingPathComponent("LightingMetadata-\(UUID().uuidString).json")
+    try data.write(to:url,options:.atomic)
+    let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize()
+    guard try Data(contentsOf:url)==data else{throw HardwareError(message:"原始配色资料保存校验失败。")}
+}
+
 extension HardwareWindowController {
     @discardableResult
     func rememberRawLighting(_ draft:HardwareProfile,current:HardwareSnapshot)throws->Bool {
         guard let value=try RawLightingMetadata.capture(draft,current:current) else{return false}
-        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
-        let data=try encoder.encode(value)
-        try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true)
-        let url=backupDirectory.appendingPathComponent("LightingMetadata-\(UUID().uuidString).json")
-        try data.write(to:url,options:.atomic)
-        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"原始配色资料保存校验失败，请导出当前草稿保存。")}
+        try saveLightingRawMetadata(value,to:backupDirectory)
         return true
     }
     func recalledRawLighting(_ profile:HardwareProfile)->HardwareProfile? {
@@ -501,13 +507,17 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
                 _ = try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:value.plan,baseline:value.original)
                 if (value.target.parameters[1]==8 || value.plan.defaultColorData != nil),value.lightingMapping==nil{throw HardwareError(message:"逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。")}
                 _ = try value.lightingMapping?.slots(for:value.original)
+                if let metadata=value.rawLightingMetadata{
+                    try metadata.validate()
+                    guard metadata.snapshot==value.target,metadata.lightingMapping==value.lightingMapping else{throw HardwareError(message:"原始配色资料与灯效目标／映射不一致。")}
+                }
                 review=value;summary.stringValue="\(value.plan.defaultColorData != nil ? "默认配色 → 参数；":"")模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
             }else if root?["format"] as? String=="CherryMacLightingRecoveryRecord" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data).assess();recoveryData=data;summary.stringValue="已载入写入恢复记录；恢复前重新读取配置。"
             }else if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data).assess();recoveryData=data;summary.stringValue="已载入恢复中断记录；保留原计划并核对新读回。"
             }else{throw HardwareError(message:"请选择灯效核对文件、写入记录或恢复记录。")}
-            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try data.write(to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"),options:.atomic)
+            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try saveVerifiedLightingFile(data,to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"))
             state.stringValue="\(source)已核对，请点击读取 USB 配置；未连接或写入键盘。"
         }catch{review=nil;recoveryData=nil;fail(error)};render()
     }
@@ -616,6 +626,11 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             self?.editorResult=EditorResult(kind:.write,current:current,review:review)
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
+            if let metadata=review.rawLightingMetadata{
+                try metadata.validate();guard metadata.snapshot==review.target,metadata.lightingMapping==review.lightingMapping else{throw HardwareError(message:"计划原始配色资料不匹配。")}
+                let cache=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")
+                try saveLightingRawMetadata(metadata,to:cache)
+            }
             let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,lightingMapping:review.lightingMapping,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
             DispatchQueue.main.async{self.writtenTarget=review.target;self.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"}

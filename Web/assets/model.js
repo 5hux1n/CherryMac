@@ -734,7 +734,9 @@ export function reviewLightingDraft(profile,baseline){
       :planBuiltInLighting(profile.snapshot,options);
   const target=officialLightingReadbackTarget(plan,baseline);
   const encodedBlackColorSlots=target.parameters[1]===8?[...new Set(lightingMappingSlots(profile.lightingMapping,profile.snapshot).filter(slot=>slot!=null))].sort((a,b)=>a-b).filter(slot=>profile.snapshot.colors.slice(slot*3,slot*3+3).some(byte=>byte!==0)&&target.colors.slice(slot*3,slot*3+3).every(byte=>byte===0)):null;
-  return {format:'CherryMacLightingDraftReview' ,version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{}),...(encodedBlackColorSlots!==null?{encodedBlackColorSlots}:{})};
+  const review={format:'CherryMacLightingDraftReview' ,version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{}),...(encodedBlackColorSlots!==null?{encodedBlackColorSlots}:{})};
+  if(target.parameters[1]===8){const rawDraft=clone(profile);rawDraft.snapshot.parameters[0]=target.parameters[0];review.rawLightingMetadata=captureRawLightingMetadata(rawDraft,target);requireThat(review.rawLightingMetadata!==null,'无法保存与逐键计划对应的原始配色，请重新准备。');}
+  return review;
 }
 export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(baseline,true);
