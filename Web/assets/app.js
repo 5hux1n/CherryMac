@@ -231,7 +231,7 @@ $('save-polling-draft').onclick=()=>act(()=>{
   const value=$('polling-draft').value;requireThat(value!=='','请选择回报率，或保留原草稿。');
   const output=officialPollingDraft(JSON.parse(profile.windowsTemplateJSON),Number(value));profile.windowsTemplateJSON=JSON.stringify(output);validateProfile(profile);status('回报率已保存到官方配置草稿，尚未写入键盘。请在配置与备份导出。');
 });
-function closeLightingReturnChannel(){lightingReturnChannel?.close();lightingReturnChannel=null;clearTimeout(lightingReturnTimer);lightingReturnTimer=null;}
+function closeLightingReturnChannel(){if(lightingReturnChannel)lightingReturnChannel.onmessage=null;lightingReturnChannel?.close();lightingReturnChannel=null;clearTimeout(lightingReturnTimer);lightingReturnTimer=null;}
 function prepareLightingReturnChannel(id,review,{defaultPlan=false,draftSnapshot=null}={}){
   closeLightingReturnChannel();requireThat(typeof BroadcastChannel==='function','浏览器不支持编辑器结果回传。');
   const channel=new BroadcastChannel(lightingResultChannelName(id));lightingReturnChannel=channel;
