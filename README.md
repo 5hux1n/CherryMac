@@ -2,7 +2,7 @@
 
 为 **CHERRY MX 3.0S 宝可梦无线键盘**提供 Mac 客户端和网页版。点选键盘图，设置按键、编辑宏与配色，备份和迁移配置。
 
-[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.69.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.69.0) · [PHP 0.68.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.68.0)
+[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.70.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.70.0) · [PHP 0.69.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.69.0)
 
 **当前是开发预览，完整复刻仍未完成。** USB 有线模式下提供按键、宏和文本触发键的独立写入、备份与读回核对。灯效可以编辑、保存和导出计划，普通版未开放灯效发送。新版两端仍待统一真机验收；旧网页灯效故障根因尚未确认。[各功能的实际验收范围](docs/当前功能与验收状态.md)
 

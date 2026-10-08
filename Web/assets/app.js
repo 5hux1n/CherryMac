@@ -160,18 +160,19 @@ async function read(){
     baseline=null;throw new Error('新读回的灯光映射与保留草稿不同；草稿保留，未写入。请保存配置并核对映射。');
   }
   baseline=clone(s);baselineLightingMapping=clone(mapping);
-  const metadataWarnings=[];
+  const metadataWarnings=[];let rawLightingMatched=false;
   if(!keepLightingDraft){profile=safeProfile(s);try{profile=await recalledMacroProfile(s,mapping)??profile;}catch(error){metadataWarnings.push('本地宏名称无法读取：'+error.message);}}
   else{validateProfile(profile);lightingReconnectSnapshot=null;}
   if(mapping){profile.lightingMapping=mapping;profile.macroStorageLayout??='officialBindings';}else if(!keepLightingDraft)delete profile.lightingMapping;
   if(mapping){try{
-    if(keepLightingDraft)await rememberRawLightingMetadata(profile,s);
-    else profile=await recalledRawLightingMetadata(profile)??profile;
+    if(keepLightingDraft)rawLightingMatched=await rememberRawLightingMetadata(profile,s);
+    else{const saved=await recalledRawLightingMetadata(profile);if(saved){profile=saved;rawLightingMatched=true;}}
   }catch(error){metadataWarnings.push('本机原始配色资料无法保存或读取：'+error.message);}}
   refreshMacros();loadMacro();loadPlayback();syncLights();
   try{await saveBackup(s,mapping);}catch(error){status(`读取成功，但本地备份不可用：${error.message} 请在写入时重新确认备份可用。`,true);return;}
   if(mappingError)metadataWarnings.push('灯光映射未取得：'+mappingError);
-  status('已读取完整配置并保存本地备份。'+(profile.lightingColorEncoding==='officialRGB'?'原始配色与硬件一致，已保留可编辑 RGB。':'编辑后点击“写入按键”才会修改键盘。')+(metadataWarnings.length?' '+metadataWarnings.join('；'):''),metadataWarnings.length>0);
+  const lightingNote=rawLightingMatched?'原始配色与当前硬件数据已核对，已保留可编辑 RGB。':keepLightingDraft?'返回结果与新读回一致；原编辑草稿仍保留，不能把草稿配色视为当前键盘配色。':'编辑后点击“写入按键”才会修改键盘。';
+  status('已读取完整配置并保存本地备份。'+lightingNote+(metadataWarnings.length?' '+metadataWarnings.join('；'):''),metadataWarnings.length>0);
 }
 async function operation(fn,{localOnly=false}={}){
   if(busy)return;const action=document.activeElement?.id??'page-operation';busy=true;render();

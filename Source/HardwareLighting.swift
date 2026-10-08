@@ -113,7 +113,7 @@ extension HardwareWindowController {
     private func exportDefaultLightingReview(_ data:Data?){
         guard let baseline,let mapping=profile?.lightingMapping else{return}
         do{let review=try WindowsProfile.reviewDefaultLighting(data,baseline:baseline,mapping:mapping)
-            let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复\(data == nil ? "内置官方默认" : "所选文件")的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。这里只导出计划，不改变编辑草稿或键盘。"
+            let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复\(data == nil ? "内置官方默认" : "所选文件")的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。本次核对不改变编辑草稿或键盘。可导出计划；研究版另可准备此计划验收，准备也不会自动写入。"
             alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回");alert.addButton(withTitle:"选择其他官方默认文件…")
             #if CHERRY_LIGHTING_TEST
             alert.addButton(withTitle:"准备此计划验收…")
@@ -401,7 +401,10 @@ extension HardwareWindowController {
                         self.message.stringValue="默认灯效读回结果已接回，原编辑草稿仍保留；未把旧原始 RGB 记为默认配色。实体外观与断电保存尚待验收。"
                     }
                     if receipt.kind == .write && preparedReview?.plan.defaultColorData == nil {
-                        do{try self.rememberRawLighting(draft,current:receipt.current)}
+                        do{
+                            let matched=try self.rememberRawLighting(draft,current:receipt.current)
+                            if !matched && draft.lightingColorEncoding == .officialRGB{self.message.stringValue += "\n原始配色草稿未与当前硬件自定义配色匹配，未登记本机原色资料。"}
+                        }
                         catch{self.message.stringValue += "\n读回已核对，但本机原始配色资料保存失败：\(error.localizedDescription)"}
                     }
                 }catch{self.message.stringValue="灯效窗口已关闭，草稿保留；\(error.localizedDescription) 请重新读取键盘。"}
