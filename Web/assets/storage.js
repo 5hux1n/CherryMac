@@ -1,10 +1,20 @@
 import {defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
-import {databaseOpener} from './database.js?v=0.6.0';
+import {databaseOpener,strictWriteTransaction} from './database.js?v=0.6.0';
 const db=databaseOpener('CherryMacWeb',1,value=>value.createObjectStore('backups',{keyPath:'id'}),'备份数据库被其他页面占用。');
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
-export async function saveBackup(snapshot,lightingMapping=null){validateSnapshot(snapshot,true);if(lightingMapping!=null)lightingMappingSlots(lightingMapping,snapshot);const database=await db(),record={id:`${Date.now()}-${crypto.randomUUID()}`,date:new Date().toISOString(),snapshot:clone(snapshot),...(lightingMapping!=null?{lightingMapping:clone(lightingMapping)}:{})};await transaction(database,'readwrite',s=>s.put(record));const read=await transaction(database,'readonly',s=>s.get(record.id));if(!equal(read,record))throw new Error('备份校验失败，停止写入。');return record;}
+export async function saveBackup(snapshot,lightingMapping=null,{strict=false}={}){
+  validateSnapshot(snapshot,true);if(lightingMapping!=null)lightingMappingSlots(lightingMapping,snapshot);
+  const database=await db(),record={id:`${Date.now()}-${crypto.randomUUID()}`,date:new Date().toISOString(),snapshot:clone(snapshot),...(lightingMapping!=null?{lightingMapping:clone(lightingMapping)}:{})};
+  if(strict){await new Promise((resolve,reject)=>{
+    const t=strictWriteTransaction(database,'backups'),store=t.objectStore('backups');let verified=false;
+    store.add(record).onsuccess=()=>{store.get(record.id).onsuccess=event=>{if(!equal(event.target.result,record)){t.abort();return;}verified=true;};};
+    t.oncomplete=()=>verified?resolve():reject(new Error('备份未完成核对。'));
+    t.onerror=()=>reject(t.error??new Error('备份保存失败。'));t.onabort=()=>reject(t.error??new Error('备份保存已中止。'));
+  });}else await transaction(database,'readwrite',s=>s.put(record));
+  const read=await transaction(database,'readonly',s=>s.get(record.id));if(!equal(read,record))throw new Error('备份校验失败，停止写入。');return record;
+}
 export function backupConfiguration(record){
   if(record.lightingMapping==null)return clone(record.snapshot);
   let profile;try{profile=fromHardware(record.snapshot);}catch{profile={format:'CherryMacProfile',version:1,snapshot:clone(record.snapshot),macros:[]};}
@@ -122,7 +132,7 @@ export async function saveRawLightingMetadata(value){
   const metadata=clone(value);validateRawLightingMetadata(metadata);requireThat(new TextEncoder().encode(JSON.stringify(metadata)).length<=100_000,'原始配色资料过大。');
   const record={id:crypto.randomUUID(),date:new Date().toISOString(),metadata},database=await rawLightingDB();
   await new Promise((resolve,reject)=>{
-    const t=database.transaction('palettes','readwrite'),store=t.objectStore('palettes');let verified=false;
+    const t=strictWriteTransaction(database,'palettes'),store=t.objectStore('palettes');let verified=false;
     store.put(record).onsuccess=()=>{
       const request=store.get(record.id);request.onsuccess=()=>{
         if(!equal(request.result,record)){t.abort();return;}verified=true;

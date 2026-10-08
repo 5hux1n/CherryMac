@@ -1,14 +1,39 @@
 import AppKit
+import Darwin
+
+
+// File contents and the directory entry both precede any configuration send.
+// Synchronize parents of newly created directories before using the leaf.
+private func syncLightingDirectory(_ directory:URL)throws{
+    let descriptor=Darwin.open(directory.path,O_RDONLY|O_NOFOLLOW)
+    guard descriptor>=0 else{throw HardwareError(message:"无法同步灯效资料目录，停止后续发送。")}
+    defer{Darwin.close(descriptor)}
+    var info=stat()
+    guard fstat(descriptor,&info)==0,(info.st_mode & S_IFMT)==S_IFDIR,fsync(descriptor)==0 else{throw HardwareError(message:"灯效资料目录同步失败，停止后续发送。")}
+}
+private func createLightingDirectory(_ directory:URL)throws{
+    var missing:[URL]=[],cursor=directory.standardizedFileURL
+    while !FileManager.default.fileExists(atPath:cursor.path){
+        missing.append(cursor);let parent=cursor.deletingLastPathComponent()
+        guard parent.path != cursor.path else{throw HardwareError(message:"灯效资料目录无效。")};cursor=parent
+    }
+    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+    for created in missing.reversed(){try syncLightingDirectory(created);try syncLightingDirectory(created.deletingLastPathComponent())}
+}
+private func saveSynchronizedLightingFile(_ data:Data,to url:URL)throws{
+    let directory=url.deletingLastPathComponent();try createLightingDirectory(directory)
+    try data.write(to:url,options:.atomic)
+    let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize()
+    try syncLightingDirectory(directory)
+    guard try Data(contentsOf:url)==data else{throw HardwareError(message:"恢复资料读回不一致，停止后续发送。")}
+}
 
 // Predicted RGB provenance is inert until a fresh snapshot and LED map match it.
 private func saveLightingRawMetadata(_ value:RawLightingMetadata,to directory:URL)throws {
     try value.validate();let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];let data=try encoder.encode(value)
     guard data.count<=100_000 else{throw HardwareError(message:"原始配色资料过大。")}
-    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
     let url=directory.appendingPathComponent("LightingMetadata-\(UUID().uuidString).json")
-    try data.write(to:url,options:.atomic)
-    let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize()
-    guard try Data(contentsOf:url)==data else{throw HardwareError(message:"原始配色资料保存校验失败。")}
+    try saveSynchronizedLightingFile(data,to:url)
 }
 
 extension HardwareWindowController {
@@ -544,7 +569,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             }else if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data).assess();recoveryData=data;summary.stringValue="已载入恢复中断记录；保留原计划并核对新读回。"
             }else{throw HardwareError(message:"请选择灯效核对文件、写入记录或恢复记录。")}
-            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try saveVerifiedLightingFile(data,to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"))
+            try createLightingDirectory(directory);try saveVerifiedLightingFile(data,to:directory.appendingPathComponent("loaded-\(UUID().uuidString).json"))
             state.stringValue="\(source)已核对，请点击读取 USB 配置；未连接或写入键盘。"
         }catch{review=nil;recoveryData=nil;fail(error)};render()
     }
@@ -574,12 +599,12 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     }
     func savePowerEvent(_ kind:String,registry:UInt64?=nil){
         powerEvents.append(["kind":kind,"at":ISO8601DateFormatter().string(from:Date()),"uptime":ProcessInfo.processInfo.systemUptime,"registryID":registry ?? registryID ?? 0])
-        do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:powerEvents,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("power-events.json"),options:.atomic)}catch{monitorFailure=error.localizedDescription;fail(error)}
+        do{try createLightingDirectory(directory);try saveVerifiedLightingFile(JSONSerialization.data(withJSONObject:powerEvents,options:[.prettyPrinted,.sortedKeys]),to:directory.appendingPathComponent("power-events.json"))}catch{monitorFailure=error.localizedDescription;fail(error)}
     }
     func id(_ device:IOHIDDevice)->UInt64?{var value:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&value)==KERN_SUCCESS ? value:nil}
     func perform(_ kind:String,completed:((HardwareSnapshot)->Void)?=nil,_ body:@escaping (CherryUSB,HardwareOperationLog)throws->HardwareSnapshot?){
         guard !running else{return};editorResult=nil;let operation:HardwareOperationLog
-        do{operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");operation.record("phase","started");try operation.requireHealthy()}catch{fail(error);return}
+        do{try createLightingDirectory(directory);operation=try HardwareOperationLog(kind:kind,directory:directory);operation.record("scope","lighting only; keymap and macros preserved");operation.record("phase","started");try operation.requireHealthy()}catch{fail(error);return}
         let startedRevision=connectionRevision
         log=operation;running=true;render();state.stringValue="正在操作，请保持窗口前台并松开全部按键…"
         queue.async{[weak self] in
@@ -626,12 +651,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         }
     }
     func confirmation(_ title:String)->Bool{let alert=NSAlert();alert.messageText=title;alert.informativeText="将实际发送灯效配置。请关闭其他配置程序、松开全部按键，保持此窗口前台。自动备份与日志保存后才发送；不自动重试。";alert.addButton(withTitle:"全部已松开，继续");alert.addButton(withTitle:"取消");return alert.runModal() == .alertFirstButtonReturn}
-    func saveSnapshot(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(snapshot).write(to:directory.appendingPathComponent("snapshot-\(log.url.lastPathComponent)"),options:.atomic)}
-    func saveVerifiedLightingFile(_ data:Data,to url:URL)throws {
-        try data.write(to:url,options:.atomic)
-        let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize()
-        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"恢复资料读回不一致，停止后续发送。")}
-    }
+    func saveSnapshot(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try saveVerifiedLightingFile(encoder.encode(snapshot),to:directory.appendingPathComponent("snapshot-\(log.url.lastPathComponent)"))}
+    func saveVerifiedLightingFile(_ data:Data,to url:URL)throws {try saveSynchronizedLightingFile(data,to:url)}
     func backup(_ snapshot:HardwareSnapshot,_ log:HardwareOperationLog)throws{
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
         let url=directory.appendingPathComponent("backup-\(UUID().uuidString).json");try saveVerifiedLightingFile(encoder.encode(snapshot),to:url)
@@ -695,7 +716,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             DispatchQueue.main.async{self.state.stringValue="关电确认后的重连读回符合目标。请观察灯光，之后恢复原始数据。"};return current
         }
     }
-    @objc func showFiles(){do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{fail(error)}}
+    @objc func showFiles(){do{try createLightingDirectory(directory);NSWorkspace.shared.open(directory)}catch{fail(error)}}
     @objc func finish(){guard !running else{return};refresh?.invalidate();refresh=nil;if let observer=focusObserver{NotificationCenter.default.removeObserver(observer);focusObserver=nil};if let manager{IOHIDManagerRegisterDeviceRemovalCallback(manager,nil,nil);IOHIDManagerRegisterDeviceMatchingCallback(manager,nil,nil);IOHIDManagerUnscheduleFromRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue);IOHIDManagerClose(manager,0);self.manager=nil};window?.sheetParent?.endSheet(window!)}
     func windowShouldClose(_ sender:NSWindow)->Bool{finish();return false}
 }

@@ -25,3 +25,15 @@ export function databaseOpener(name,version,upgrade,blockedMessage){
     cached=attempt;return attempt;
   };
 }
+
+// Recovery-critical commits explicitly request strict durability. This is a
+// browser hint, not proof against eviction, disk failure or system power loss.
+export function strictWriteTransaction(database,stores){
+  let transaction;
+  try{transaction=database.transaction(stores,'readwrite',{durability:'strict'});}
+  catch{throw new Error('浏览器无法创建严格保存事务；恢复资料未确认保存，停止后续发送。');}
+  if(transaction.durability!=='strict'){
+    transaction.abort();throw new Error('浏览器未采用严格保存事务；请使用支持此功能的浏览器后重新载入计划。');
+  }
+  return transaction;
+}

@@ -26,7 +26,7 @@ function render(){
   $('lighting-retention').disabled=busy||!online||!writtenTarget||powerCycle?.powerOffAt==null;
 }
 async function persistSession(){await saveVerifiedLog({id:`lighting-session-${runID}`,at:artifacts.startedAt,kind:'lightingAcceptance',session:clone(artifacts)});}
-async function backup(snapshot){const record=await saveBackup(snapshot);artifacts.backups.push(clone(record));await persistSession();}
+async function backup(snapshot){const record=await saveBackup(snapshot,null,{strict:true});artifacts.backups.push(clone(record));await persistSession();}
 async function persist(record){
   // Store completed transaction before exposing it as the latest recovery source.
   await saveVerifiedLog({id:`lighting-record-${record.operationID}`,at:new Date().toISOString(),kind:'lightingRecovery',record:clone(record)});
