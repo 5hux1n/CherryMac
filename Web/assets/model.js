@@ -712,6 +712,15 @@ export async function executeDefaultTransaction(review,{recovery=null,source,ope
   if(!record.failure&&!assessDefaultTransactionRecord(record).readbackMatches)record.failure='默认恢复读回与目标不一致。';
   assessDefaultTransactionRecord(record);await persist(clone(record));return record;
 }
+export function reviewDefaultLighting(text,baseline,mapping){
+  validateSnapshot(baseline,true);requireThat(baseline.deviceInfo[5]===126,'默认灯效需要本型号完整配置和 126 个颜色位置。');
+  const template=extractOfficialDefaultTemplate(text),parameters=prepareOfficialLightingParameters(template,0),slots=lightingMappingSlots(mapping,baseline),red=new Set([44,64,65,66,96,113,114,115]),colors=Array(378).fill(0);
+  slots.forEach((slot,logical)=>{if(slot!=null)colors.splice(slot*3,3,254,red.has(logical)?0:254,red.has(logical)?0:254);});
+  const options={bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true},plan=assembleLightingPlan(parameters,null,options);
+  plan.defaultColorData=colors;plan.stages.unshift({name:'defaultColors',beginRequired:true,beginCommand:1,writes:Array.from({length:Math.ceil(378/56)},(_,i)=>({command:0x0b,offset:i*56,flag:0,data:colors.slice(i*56,(i+1)*56)})),finishCommand:2,finishDelayMilliseconds:10});
+  const target=officialLightingReadbackTarget(plan,baseline);
+  return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),lightingMapping:clone(mapping)};
+}
 export function reviewLightingDraft(profile,baseline){
   validateProfile(profile);validateSnapshot(baseline,true);validateSnapshot(profile.snapshot,true);
   requireThat(equal(profile.snapshot.deviceInfo,baseline.deviceInfo),'请先读取当前键盘，配置与基线的固件信息必须一致。');
@@ -777,7 +786,7 @@ function assembleLightingPlan(parameters,colors,{bank,transportSelector,chunkCap
 // Offline rendering only; this object is never a transport authorization.
 export function officialLightingReports(plan){
   requireThat(plan?.format==='CherryMacOfficialLightingPlan'&&plan.version===2&&plan.hardwareReady===false&&Number.isInteger(plan.bank)&&plan.bank>=0&&plan.bank<=127&&[0,1].includes(plan.transportSelector)&&Number.isInteger(plan.chunkCapacity)&&plan.chunkCapacity>=1&&plan.chunkCapacity<=56&&Array.isArray(plan.stages),'灯效候选计划格式无效。');
-  const {bank,transportSelector,chunkCapacity}=plan,parameters=plan.stages[0];
+  const {bank,transportSelector,chunkCapacity}=plan,parameters=plan.stages[plan.defaultColorData==null?0:1];
   requireThat(parameters&&typeof parameters.beginRequired==='boolean'&&Array.isArray(parameters.writes)&&parameters.writes.length>=3,'灯效候选参数布局无效。');
   const head=parameters.writes.slice(0,-2).flatMap(w=>w.data),tail=parameters.writes.at(-2).data;
   requireThat(bytes(head,9)&&head[0]===bank&&modes.some(([code])=>code===head[1])&&head[2]<=4&&head[3]<=4&&head[4]<=1&&head[5]<=1&&bytes(tail,1),'灯效候选参数布局无效。');
@@ -785,7 +794,8 @@ export function officialLightingReports(plan){
   const chunks=(command,offset,flag,data)=>Array.from({length:Math.ceil(data.length/chunkCapacity)},(_,i)=>({command,offset:offset+i*chunkCapacity,flag,data:data.slice(i*chunkCapacity,(i+1)*chunkCapacity)}));
   const stage=(name,writes)=>({name,beginRequired:parameters.beginRequired,beginCommand,writes,finishCommand,finishDelayMilliseconds:10});
   const expected=[stage('parameters',[...chunks(6,bank*64,flag,head),...chunks(6,bank*64+21,flag,tail),...chunks(6,bank*64+24,flag,[1])])];
-  if(head[1]===8){requireThat(plan.stages.length===2&&Array.isArray(plan.stages[1].writes),'缺少独立颜色阶段。');const colors=plan.stages[1].writes.flatMap(w=>w.data);requireThat(bytes(colors,378),'颜色阶段长度无效。');expected.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,colors)));}
+  if(plan.defaultColorData!=null){requireThat(bytes(plan.defaultColorData,378),'默认配色阶段长度无效。');expected.unshift(stage('defaultColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,plan.defaultColorData)));}
+  else if(head[1]===8){requireThat(plan.stages.length===2&&Array.isArray(plan.stages[1].writes),'缺少独立颜色阶段。');const colors=plan.stages[1].writes.flatMap(w=>w.data);requireThat(bytes(colors,378),'颜色阶段长度无效。');expected.push(stage('customColors',chunks(transportSelector===1?0x8b:0x0b,bank*512,0,colors)));}
   // Compare fields independent of JSON object property order.
   requireThat(plan.stages.length===expected.length&&plan.stages.every((s,i)=>{const e=expected[i];return s.name===e.name&&s.beginRequired===e.beginRequired&&s.beginCommand===e.beginCommand&&s.finishCommand===e.finishCommand&&s.finishDelayMilliseconds===e.finishDelayMilliseconds&&s.writes.length===e.writes.length&&s.writes.every((w,j)=>{const v=e.writes[j];return w.command===v.command&&w.offset===v.offset&&w.flag===v.flag&&equal(w.data,v.data);});}),'灯效候选计划的指令顺序或写入范围被修改。');
   const encode=(command,payload=[])=>{const b=Array(64).fill(0);b[0]=4;b[3]=command;b.splice(4,payload.length,...payload);const sum=b.slice(3).reduce((n,v)=>n+v,0);b[1]=sum&255;b[2]=sum>>8;return b;};

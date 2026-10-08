@@ -2971,6 +2971,25 @@ def inspect_light_flag_readback_source(pe):
             "limits":"A concrete readback-structure transfer; not a new UI producer or proof of physical on/off semantics. Other producers and indirect writes are not excluded."}
 
 
+def inspect_default_light_reset_dispatch(pe):
+    bodies={"notify":(0x48E97F,0x48E9A4,"8ed2357c3ce6b93d9535a1ba282d9ed64b6b763a487e7f4cfe807687fa36985f"),
+            "controller":(0x4ABC30,0x4ABE9D,"2ceb12e155cdd5cfe711d7a6d3fa531d2992369d6590a512f311681a79a2f470"),
+            "targetPreparation":(0x4F9440,0x4F9573,"e0315a0e99a81e39253c857005da577633cd25e0b298822aebad14b30de2df49")}
+    for name,(a,b,h) in bodies.items():
+        if hashlib.sha256(pe.at(a,b-a)).hexdigest()!=h:raise ValueError("Default light reset body differs: "+name)
+    virtuals={0x294:0x4F9440,0x2BC:0x500790,0x2C4:0x501190,0x28C:0x4FAA50}
+    for offset,target in virtuals.items():
+        if pe.pointer(0x77F604+offset)!=target:raise ValueError("Default light reset virtual differs")
+    name="device_lightset_reset_btn"
+    if pe.at(0x74D338,(len(name)+1)*2)!=(name+"\0").encode('utf-16-le'):raise ValueError("Default light reset name differs")
+    return {"functionBodies":{name:{"start":hex(a),"endExclusive":hex(b),"sha256":h} for name,(a,b,h) in bodies.items()},
+            "notify":"device_lightset_reset_btn -> 0x4abc30; family1 -> target virtual+0x294 then +0x2bc",
+            "virtuals":{hex(k):hex(v) for k,v in virtuals.items()},
+            "targetPreparation":"Read current profile selection, compose DefaultData%d.json via 0x542540, load host fields via 0x47c700; refresh, overwrite palette via 0x4fa0e0, send palette via virtual+0x2c4",
+            "stageOrder":"Factory palette first (alpha255 conversion), then outer controller virtual+0x2bc parameter method 0x500790; final UI refresh",
+            "limits":"Static target reset path, not a complete host-field diff or dynamic final effect. Uses traced palette conversion; not a generic all-key reset or a live write authorization. The product candidate retains bank0 limits; other profiles need separate hardware baselines."}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -3092,7 +3111,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 67,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 68,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3135,6 +3154,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "macroStepFiles": inspect_macro_step_files(pe),
         "systemLightingPriorityBoundary": inspect_system_lighting_priority_boundary(pe,skin),
         "lightFlagReadbackSource": inspect_light_flag_readback_source(pe),
+        "defaultLightResetDispatch": inspect_default_light_reset_dispatch(pe),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),

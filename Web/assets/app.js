@@ -1,5 +1,5 @@
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -59,6 +59,7 @@ function render(){
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
+  $('review-default-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   updatePaletteControls();
   $('save-local-lighting').disabled=busy||!baseline||!baselineLightingMapping||!profile.lightingMapping||profile.lightingColorEncoding!=='officialRGB';
@@ -284,6 +285,17 @@ $('lighting-draft-file').onchange=()=>{
     const next=importWindowsLightingDraft(profile,JSON.parse(await file.text()));
     profile=next;syncLights();loadColor();
     status('已仅载入官方灯效与配色到编辑区。键位、宏、文本及设备设置保留，尚未写入。');
+  },{localOnly:true});
+};
+$('review-default-lighting').onclick=()=>{if(!busy)$('default-lighting-file').click();};
+$('default-lighting-file').onchange=()=>{
+  const file=$('default-lighting-file').files[0];$('default-lighting-file').value='';if(!file)return;
+  return operation(async()=>{
+    requireThat(baseline&&profile.lightingMapping,'请先读取完整配置和 LED 映射。');requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
+    const review=reviewDefaultLighting(await file.text(),baseline,profile.lightingMapping);
+    const summary=`默认配色表先于灯效参数；颜色将改变 ${review.changedColorSlots.length} 个位置，参数将改变 ${review.changedParameterOffsets.length} 项。按键、宏和文本保持当前配置；这里只导出计划，不改变编辑草稿或键盘。`;
+    $('lighting-review-summary').textContent=summary;if(!confirm(summary+' 导出计划？'))return;
+    download(review,'CherryMac-默认灯效核对.json');status('已导出默认灯效计划，尚未写入；可在灯效验收流程载入。');
   },{localOnly:true});
 };
 $('review-lighting').onclick=()=>operation(()=>{

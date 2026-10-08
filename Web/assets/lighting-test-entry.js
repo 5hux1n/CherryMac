@@ -57,7 +57,7 @@ async function loadInput(value,name){
   // Persist the selected source before enabling either operation button.
   artifacts.observations.push({kind:'loaded',at:new Date().toISOString(),name,input:clone(prepared.value)});await persistSession();
   input=prepared;latestRecord=prepared.kind==='restore'?clone(prepared.value):null;
-  $('lighting-plan').textContent=prepared.kind==='write'?`已载入写入核对：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
+  $('lighting-plan').textContent=prepared.kind==='write'?`已载入${prepared.value.plan.defaultColorData!=null?'默认配色→参数计划':'写入核对'}：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
   status('计划已核对；请单独选择并读取 USB 键盘。');
 }
 $('lighting-resume').onclick=()=>{

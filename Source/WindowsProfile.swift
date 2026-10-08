@@ -527,6 +527,8 @@ enum WindowsProfile {
         var version=2
         var hardwareReady=false
         var bank:Int;var transportSelector:Int;var chunkCapacity:Int;var stages:[Stage]
+        // Default-light reset sends the alpha-255 palette before parameters.
+        var defaultColorData:[UInt8]? = nil
         struct Report:Codable,Equatable {
             var stage:Int;var kind:String;var delayMilliseconds:Int;var request:[UInt8]
             func validateReply(_ reply:[UInt8])throws {
@@ -781,14 +783,17 @@ enum WindowsProfile {
         // Offline rendering only. Rebuild the bounded stage graph before
         // accepting a saved/mutable plan; never pass this to a USB sender.
         func reports()throws->[Report]{
-            guard format=="CherryMacOfficialLightingPlan",version==2,!hardwareReady,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity),let parameters=stages.first,parameters.writes.count>=3 else{throw HardwareError(message:"灯效候选计划格式无效。")}
+            guard format=="CherryMacOfficialLightingPlan",version==2,!hardwareReady,(0...127).contains(bank),(0...1).contains(transportSelector),(1...56).contains(chunkCapacity),let parameters=stages.dropFirst(defaultColorData == nil ? 0:1).first,parameters.writes.count>=3 else{throw HardwareError(message:"灯效候选计划格式无效。")}
             let head=parameters.writes.dropLast(2).flatMap{$0.data},tail=parameters.writes[parameters.writes.count-2].data
             guard head.count==9,head[0]==UInt8(bank),CherryLighting.modes.contains(where:{$0.1==head[1]}),head[2]<=4,head[3]<=4,head[4]<=1,head[5]<=1,tail.count==1 else{throw HardwareError(message:"灯效候选参数布局无效。")}
             let begin=transportSelector==1 ? 0x81:1,finish=transportSelector==1 ? 0x82:2,flag=transportSelector==1 ? 0:0x55
             func chunks(_ command:Int,_ offset:Int,_ flag:Int,_ data:[UInt8])->[Write]{stride(from:0,to:data.count,by:chunkCapacity).map{start in .init(command:command,offset:offset+start,flag:flag,data:Array(data[start..<min(data.count,start+chunkCapacity)]))}}
             let writes=chunks(6,bank*64,flag,head)+chunks(6,bank*64+21,flag,tail)+chunks(6,bank*64+24,flag,[1])
             var expected=[Stage(name:"parameters",beginRequired:parameters.beginRequired,beginCommand:begin,writes:writes,finishCommand:finish,finishDelayMilliseconds:10)]
-            if head[1]==8 {
+            if let colors=defaultColorData{
+                guard colors.count==378 else{throw HardwareError(message:"默认配色阶段长度无效。")}
+                expected.insert(.init(name:"defaultColors",beginRequired:parameters.beginRequired,beginCommand:begin,writes:chunks(transportSelector==1 ? 0x8B:0x0B,bank*512,0,colors),finishCommand:finish,finishDelayMilliseconds:10),at:0)
+            }else if head[1]==8 {
                 guard stages.count==2 else{throw HardwareError(message:"缺少独立颜色阶段。")}
                 let colors=stages[1].writes.flatMap{$0.data}
                 guard colors.count==378 else{throw HardwareError(message:"颜色阶段长度无效。")}
@@ -1325,6 +1330,17 @@ enum WindowsProfile {
         var lightingMapping:LightingMappingContext? = nil
         // Advisory only: mapped raw colors lost during official host encoding.
         var encodedBlackColorSlots:[Int]? = nil
+    }
+    static func reviewDefaultLighting(_ data:Data,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->LightingDraftReview{
+        try baseline.validate();guard baseline.deviceInfo[5]==126,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认灯效需要本型号完整配置和 126 个颜色位置。")}
+        let template=try extractDefaultTemplate(data),parameters=try prepareOfficialLightingParameters(template,bank:0),slots=try mapping.slots(for:baseline)
+        let red:Set<Int>=[44,64,65,66,96,113,114,115];var colors=[UInt8](repeating:0,count:378)
+        for (logical,slot) in slots.enumerated(){guard let slot else{continue};colors[slot*3]=254;colors[slot*3+1]=red.contains(logical) ? 0:254;colors[slot*3+2]=red.contains(logical) ? 0:254}
+        var plan=assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:nil,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+        plan.defaultColorData=colors
+        let stage=OfficialLightingPlan.Stage(name:"defaultColors",beginRequired:true,beginCommand:1,writes:stride(from:0,to:378,by:56).map{offset in .init(command:0x0B,offset:offset,flag:0,data:Array(colors[offset..<min(378,offset+56)]))},finishCommand:2,finishDelayMilliseconds:10)
+        plan.stages.insert(stage,at:0);let target=try plan.expectedReadback(from:baseline)
+        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{baseline.colors![$0*3..<$0*3+3] != target.colors![$0*3..<$0*3+3]},lightingMapping:mapping)
     }
     static func reviewLightingDraft(_ profile:HardwareProfile,baseline:HardwareSnapshot)throws->LightingDraftReview {
         try profile.validate();try baseline.validate();try profile.snapshot.validate()

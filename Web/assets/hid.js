@@ -159,7 +159,7 @@ export class CherryHID{
   }
   async #applyLightingCandidate(plan,baseline,{lightingMapping=null,gate,cancelled,backup,persist}){
     plan=structuredClone(plan);baseline=structuredClone(baseline);lightingMapping=structuredClone(lightingMapping);
-    requireThat(officialLightingReadbackTarget(plan,baseline).parameters[1]!==8||lightingMapping!==null,'逐键计划缺少 LED 映射，请重新准备。');
+    requireThat((officialLightingReadbackTarget(plan,baseline).parameters[1]!==8&&plan.defaultColorData==null)||lightingMapping!==null,'逐键计划缺少 LED 映射，请重新准备。');
     if(lightingMapping!==null)lightingMappingSlots(lightingMapping,baseline);
     let mappingVerified=false;
     const authorization=new LightingCandidateAuthorization(plan,baseline),device=this.device;

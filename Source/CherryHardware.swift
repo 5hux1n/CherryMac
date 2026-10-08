@@ -351,7 +351,7 @@ final class CherryUSB: CherryHardwareAccess {
                                 persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
         let target=try plan.expectedReadback(from:baseline)
-        guard target.parameters[1] != 8 || lightingMapping != nil else{throw HardwareError(message:"逐键计划缺少 LED 映射，请重新准备。")}
+        guard (target.parameters[1] != 8 && plan.defaultColorData == nil) || lightingMapping != nil else{throw HardwareError(message:"逐键计划缺少 LED 映射，请重新准备。")}
         _ = try lightingMapping?.slots(for:baseline)
         var mappingVerified=false
         let selectedRegistryID=try lightingRegistryID()

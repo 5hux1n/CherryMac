@@ -106,6 +106,20 @@ extension HardwareWindowController {
             message.stringValue="已导出灯效写入核对计划，尚未写入键盘。"
         }catch{message.stringValue=error.localizedDescription}
     }
+    @objc func reviewDefaultLighting(){
+        guard !busy,baselineWasRead,let baseline,let mapping=profile?.lightingMapping else{message.stringValue="请先读取完整配置和 LED 映射。";return}
+        let input=NSOpenPanel();input.canChooseDirectories=false;input.allowsMultipleSelection=false;input.message="选择官方 DefaultData0～4.json，只准备本型号默认灯效与配色计划。"
+        guard input.runModal() == .OK,let url=input.url else{return}
+        do{guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
+            let review=try WindowsProfile.reviewDefaultLighting(Data(contentsOf:url),baseline:baseline,mapping:mapping)
+            let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复所选文件的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。这里只导出计划，不改变编辑草稿或键盘。"
+            alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回")
+            guard alert.runModal() == .alertFirstButtonReturn else{return}
+            let output=NSSavePanel();output.nameFieldStringValue="CherryMac-默认灯效核对.json";guard output.runModal() == .OK,let destination=output.url else{return}
+            let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:destination,options:.atomic)
+            message.stringValue="已导出默认灯效计划，配色先于参数；尚未写入。可在灯效验收流程载入。"
+        }catch{message.stringValue=error.localizedDescription}
+    }
     func buildLighting(_ pane:NSView){
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;lightTabView=tabs;place(tabs,0,44,930,246,in:pane)
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
@@ -127,6 +141,7 @@ extension HardwareWindowController {
         place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)
         let colorButton=button("使用此颜色",#selector(stageGlobalLightColor));globalLightColorButton=colorButton;place(colorButton,625,99,139,30,in:builtins)
         place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
+        place(button("核对默认灯效…",#selector(reviewDefaultLighting)),258,159,162,30,in:builtins)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
         lightModeHelp.font = .systemFont(ofSize:12);place(lightModeHelp,8,199,832,40,in:builtins)
         let colors=tabs.tabViewItems[1].view!
@@ -407,9 +422,9 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
                 let value=try JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:data)
                 guard value.version==1,!value.hardwareReady,try value.plan.expectedReadback(from:value.original)==value.target else{throw HardwareError(message:"灯效核对目标与计划不一致。")}
                 _ = try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:value.plan,baseline:value.original)
-                if value.target.parameters[1]==8,value.lightingMapping==nil{throw HardwareError(message:"逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。")}
+                if (value.target.parameters[1]==8 || value.plan.defaultColorData != nil),value.lightingMapping==nil{throw HardwareError(message:"逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。")}
                 _ = try value.lightingMapping?.slots(for:value.original)
-                review=value;summary.stringValue="模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
+                review=value;summary.stringValue="\(value.plan.defaultColorData != nil ? "默认配色 → 参数；":"")模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
             }else if root?["format"] as? String=="CherryMacLightingRecoveryRecord" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data).assess();recoveryData=data;summary.stringValue="已载入写入恢复记录；恢复前重新读取配置。"
             }else if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {

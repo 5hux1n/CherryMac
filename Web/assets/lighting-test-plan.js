@@ -7,7 +7,7 @@ export function lightingAcceptanceInput(value){
     officialLightingReports(input.plan);
     const target=officialLightingReadbackTarget(input.plan,input.original);
     requireThat(equal(target,input.target),'灯效计划与预计读回不一致。');
-    requireThat(target.parameters[1]!==8||input.lightingMapping!=null,'逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。');
+    requireThat((target.parameters[1]!==8&&input.plan.defaultColorData==null)||input.lightingMapping!=null,'逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。');
     if(input.lightingMapping!=null)lightingMappingSlots(input.lightingMapping,input.original);
     return {kind:'write',value:input,target};
   }
