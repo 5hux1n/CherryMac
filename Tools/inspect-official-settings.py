@@ -2961,6 +2961,16 @@ def inspect_system_lighting_priority_boundary(pe,skin=None):
             "limits":"These are separate JSON fields. Priority control is hidden at the traced target initialization and notification is family-gated; no whole-program visibility proof. LightOpenFlag physical semantics remain unconfirmed. No new control or hardware access."}
 
 
+def inspect_light_flag_readback_source(pe):
+    start,end=0x4FD91A,0x4FD92C
+    digest="48525c495f0b364d2156deb63cfed0dc9c368b0607a53fad258ee8d9e2d7f9f2"
+    if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:raise ValueError("LightOpenFlag readback transfer differs")
+    if pe.at(start,end-start)!=bytes.fromhex("8b45a08b4da08a919a3f0000889067210000"):raise ValueError("LightOpenFlag source instruction differs")
+    return {"segment":{"start":hex(start),"endExclusive":hex(end),"sha256":digest},
+            "transfer":"Copy device+0x3f9a byte into device+0x2167 (LightOpenFlag structure byte11)",
+            "limits":"A concrete readback-structure transfer; not a new UI producer or proof of physical on/off semantics. Other producers and indirect writes are not excluded."}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -3082,7 +3092,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 66,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 67,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3124,6 +3134,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
         "systemLightingPriorityBoundary": inspect_system_lighting_priority_boundary(pe,skin),
+        "lightFlagReadbackSource": inspect_light_flag_readback_source(pe),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),

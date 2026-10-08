@@ -12,6 +12,35 @@ EXPECTED_SHA256 = "188836c15eb1560d0282ae3c2485b4a4d2edd5dfb69a91d4510b273c61047
 IMAGE_SHA256 = "31d0a07361ad531fa16867412d46e496737b126efc90482f86baa7e6bd5051bd"
 
 
+def inspect_light_flag_callback(image):
+    """Pin the byte21 consumer and callback registration, without execution."""
+    def at(address,size):
+        start=address-0x10000
+        if start<0 or start+size>len(image):raise ValueError("Light flag address outside firmware")
+        return image[start:start+size]
+    bodies={
+        (0x2B7E4,0x2B84E):"cecfe005f98dd02d7c92ae83bb3855ed3ae459c0af0a96e9033d343e64361e11",
+        (0x2BB1E,0x2BB5C):"bb816a7e2f1d9c09cea7740630a0bc732d9c76f6b9c33487bc0d014a432ec5aa",
+        (0x3A0EC,0x3A146):"37fd2dc5bd93e58174452770ddbf613415f1dc2c52fb24a4bc0b5496848f47d5",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:raise ValueError("Light flag code body differs")
+    checks={0x2B7E6:"1a4b",0x2B7E8:"5b7d",0x2B7EC:"f3b9",0x2B830:"0c48",0x2B832:"0ef05bfc",0x2B83C:"0ef056fc",0x2B848:"fff7eefe"}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):raise ValueError("Light flag branch instruction differs")
+    literals={0x2B850:0x20000CD8,0x2B854:0x20009B21,0x2B858:0x20005284,0x2B85C:0x200034F8,0x2B860:0x20003E20,0x2B864:0x20005184,0x2B868:0x20009B35,0x2BB74:0x200034F8,0x2BB7C:0x2B7E5,0x2BB80:0x20003E20}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:raise ValueError("Light flag literal differs")
+    return {"codeSegments":[{"start":hex(a),"endExclusive":hex(b),"sha256":h} for (a,b),h in bodies.items()],
+            "instructionChecks":len(checks),"literals":{hex(a):hex(v) for a,v in literals.items()},
+            "consumer":{"entry":"0x2b7e4","parameterBase":"0x20000cd8","parameterIndex":21,"branch":"0 goes directly to the common update at 0x2b7ee; nonzero clears two buffers first",
+                "nonzeroClears":[{"start":"0x20005184","length":198},{"start":"0x20005284","length":198}],
+                "clearHelper":"0x3a0ec..0x3a146 implements byte fill, called with r1=0 and r2=198",
+                "additionalPath":"nonzero checks 0x20009b35; if zero, calls 0x2b628 before common update"},
+            "registration":{"site":"0x2bb3e..0x2bb5c","callback":"0x2b7e5 (Thumb pointer)","object":"0x200034f8","callbackObjectByte":4,"scheduler":"0x20003e20","intervalArgument":20,"registerFunction":"0x4b064"},
+            "limits":"This proves a consumer in the fixed packaged 0104 image, not installed firmware or a simple on/off meaning. Buffer purpose, whole callback timing and physical effect remain unverified. Literal pools are excluded from code hashes; no execution, emulation or device access."}
+
+
 def inspect_macro_event_dispatch_and_release(image):
     """Pin the event TBB table and separate held-state cleanup, without execution."""
     def at(address,size):
@@ -997,7 +1026,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 20,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 21,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1017,6 +1046,7 @@ def inspect(path):
             'flashCompletion': inspect_flash_completion(image),
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
+            'lightFlagCallback': inspect_light_flag_callback(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
             'saveWorkRegistration': inspect_save_work_registration(image),
             'queueWorker': inspect_queue_worker(image),
