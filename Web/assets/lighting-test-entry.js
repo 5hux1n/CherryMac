@@ -46,7 +46,7 @@ async function persist(record){
   await persistSession();
 }
 async function operation(kind,body){
-  if(busy)return;const revision=connectionRevision;
+  if(busy)return;const revision=connectionRevision,cycleAtStart=powerCycle;
   // Returning performs only fresh reads and delivery. Preserve its receipt on
   // failure so reconnection can retry the fresh read without another write.
   const retainedEditorRecord=kind==='return-editor'?clone(editorRecord):null;
@@ -66,6 +66,7 @@ async function operation(kind,body){
   }catch(error){
     editorRecord=revision===connectionRevision?retainedEditorRecord:null;
     if(kind==='write'){writtenTarget=null;powerCycle=null;}
+    if(kind==='confirm-power-off'&&cycleAtStart){const saved=powerStorage.get(cycleAtStart);if(saved)saved.failure=String(error?.message??error);}
     status(error.message,true);
   }finally{pendingEditorRecord=null;pendingWriteTarget=null;abort=null;busy=false;render();}
 }
