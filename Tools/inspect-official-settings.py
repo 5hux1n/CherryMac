@@ -1605,6 +1605,43 @@ def inspect_other_parameter_sender_classes(pe):
             "limits": "These named senders are associated with distinct RTTI classes. Mouse and HS6533 virtual methods are not the target keyboard's virtual dispatch and must not be copied as its settings protocol. Direct or indirect calls outside these inspected paths are not globally excluded."}
 
 
+def inspect_profile_ui_scope(pe, skin=None):
+    """Pin actual keyboard UI eligibility separately from generic sender presence."""
+    bodies = {
+        0x433A8B:(0x433AC3,"6b01053e446ce74ce3acdd7c256142fe42ded531f555869ed929fdd33aa73e9a"),
+        0x42B4B0:(0x42B4C4,"2e23e878a1a20b7d4efb6ab7b062acfa909bb757012140977f596d70b23a8eff"),
+        0x4348F0:(0x43495A,"9dd4b886f27eb61a0e41951394cd2488dfc0266e06a0fa3e974b4794271310c3"),
+        0x438FD0:(0x439169,"1bfe1598dc4752a2bf2c99093a6ec685f537fbbf0fc4826d3e31219aed21601e"),
+        0x4F74DB:(0x4F75E3,"2169bcaaa82d84f79ab5cfd6f75b6e47ac707bbc8dcbae25ba9a7f258034375b"),
+    }
+    for start,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Unexpected configuration-selector UI method")
+    if pe.at(0x43463A,6)!=bytes.fromhex("8988240b0000"):
+        raise ValueError("Unexpected cached configuration-index setter")
+    result={"functionBodies":{hex(a):{"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+            "constructor":{"controlPointerMember":"+0xb1c","lazyComboMember":"+0xb20","cachedIndexMember":"+0xb24","cachedIndexInitial":0},
+            "cachedIndex":{"getter":"0x42b4b0","setter":"0x434600 / 0x43463a","input":"argument 1; also used by selector change 0x4ab1d9"},
+            "liveComboIndexGetter":"0x4348f0; distinct from cached-index getter",
+            "keyboardInitializationGate":{"range":"0x4f74db..0x4f75e3","products":[0x1B2,0x1B1,0x1D7,0x1E2,0x1DA,0x1E6,0x1F7,0x1EF,0x1FB,0x142,0x14C],
+                "targetIncluded":False,"call":"0x4f75de -> 0x438fd0","visibilityArgument":True,"visibleItemCountArgument":3},
+            "visibilityMethod":{"method":"0x438fd0","comboVisible":"argument 1 != 0","tailItemHiding":"hides last (5 - argument 2) items; supplied count 3 hides rows 4/5"},
+            "limits":"Positive named initialization gate, XML and index data flow only. Generic selection-send method presence does not prove model01CE usable banks. Does not globally exclude other callers, runtime overrides, other firmware or internal flash profiles; no hardware access."}
+    if skin is not None:
+        path=Path(skin)/"XML/CustomControlXML/DeviceProfile.xml"
+        raw=path.read_bytes()
+        if len(raw)>1_000_000:raise ValueError("Profile UI resource too large")
+        text=re.sub(r"<!--.*?-->","",raw.decode("utf-8-sig"),flags=re.S)
+        matches=re.findall(r'<Combo\b([^>]*\bname="device_nprofile_combo"[^>]*)>(.*?)</Combo>',text,flags=re.S)
+        if len(matches)!=1:raise ValueError("Unexpected profile selector resource")
+        attrs,children=matches[0]
+        items=re.findall(r'<ListLabelElement\b[^>]*\btext="([^"]+)"',children)
+        if 'visible="false"' not in attrs or items!=["Profile1","Profile2","Profile3","Profile4","Profile5"]:
+            raise ValueError("Unexpected configuration-selector initial visibility or items")
+        result["resource"]={"file":"DeviceProfile.xml","sha256":hashlib.sha256(raw).hexdigest(),"initialVisible":False,"itemLabels":items}
+    return result
+
+
 def inspect_profile_selection_send(pe):
     checks = {
         0x48FB41: "6800d37400", 0x48FB84: "e8674dfaff",
@@ -3134,7 +3171,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 69,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 70,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3168,6 +3205,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "deviceMetadataSelector": inspect_device_metadata_selector(pe),
         "cachedDeviceStatus": inspect_cached_device_status(pe),
         "profileSelectionSend": inspect_profile_selection_send(pe),
+        "profileSelectorUIScope": inspect_profile_ui_scope(pe,skin),
         "otherParameterSenderClasses": inspect_other_parameter_sender_classes(pe),
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
