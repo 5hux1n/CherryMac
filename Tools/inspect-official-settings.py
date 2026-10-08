@@ -2900,6 +2900,29 @@ def inspect_pairing_path_assignment(pe):
             'limits':'Named assignment path only; no serial-based association in this path, not proof of all multi-device behavior. Product selection must retain explicit current-interface identity.'}
 
 
+def inspect_macro_step_files(pe):
+    """Pin standalone JSON event files and recording insertion notifications."""
+    bodies = {
+        "importWrapper": (0x4B34F0,0x4B36C7,"3d3074f57d5c32d3aad4378350222fa338460342ae0205a61f6d4b872828f769"),
+        "exportWrapper": (0x4B36D0,0x4B388E,"ca0f15e1215fd40e67374696c41afb7ae677872c31ddec03da771adc6b1113e6"),
+        "exportEvents": (0x451A70,0x451CDE,"dbc7ebd7ab611eab6625d2de1a1c1ee8dd5702e4fd31328d180c4f391220e1a7"),
+        "importEvents": (0x451D10,0x451F9B,"5ab5037b770bc1ca9d8c8088b822764e3e56ffb96eb78e86e8f3b11170091a53"),
+        "recordInsertionNotifications": (0x49191E,0x491BA4,"76fb8b15927adf303182a7e27256df99d100be43cb05386a2bd79a6255242f00"),
+    }
+    for name,(start,end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Macro step file body differs: "+name)
+    calls={0x48EC5D:"e86e4a0200",0x48EC82:"e869480200",0x4B363E:"e8cde6f9ff",0x4B381B:"e850e2f9ff",0x451B2D:"e84eabffff",0x451B99:"e892370300",0x451EBC:"e8cf350300",0x451EE8:"e813a7ffff",0x491A57:"e8040e0200",0x491B9A:"e8c10c0200"}
+    for address,raw in calls.items():
+        if pe.at(address,len(bytes.fromhex(raw)))!=bytes.fromhex(raw):
+            raise ValueError("Macro step file call differs: "+hex(address))
+    return {"functionBodies":{name:{"start":hex(a),"endExclusive":hex(b),"sha256":h} for name,(a,b,h) in bodies.items()},
+            "calls":{hex(a):v for a,v in calls.items()},
+            "format":".mac: raw JSON event array or null from macro control +0x928; StyledWriter/file copy, not hardware bank bytes",
+            "recordInsertion":"before/after recording with actual, fixed or ignored timing; not batch rewriting existing delays",
+            "limits":"Import/export controls are visible=false in source resource. Constant-time menu entries are commented out. Static handlers exist; target running UI visibility and Windows import application remain unverified. No EXE or device execution."}
+
+
 def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defaults_dir=None):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -3021,7 +3044,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 64,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 65,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3061,6 +3084,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplySave": inspect_basic_apply_save(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
+        "macroStepFiles": inspect_macro_step_files(pe),
         "macroStepListActions": inspect_macro_step_list_actions(pe),
         "macroMouseSearchBounds": inspect_macro_mouse_search_bounds(pe),
         "macroCapacitySender": inspect_macro_capacity_sender(pe),

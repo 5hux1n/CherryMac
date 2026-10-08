@@ -1,5 +1,5 @@
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -64,6 +64,7 @@ function render(){
   if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
+  $('import-macro-steps').disabled=busy||!!recorder;$('export-macro-steps').disabled=busy||!!recorder;
   $('load-macro-draft').disabled=busy||!!recorder;$('macro-removal').disabled=busy||!!recorder;
   const macroKnown=profile.macroBindings!=null;$('macro-warning').hidden=macroKnown;$('macro-warning').textContent='当前原始宏尚未识别。已保留宏数据；暂不能编辑或覆盖宏库。';
   for(const id of ['save-macro','assign-macro','unassign-macro','delete-macro','add-pair'])$(id).disabled=busy||!macroKnown||(id==='assign-macro'&&!editableSlots.has(key.slot))||(id==='unassign-macro'&&!profile.macroBindings?.[key.slot]);
@@ -279,6 +280,17 @@ $('review-lighting').onclick=()=>operation(()=>{
 },{localOnly:true});
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);const options=selectedLightingOptions();if(options?.speed)p[3]=4-Number($('speed').value);if(options?.direction&&$('direction').value!=='')p[4]=Number($('direction').value);if(options?.rainbow&&$('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
 $('global-color').onclick=()=>act(()=>{const options=selectedLightingOptions();requireThat(options?.color,'此模式不提供内置单色调整。');profile.snapshot.parameters.splice(6,3,...rgb($('global-color-input').value));if(options.rainbow){profile.snapshot.parameters[5]=0;$('rainbow').value='0';}status('已设置内置灯效单色，尚未写入。');});
+$('import-macro-steps').onclick=()=>{if(!busy&&!recorder)$('macro-steps-file').click();};
+$('macro-steps-file').onchange=()=>act(async()=>{
+  const file=$('macro-steps-file').files[0];$('macro-steps-file').value='';if(!file||recorder)return;requireThat(file.size<=3_000_000,'宏文件超过 3 MB。');
+  const next=decodeMacroStepFile(await file.text(),macroEventLimit());if(busy||recorder)return;
+  if(!confirm(`载入 ${next.length} 个事件并替换当前步骤编辑区？已保存宏、执行方式及绑定保留，导入后需保存宏。`))return;
+  steps=clone(next);renderSteps();status('已载入独立宏步骤，请先保存宏；键盘尚未变化。');
+});
+$('export-macro-steps').onclick=()=>act(()=>{
+  requireThat(!recorder,'请先结束录制。');const original=profile.macros.find(m=>m.name===$('macro-list').value),macro={...(original??{}),name:original?.name??'事件文件',steps:clone(steps)};
+  const raw=encodeMacroStepFile(macro,profile),url=URL.createObjectURL(new Blob([raw],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='CherryMac-宏步骤.mac';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('已导出当前步骤；.mac 不包含名称、执行方式和按键绑定。');
+});
 async function persistMacroEditor(){
   const saved=clone(profile);if(textProduct){if(textRoot)saved.hostTextJSON=JSON.stringify(textRoot);else delete saved.hostTextJSON;}
   try{await saveMacroEditorDraft(saved);}catch(error){throw new Error('编辑区已更新，但本机宏草稿保存失败：'+error.message);}

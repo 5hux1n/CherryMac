@@ -295,7 +295,27 @@ function validateWindowsTemplate(root,size){
   root.KeyList.forEach((k,i)=>requireThat(winInt(k?.DefaultAssignment,'DefaultAssignment',0,0xffffff)===WINDOWS_DEFAULTS[i],'Windows 键盘布局不匹配。'));
   officialSystemStageWords(root);
 }
-// ActionInfo building block; this does not yet export a whole official document.
+// Shared official event decoding for full configurations and .mac files.
+function decodeMacroEventObjects(events){
+  return events.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
+      if(type===1&&[1,2,4,8,16].includes(button))usage=button;
+      else if(type===4||type===5)usage=button;
+      else if(type===10&&button>=4&&button<224)usage=button;
+      else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
+      else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===4?{kind:'mouseX'}:type===5?{kind:'mouseY'}:type===1?{kind:'mouse'}:{})};});
+ }
+export function decodeMacroStepFile(raw,maximumEvents=762){
+  requireThat(typeof raw==='string'&&new TextEncoder().encode(raw).length<=3_000_000,'宏文件超过 3 MB。');
+  const root=JSON.parse(raw.trim()),events=root===null?[]:root;requireThat(Array.isArray(events),'独立 .mac 文件须为事件数组或 null；完整配置请在配置页导入。');
+  requireThat(events.length<=maximumEvents,`宏文件超过当前格式的 ${maximumEvents} 事件上限，请先启用扩展宏编辑。`);
+  requireThat(events.every(e=>e&&typeof e==='object'&&!Array.isArray(e)&&Object.keys(e).every(k=>['Type','Button','Action','Delay'].includes(k))),'独立宏含附加事件字段，请使用完整官方配置导入以保留来源。');
+  const steps=decodeMacroEventObjects(events);validateMacroWithin({name:'事件文件',steps},maximumEvents);return steps;
+}
+export function encodeMacroStepFile(macro,profile=null){
+  validateMacro(macro);const generated=officialMacroAction(macro,{mode:'count',count:1}),source=profile?officialMacroSource(profile,macro):null;
+  const action=source?mergeOfficialMacro(source,generated):generated,raw=JSON.stringify(action.ActionContent.ActionMacroEvents,null,2);
+  requireThat(new TextEncoder().encode(raw).length<=3_000_000,'宏文件超过 3 MB。');return raw;
+}
 export function officialMacroAction(m,playback=m?.preferredPlayback??{mode:'count',count:1}){
   validateMacro(m);validatePlayback(playback);
   return {ActionType:2,ActionName:m.name,ActionContent:{
@@ -465,12 +485,7 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
 
     const recordingDelay={fixed:winInt(c.ActionMacroFixTimeIsSelected??0,'固定间隔选项',0,1)===1,milliseconds:winInt(c.ActionMacroFixTimeValue??0,'固定间隔值',0,60000)};
     const events=officialMacroEvents(c);
-    const steps=events.map(e=>{const type=winInt(e.Type,'事件类型',0,127),button=winInt(e.Button,'按键',0,255);let usage;
-      if(type===1&&[1,2,4,8,16].includes(button))usage=button;
-      else if(type===4||type===5)usage=button;
-      else if(type===10&&button>=4&&button<224)usage=button;
-      else if(type===9&&button>0&&(button&(button-1))===0)usage=224+Math.log2(button);
-      else throw new Error('滚动与其他宏事件尚未支持。');requireThat(['down','up'].includes(e.Action),'宏按下／松开状态无效。');return {usage,pressed:e.Action==='down',delayMilliseconds:winInt(e.Delay,'延迟',0,60000),...(type===4?{kind:'mouseX'}:type===5?{kind:'mouseY'}:type===1?{kind:'mouse'}:{})};});
+    const steps=decodeMacroEventObjects(events);
     const stem=typeof a.ActionName==='string'&&a.ActionName.trim()?macroNameStem(a.ActionName):'导入宏';let name=stem,j=1;while(p.macros.some(m=>sameMacroName(m.name,name)))name=`${stem} (${j++})`;
     const mode=winInt(c.ActionMacroType,'宏模式',0,2),preferredPlayback={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};
     const macro={name,steps,recordingDelay,preferredPlayback,windowsActionIndex:index};validateMacro(macro);p.macros.push(macro);imported.set(index,name);

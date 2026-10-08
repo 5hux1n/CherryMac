@@ -830,8 +830,28 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func macroDraftOptions(_ sender:NSButton){
         guard !busy else{return};let menu=NSMenu()
-        for (title,action) in [("启用扩展宏编辑",#selector(enableOfficialMacros)),("载入上次保存的宏编辑草稿",#selector(loadMacroEditorDraft))]{let item=NSMenuItem(title:title,action:action,keyEquivalent:"");item.target=self;menu.addItem(item)}
+        for (title,action) in [("导入独立宏步骤…",#selector(importMacroSteps)),("导出独立宏步骤…",#selector(exportMacroSteps)),("启用扩展宏编辑",#selector(enableOfficialMacros)),("载入上次保存的宏编辑草稿",#selector(loadMacroEditorDraft))]{let item=NSMenuItem(title:title,action:action,keyEquivalent:"");item.target=self;menu.addItem(item)}
         menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height),in:sender)
+    }
+    @objc func importMacroSteps(){
+        guard !busy,let parent=window,macroRecordingSheet==nil else{return};let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+        panel.beginSheetModal(for:parent){[weak self] choice in
+            guard choice == .OK,let self,let url=panel.url,!self.busy,self.macroRecordingSheet==nil else{return}
+            do{guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=3_000_000 else{throw HardwareError(message:"宏文件超过 3 MB。")}
+                let steps=try WindowsProfile.decodeMacroStepFile(Data(contentsOf:url),maximumEvents:self.macroEventLimit)
+                let alert=NSAlert();alert.messageText="替换当前宏步骤？";alert.informativeText="将载入 \(steps.count) 个事件，只替换步骤编辑区，不改变已保存宏、绑定、执行方式或键盘。导入后请先保存宏。";alert.addButton(withTitle:"取消");alert.addButton(withTitle:"载入步骤")
+                guard alert.runModal() == .alertSecondButtonReturn else{return}
+                self.macroText.string=steps.map{self.macroStepLine($0)}.joined(separator:"\n");self.updateMacroSummary();self.message.stringValue="已载入独立宏步骤，请先保存宏；键盘尚未变化。"
+            }catch{self.message.stringValue=error.localizedDescription}
+        }
+    }
+    @objc func exportMacroSteps(){
+        guard !busy,let parent=window,macroRecordingSheet==nil else{return}
+        do{var macro=profile?.macros.first(where:{$0.name==macroPicker.titleOfSelectedItem}) ?? KeyboardMacro(name:"事件文件",steps:[])
+            macro.steps=try parsedMacroSteps();try macro.validate(maximumEvents:macroEventLimit)
+            let data=try WindowsProfile.encodeMacroStepFile(macro,profile:profile),panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-宏步骤.mac"
+            panel.beginSheetModal(for:parent){[weak self] choice in guard choice == .OK,let url=panel.url else{return};do{try data.write(to:url,options:.atomic);self?.message.stringValue="已导出当前步骤；.mac 不包含名称、执行方式或按键绑定。"}catch{self?.message.stringValue=error.localizedDescription}}
+        }catch{message.stringValue=error.localizedDescription}
     }
     @objc func loadMacroEditorDraft(){
         guard !busy else{return}

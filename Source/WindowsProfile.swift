@@ -319,7 +319,38 @@ enum WindowsProfile {
         }
         return count
     }
-    // ActionInfo serializer shared by the forthcoming full-document exporter.
+    // Shared official event decoder for full configurations and standalone .mac files.
+    static func decodeMacroEventObjects(_ events:[[String:Any]])throws->[KeyboardMacro.Step]{
+        return try events.map{event->KeyboardMacro.Step in
+                let type=try integer(event["Type"],"宏 Type",range:0...127)
+                let button=try integer(event["Button"],"宏 Button",range:0...255)
+                let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
+                let usage:UInt8
+                if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
+                else if type==4 || type==5{usage=UInt8(button)}
+                else if type==10,button>=4,button<224{usage=UInt8(button)}
+                else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
+                else{throw HardwareError(message:"Windows 宏包含尚未支持的事件类型或按钮。")}
+                guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
+                return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==4 ? .mouseX:type==5 ? .mouseY:type==1 ? .mouse:nil)
+            }
+    }
+    static func decodeMacroStepFile(_ data:Data,maximumEvents:Int)throws->[KeyboardMacro.Step]{
+        guard data.count<=3_000_000 else{throw HardwareError(message:"宏文件超过 3 MB。")}
+        let root=try JSONSerialization.jsonObject(with:data,options:.fragmentsAllowed)
+        let events:[[String:Any]]
+        if root is NSNull{events=[]}else if let values=root as? [[String:Any]]{events=values}else{throw HardwareError(message:"独立 .mac 文件须为事件数组或 null；完整配置请在配置页导入。")}
+        guard events.count<=maximumEvents else{throw HardwareError(message:"宏文件超过当前格式的 \(maximumEvents) 事件上限，请先启用扩展宏编辑。")}
+        guard events.allSatisfy({Set($0.keys).isSubset(of:["Type","Button","Action","Delay"])}) else{throw HardwareError(message:"独立宏含附加事件字段，请使用完整官方配置导入以保留来源。")}
+        let steps=try decodeMacroEventObjects(events);try KeyboardMacro(name:"事件文件",steps:steps).validate(maximumEvents:maximumEvents);return steps
+    }
+    static func encodeMacroStepFile(_ macro:KeyboardMacro,profile:HardwareProfile?)throws->Data{
+        var action=try macroAction(macro,playback:.once)
+        if let profile,let source=try macroSource(profile,macro:macro){action=try mergeMacro(source,action)}
+        let content=action["ActionContent"] as! [String:Any]
+        let data=try JSONSerialization.data(withJSONObject:content["ActionMacroEvents"]!,options:[.prettyPrinted,.sortedKeys,.fragmentsAllowed])
+        guard data.count<=3_000_000 else{throw HardwareError(message:"宏文件超过 3 MB。")};return data
+    }
     // An explicit key binding takes precedence over the library preference.
     static func macroAction(_ macro:KeyboardMacro,playback:MacroPlayback?=nil)throws->[String:Any] {
         try macro.validate()
@@ -1477,19 +1508,7 @@ enum WindowsProfile {
             let fixed=try integer(content["ActionMacroFixTimeIsSelected"] ?? 0,"ActionMacroFixTimeIsSelected",range:0...1)
             let fixedMilliseconds=try integer(content["ActionMacroFixTimeValue"] ?? 0,"ActionMacroFixTimeValue",range:0...60000)
             let events=try macroEvents(content)
-            let steps=try events.map{event->KeyboardMacro.Step in
-                let type=try integer(event["Type"],"宏 Type",range:0...127)
-                let button=try integer(event["Button"],"宏 Button",range:0...255)
-                let delay=try integer(event["Delay"],"宏 Delay",range:0...60000)
-                let usage:UInt8
-                if type==1,[1,2,4,8,16].contains(button){usage=UInt8(button)}
-                else if type==4 || type==5{usage=UInt8(button)}
-                else if type==10,button>=4,button<224{usage=UInt8(button)}
-                else if type==9,button>0,button.nonzeroBitCount==1{usage=UInt8(224+button.trailingZeroBitCount)}
-                else{throw HardwareError(message:"Windows 宏包含尚未支持的鼠标移动或其他事件。")}
-                guard let action=event["Action"] as? String,["down","up"].contains(action)else{throw HardwareError(message:"Windows 宏按下／松开状态无效。")}
-                return .init(usage:usage,pressed:action=="down",delayMilliseconds:delay,kind:type==4 ? .mouseX:type==5 ? .mouseY:type==1 ? .mouse:nil)
-            }
+            let steps=try decodeMacroEventObjects(events)
             let originalName=actions[index]["ActionName"] as? String ?? "导入宏"
             var name=KeyboardMacro.nameStem(originalName);if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{name="导入宏"}
             let stem=name;var suffix=1
