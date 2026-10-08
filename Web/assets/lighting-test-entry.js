@@ -58,6 +58,7 @@ async function loadInput(value,name){
   artifacts.observations.push({kind:'loaded',at:new Date().toISOString(),name,input:clone(prepared.value)});await persistSession();
   input=prepared;latestRecord=prepared.kind==='restore'?clone(prepared.value):null;
   $('lighting-plan').textContent=prepared.kind==='write'?`已载入${prepared.value.plan.defaultColorData!=null?'默认配色→参数计划':'写入核对'}：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
+  if(prepared.kind==='write'&&prepared.target.parameters[1]===8&&prepared.value.rawLightingMetadata==null)$('lighting-plan').textContent+=' 旧计划未含原始 RGB；可恢复硬件数据，但不能从编码颜色还原原色。';
   status('计划已核对；请单独选择并读取 USB 键盘。');
 }
 $('lighting-resume').onclick=()=>{
@@ -123,7 +124,7 @@ $('lighting-write').onclick=event=>operation('write',async()=>{
   requireThat(input?.kind==='write'&&!writeAttempted,'请先载入新的写入核对文件。');
   requireThat(confirm('本研究入口将实际写入灯效。请确认已保存恢复资料、松开全部按键，并保持页面前台。是否继续？'),'已取消，未写入。');
   gate.acknowledge(event);abort=new AbortController();writeAttempted=true;powerCycle=null;writtenTarget=null;render();
-  if(input.value.rawLightingMetadata!=null)await saveRawLightingMetadata(input.value.rawLightingMetadata);
+  if(input.value.rawLightingMetadata!=null){try{await saveRawLightingMetadata(input.value.rawLightingMetadata);}catch(error){throw new Error(`原始配色资料未保存，本次尚未进入灯效发送：${error.message} 请修复本机存储后重新载入计划并读取键盘。`);}}
   const result=await hid.applyLightingCandidate(input.value.plan,input.value.original,{lightingMapping:input.value.lightingMapping,gate,cancelled:()=>abort.signal.aborted,backup,persist});
   if(result.readbackMatches){if(editorReview)pendingEditorRecord=clone(result.record);writtenTarget=clone(input.target);powerCycle=new LightingPowerCycle(token(hid.device));status('写入与完整读回一致。请观察灯光，再按下方提示断电重连。尚未验证外观或断电保留。');}
   else throw new Error(`本次写入未通过：${result.failure}。请保留记录，重新连接后核对恢复。`);

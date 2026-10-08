@@ -512,6 +512,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
                     guard metadata.snapshot==value.target,metadata.lightingMapping==value.lightingMapping else{throw HardwareError(message:"原始配色资料与灯效目标／映射不一致。")}
                 }
                 review=value;summary.stringValue="\(value.plan.defaultColorData != nil ? "默认配色 → 参数；":"")模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
+                if value.target.parameters[1]==8,value.rawLightingMetadata==nil{summary.stringValue += "\n旧计划未含原始 RGB；可恢复硬件数据，但不能从编码颜色还原原色。"}
             }else if root?["format"] as? String=="CherryMacLightingRecoveryRecord" {
                 _ = try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data).assess();recoveryData=data;summary.stringValue="已载入写入恢复记录；恢复前重新读取配置。"
             }else if root?["format"] as? String=="CherryMacLightingRestoreAttempt" {
@@ -629,7 +630,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             if let metadata=review.rawLightingMetadata{
                 try metadata.validate();guard metadata.snapshot==review.target,metadata.lightingMapping==review.lightingMapping else{throw HardwareError(message:"计划原始配色资料不匹配。")}
                 let cache=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")
-                try saveLightingRawMetadata(metadata,to:cache)
+                do{try saveLightingRawMetadata(metadata,to:cache)}catch{throw HardwareError(message:"原始配色资料未保存，本次尚未进入灯效发送："+error.localizedDescription+" 请修复本机存储后重新载入计划并读取键盘。")}
             }
             let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,lightingMapping:review.lightingMapping,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
