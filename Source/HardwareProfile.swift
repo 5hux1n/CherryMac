@@ -307,6 +307,34 @@ struct HardwareProfile: Codable, Equatable {
     }
 }
 
+// Local editor source only; loading merges lighting, never other modules.
+struct LightingEditorDraft:Codable {
+    var format="CherryMacLightingEditorDraft";var version=1;var profile:HardwareProfile
+    func validate()throws{
+        guard format=="CherryMacLightingEditorDraft",version==1 else{throw HardwareError(message:"灯效草稿格式不受支持。")};try profile.validate()
+        guard profile.snapshot.colors != nil else{throw HardwareError(message:"灯效草稿缺少完整配色。")}
+        if profile.snapshot.parameters[1]==8{guard profile.lightingMapping != nil,profile.lightingColorEncoding != nil else{throw HardwareError(message:"逐键草稿缺少映射或颜色来源。")}}
+    }
+    func merging(into current:HardwareProfile)throws->HardwareProfile{
+        try validate();try current.validate()
+        guard profile.snapshot.deviceInfo==current.snapshot.deviceInfo,profile.lightingMapping==current.lightingMapping else{throw HardwareError(message:"灯效草稿与当前型号或映射不同，请先读取同一键盘再载入。")}
+        var next=current
+        for offset in Array(1...8)+[21]{next.snapshot.parameters[offset]=profile.snapshot.parameters[offset]}
+        next.snapshot.colors=profile.snapshot.colors;next.lightingColorEncoding=profile.lightingColorEncoding;next.lightingRawSlots=profile.lightingRawSlots
+        if next.lightingRawSlots != nil{next.version=2}
+        if let existing=current.windowsTemplateJSON,let source=profile.windowsTemplateJSON{
+            var root=try WindowsProfile.templateRoot(Data(existing.utf8));let donor=try WindowsProfile.templateRoot(Data(source.utf8))
+            if var light=root["LightInfo"] as? [String:Any],let sourceLight=donor["LightInfo"] as? [String:Any]{
+                for name in ["SelectItem","Light","Speed","Fx","MultiColor","Red","Green","Blue","LightOpenFlag"]{if let value=sourceLight[name]{light[name]=value}}
+                root["LightInfo"]=light
+            }
+            if let colors=donor["CustomLightMode"]{root["CustomLightMode"]=colors}
+            next.windowsTemplateJSON=String(decoding:try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys]),as:UTF8.self)
+        }
+        try next.validate();return next
+    }
+}
+
 // Matrix positions in this keyboard's 126-slot firmware table. These remain
 // stable when assignments change; a configured HID usage is not a key identity.
 enum CherryMatrix {

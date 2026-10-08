@@ -1310,3 +1310,23 @@ export function paintLightingProfile(profile,selection,pattern,start,end){
   }
   validateProfile(next);return next;
 }
+
+export function makeLightingEditorDraft(profile){
+  const value={format:'CherryMacLightingEditorDraft',version:1,profile:portableProfile(profile)};validateLightingEditorDraft(value);return value;
+}
+export function validateLightingEditorDraft(value){
+  requireThat(value?.format==='CherryMacLightingEditorDraft'&&value.version===1,'灯效草稿格式不受支持。');validateProfile(value.profile);
+  requireThat(value.profile.snapshot.colors!=null,'灯效草稿缺少完整配色。');
+  if(value.profile.snapshot.parameters[1]===8)requireThat(value.profile.lightingMapping!=null&&value.profile.lightingColorEncoding!=null,'逐键草稿缺少映射或颜色来源。');
+  requireThat(new TextEncoder().encode(JSON.stringify(value)).length<=3_000_000,'灯效草稿超过 3 MB，请导出配置文件。');
+}
+export function mergeLightingEditorDraft(value,current){
+  validateLightingEditorDraft(value);validateProfile(current);const saved=value.profile;
+  requireThat(equal(saved.snapshot.deviceInfo,current.snapshot.deviceInfo)&&equal(saved.lightingMapping??null,current.lightingMapping??null),'灯效草稿与当前型号或映射不同，请先读取同一键盘再载入。');
+  const next=clone(current);for(const offset of [1,2,3,4,5,6,7,8,21])next.snapshot.parameters[offset]=saved.snapshot.parameters[offset];
+  next.snapshot.colors=clone(saved.snapshot.colors);
+  for(const field of ['lightingColorEncoding','lightingRawSlots']){if(saved[field]!=null)next[field]=clone(saved[field]);else delete next[field];}
+  if(next.lightingRawSlots!=null)next.version=2;
+  if(current.windowsTemplateJSON!=null&&saved.windowsTemplateJSON!=null){const root=JSON.parse(current.windowsTemplateJSON),donor=JSON.parse(saved.windowsTemplateJSON);if(root.LightInfo&&donor.LightInfo)for(const name of ['SelectItem','Light','Speed','Fx','MultiColor','Red','Green','Blue','LightOpenFlag'])if(Object.hasOwn(donor.LightInfo,name))root.LightInfo[name]=clone(donor.LightInfo[name]);if(Object.hasOwn(donor,'CustomLightMode'))root.CustomLightMode=clone(donor.CustomLightMode);next.windowsTemplateJSON=JSON.stringify(root);}
+  validateProfile(next);return next;
+}

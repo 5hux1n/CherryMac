@@ -1,4 +1,4 @@
-import {defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
+import {makeLightingEditorDraft,validateLightingEditorDraft,defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 import {databaseOpener,strictWriteTransaction} from './database.js?v=0.6.0';
@@ -165,4 +165,21 @@ export function loadLightingColorLibrary(storage){
 export function saveLightingColorLibrary(storage,value){
   const text=JSON.stringify(validateLightingColorLibrary(value));storage.setItem('CherryMacLightingColorLibrary',text);
   requireThat(storage.getItem('CherryMacLightingColorLibrary')===text,'颜色收藏保存核对失败。');
+}
+
+const lightingDraftDB=databaseOpener('CherryMacLightingEditorDrafts',1,value=>value.createObjectStore('drafts',{keyPath:'id'}),'灯效草稿数据库被其他页面占用。');
+export async function saveLightingEditorDraft(profile){
+  const value=makeLightingEditorDraft(profile),record={id:'latest',value},database=await lightingDraftDB();
+  await new Promise((resolve,reject)=>{
+    const t=strictWriteTransaction(database,'drafts'),store=t.objectStore('drafts');let verified=false;
+    store.put(record).onsuccess=()=>{store.get(record.id).onsuccess=event=>{if(!equal(event.target.result,record)){t.abort();return;}verified=true;};};
+    t.oncomplete=()=>verified?resolve():reject(new Error('灯效草稿未完成保存核对。'));t.onerror=()=>reject(t.error??new Error('灯效草稿保存失败。'));t.onabort=()=>reject(t.error??new Error('灯效草稿保存已中止。'));
+  });
+}
+export async function loadLightingEditorDraft(){
+  const database=await lightingDraftDB();return new Promise((resolve,reject)=>{
+    const t=database.transaction('drafts','readonly'),request=t.objectStore('drafts').get('latest');let value;
+    request.onsuccess=()=>{value=request.result?.value;};t.oncomplete=()=>{try{validateLightingEditorDraft(value);resolve(clone(value));}catch(error){reject(error);}};
+    t.onerror=()=>reject(t.error??new Error('灯效草稿读取失败。'));t.onabort=()=>reject(t.error??new Error('灯效草稿读取已中止。'));
+  });
 }

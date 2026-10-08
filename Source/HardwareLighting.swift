@@ -54,6 +54,33 @@ extension HardwareWindowController {
             return next
         };return nil
     }
+    var lightingEditorDraftURL:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/EditorDrafts/LatestLightingDraft.json")}
+    @objc func lightingDraftOptions(_ sender:NSButton){
+        guard !busy else{return};let menu=NSMenu()
+        for (title,action) in [("保存当前灯效草稿到本机",#selector(saveLightingEditorDraft)),("载入上次灯效草稿…",#selector(loadLightingEditorDraft))]{let item=NSMenuItem(title:title,action:action,keyEquivalent:"");item.target=self;menu.addItem(item)}
+        menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height),in:sender)
+    }
+    @objc func saveLightingEditorDraft(){
+        guard !busy,let current=profile else{return}
+        do{
+            let saved=LightingEditorDraft(profile:try HardwareProfile.decode(current.encoded()));try saved.validate()
+            let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys,.prettyPrinted];let data=try encoder.encode(saved)
+            guard data.count<=3_000_000 else{throw HardwareError(message:"灯效草稿超过 3 MB，请导出配置文件。")}
+            try saveSynchronizedLightingFile(data,to:lightingEditorDraftURL)
+            message.stringValue="灯效草稿已保存到本机并核对。尚未写入；载入时只恢复灯效。"
+        }catch{message.stringValue="灯效草稿保存失败："+error.localizedDescription}
+    }
+    @objc func loadLightingEditorDraft(){
+        guard !busy,let current=profile else{return}
+        do{
+            try requireLightingResultReconciled()
+            guard let size=try lightingEditorDraftURL.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=3_000_000 else{throw HardwareError(message:"灯效草稿超过 3 MB。")}
+            let saved=try JSONDecoder().decode(LightingEditorDraft.self,from:Data(contentsOf:lightingEditorDraftURL)),next=try saved.merging(into:current)
+            let alert=NSAlert();alert.messageText="载入本机灯效草稿？";alert.informativeText="将替换编辑区灯效。请先保存需要保留的当前灯效。键位、宏、文本和设备设置保留，不会写入键盘。";alert.addButton(withTitle:"取消");alert.addButton(withTitle:"载入灯效")
+            guard alert.runModal() == .alertSecondButtonReturn else{return}
+            profile=next;loadLighting();loadLightColor();update();message.stringValue="本机灯效草稿已载入，其他模块保留，尚未写入。"
+        }catch{message.stringValue="灯效草稿无法载入："+error.localizedDescription}
+    }
     @objc func saveRawLightingDraft(){
         guard !busy,baselineWasRead,let baseline,let draft=profile else{message.stringValue="请先读取键盘。";return}
         do{
@@ -169,6 +196,7 @@ extension HardwareWindowController {
         let tabs=NSTabView();tabs.tabViewType = .noTabsNoBorder;lightTabView=tabs;place(tabs,0,44,930,246,in:pane)
         for title in ["内置灯效","逐键配色"]{let item=NSTabViewItem(identifier:title);item.label=title;item.view=FlippedView();tabs.addTabViewItem(item)}
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
+        place(button("本机草稿…",#selector(lightingDraftOptions(_:))),300,4,145,30,in:pane)
         let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="读取后保存内置灯效即可核对，无需官方文件；逐键配色仍需原始颜色。仅导出计划。";place(review,690,4,210,30,in:pane)
         #if CHERRY_LIGHTING_TEST
         place(button("独立灯效验收…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
@@ -211,7 +239,7 @@ extension HardwareWindowController {
         place(clearButton,708,98,156,30,in:colors)
         place(paintButton,8,158,192,30,in:colors);place(offButton,218,158,172,30,in:colors)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,158,260,30,in:colors)
-        let savePalette=button("保存本机配色",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的配色及位置来源；未写入草稿请导出 JSON。不会写入键盘。"
+        let savePalette=button("保存匹配颜色资料",#selector(saveRawLightingDraft));savePalette.toolTip="只保存与最近读回一致的配色及位置来源；未写入草稿请导出 JSON。不会写入键盘。"
         place(savePalette,708,158,156,30,in:colors)
         place(label("配色全局亮度",12),8,207,105,24,in:colors)
         paletteBrightness.numberOfTickMarks=5;paletteBrightness.allowsTickMarkValuesOnly=true;paletteBrightness.target=self;paletteBrightness.action=#selector(stagePaletteBrightness);controls.append(paletteBrightness)
