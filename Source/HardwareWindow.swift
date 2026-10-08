@@ -1308,7 +1308,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             keyData=try WindowsProfile.encodeKeysAndMacros(p,template:Data(template.utf8));includesText=false
             #endif
             let data=try WindowsProfile.encodeProfileLightingDraft(p,template:keyData)
-            let lightingNote=p.lightingColorEncoding == .officialRGB ? "包含当前灯效草稿":"包含当前内置灯效；逐键配色沿用导入模板"
+            let lightingNote=p.snapshot.parameters[1]==8 ? "包含当前逐键草稿，完整配色编码已核对":"包含当前内置灯效；逐键配色沿用导入模板"
             let panel=NSSavePanel();panel.nameFieldStringValue="CHERRY-配置草稿.json"
             panel.beginSheetModal(for:window!){[weak self] result in
                 guard result == .OK,let url=panel.url else{return}

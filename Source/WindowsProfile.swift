@@ -1397,7 +1397,7 @@ enum WindowsProfile {
         if next.lightingColorEncoding == .hardwareRGB{
             var raw=Set(next.lightingRawSlots ?? [])
             for key in keys where selection.contains(key.id){guard let logical=CherryMatrix.slot(key),let slot=mapping.colorSlot(logical)else{throw HardwareError(message:"所选键没有有效 LED 映射。")};raw.insert(slot)}
-            next.lightingRawSlots=raw.sorted()
+            next.lightingRawSlots=raw.sorted();next.version=2
         }
         try next.validate();return next
     }
@@ -1513,7 +1513,24 @@ enum WindowsProfile {
             return try encodeLightingDraft(profile.snapshot,template:prepared,lightingMapping:profile.lightingMapping)
         }
         let p=profile.snapshot.parameters
-        guard p[1] != 8 else{throw HardwareError(message:"当前逐键草稿包含存储色，无法无损导出完整 Windows 原始 RGB 表；请导出 CherryMac JSON 保存位置来源。")}
+        if p[1]==8 {
+            guard profile.lightingColorEncoding == .hardwareRGB,let mapping=profile.lightingMapping,
+                  let custom=root["CustomLightMode"] as? [String:Any],let groups=custom["LightColorInfo"] as? [[[String:Any]]],groups.count==1,groups[0].count==126 else{throw HardwareError(message:"合并逐键配色需要原 Windows 颜色表；请导出 CherryMac JSON 保存位置来源。")}
+            let slots=try mapping.slots(for:profile.snapshot),raw=Set(profile.lightingRawSlots ?? [])
+            var candidate=profile;candidate.snapshot.colors=Array(repeating:0,count:378);candidate.lightingColorEncoding = .officialRGB;candidate.lightingRawSlots=nil
+            for (index,entry) in groups[0].enumerated(){
+                let rgb=try ["Red","Green","Blue"].map{UInt8(try integer(entry[$0],$0,range:0...255))}
+                if let alpha=entry["Alpha"]{_ = try integer(alpha,"Alpha",range:0...255)}
+                guard let slot=slots[index]else{continue}
+                candidate.snapshot.colors!.replaceSubrange(slot*3..<slot*3+3,with:raw.contains(slot) ? Array(profile.snapshot.colors![slot*3..<slot*3+3]):rgb)
+            }
+            let output=try encodeLightingDraft(candidate.snapshot,template:template,lightingMapping:mapping)
+            let actual=try prepareOfficialCustomColors(output,baseline:profile.snapshot,lightingMapping:mapping)
+            let plan=try planCustomLighting(profile,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
+            let expected=plan.stages.filter{$0.name=="customColors"}.flatMap{$0.writes.flatMap{$0.data}}
+            guard actual==expected,actual.count==378 else{throw HardwareError(message:"原 Windows 颜色表无法在当前亮度下完整保留此草稿；请导出 CherryMac JSON，避免未修改按键变色。")}
+            return output
+        }
         guard var light=root["LightInfo"] as? [String:Any],CherryLighting.modes.contains(where:{$0.1==p[1]}),let selected=modeCodes.firstIndex(of:p[1]),p[2]<=4,p[3]<=4,p[4]<=1,p[5]<=1 else{throw HardwareError(message:"当前灯效参数或官方模板无效，不能导出。")}
         light["SelectItem"]=selected;light["Light"]=Int(p[2]);light["Speed"]=4-Int(p[3]);light["Fx"]=Int(p[4]);light["MultiColor"]=Int(p[5])
         light["LightOpenFlag"]=Int(p[21])

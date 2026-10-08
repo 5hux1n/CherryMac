@@ -93,7 +93,7 @@ struct HardwareProfile: Codable, Equatable {
     // Stored RGB base; only these physical LED slots contain newly chosen raw RGB.
     var lightingRawSlots:[Int]? = nil
     func validate() throws {
-        guard format == "CherryMacProfile", version == 1, macroStorageLayout == .officialBindings || macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
+        guard format == "CherryMacProfile", (1...2).contains(version), macroStorageLayout == .officialBindings || macros.count <= 32 else { throw HardwareError(message: "配置文件格式或版本不受支持。") }
         try snapshot.validate()
         if let lightingMapping{_ = try lightingMapping.slots(for:snapshot)}
         if let raw=lightingRawSlots{
@@ -295,12 +295,14 @@ struct HardwareProfile: Codable, Equatable {
         if let snapshot = try? decoder.decode(HardwareSnapshot.self, from: data) { profile = HardwareProfile(snapshot: snapshot) }
         else { profile = try decoder.decode(HardwareProfile.self, from: data) }
         try profile.validate()
+        if profile.lightingRawSlots != nil{profile.version=2}
         for (slot,name) in profile.macroBindings ?? [:]{profile.macroBindings?[slot]=profile.macros.first(where:{$0.name==name})!.name}
         return profile
     }
     func encoded() throws -> Data {
         try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]
-        let data=try encoder.encode(self)
+        var portable=self;if portable.lightingRawSlots != nil{portable.version=2}
+        let data=try encoder.encode(portable)
         guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB，请精简文本或分别导出。")};return data
     }
 }
@@ -375,7 +377,7 @@ struct RawLightingMetadata:Codable {
         try validate();try profile.validate()
         guard profile.lightingMapping==lightingMapping,profile.snapshot.deviceInfo==snapshot.deviceInfo,
               profile.snapshot.parameters==snapshot.parameters,profile.snapshot.colors==snapshot.colors else{return nil}
-        var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = version==1 ? .officialRGB:.hardwareRGB;next.lightingRawSlots=rawSlots
+        var next=profile;next.snapshot.colors=rawColors;next.lightingColorEncoding = version==1 ? .officialRGB:.hardwareRGB;next.lightingRawSlots=rawSlots;if rawSlots != nil{next.version=2}
         try next.validate();return next
     }
 }

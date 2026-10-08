@@ -238,7 +238,7 @@ export function fromHardware(snapshot){
   }}if(p.macros.length>32||p.macros.some(m=>m.steps.length>256))p.macroStorageLayout='officialBindings';return p;
 }
 export function validateProfile(p){
-  requireThat(p&&p.format==='CherryMacProfile'&&p.version===1&&Array.isArray(p.macros)&&(p.macroStorageLayout==='officialBindings'||p.macros.length<=32),'配置格式或版本不受支持。');validateSnapshot(p.snapshot);requireThat(p.macroStorageLayout==null||['sharedLibrary','officialBindings'].includes(p.macroStorageLayout),'宏存储方式无效。');p.macros.forEach(m=>validateMacroWithin(m,p.macroStorageLayout==='officialBindings'?762:256));if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
+  requireThat(p&&p.format==='CherryMacProfile'&&[1,2].includes(p.version)&&Array.isArray(p.macros)&&(p.macroStorageLayout==='officialBindings'||p.macros.length<=32),'配置格式或版本不受支持。');validateSnapshot(p.snapshot);requireThat(p.macroStorageLayout==null||['sharedLibrary','officialBindings'].includes(p.macroStorageLayout),'宏存储方式无效。');p.macros.forEach(m=>validateMacroWithin(m,p.macroStorageLayout==='officialBindings'?762:256));if(p.lightingMapping!=null)lightingMappingSlots(p.lightingMapping,p.snapshot);
   if(p.lightingColorEncoding!=null)requireThat(['hardwareRGB','officialRGB'].includes(p.lightingColorEncoding),'灯效颜色来源无效。');
   if(p.lightingRawSlots!=null){requireThat(p.lightingColorEncoding==='hardwareRGB'&&p.snapshot.colors!=null&&Array.isArray(p.lightingRawSlots)&&p.lightingRawSlots.length<=126&&equal(p.lightingRawSlots,[...new Set(p.lightingRawSlots)].sort((a,b)=>a-b)),'逐键颜色来源记录无效。');lightingMappingSlots(p.lightingMapping,p.snapshot);const mapped=new Set(p.lightingMapping.ledIndices.filter(slot=>slot<126));requireThat(p.lightingRawSlots.every(slot=>Number.isInteger(slot)&&mapped.has(slot)),'原始颜色位置不在实际 LED 映射中。');}
   if(p.windowsTemplateJSON!=null){requireThat(typeof p.windowsTemplateJSON==='string','官方配置模板无效。');validateWindowsTemplate(JSON.parse(p.windowsTemplateJSON),new TextEncoder().encode(p.windowsTemplateJSON).length);}
@@ -255,12 +255,14 @@ export function resolveMacros(p){
   const header=s.macroData?.[0]===0xaa&&s.macroData[1]===0x55?s.macroData.slice(6,16):[];
   s.macroData=encodeBank(p.macros,header);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
 }
+export function portableProfile(profile){validateProfile(profile);const output=clone(profile);if(output.lightingRawSlots!=null)output.version=2;return output;}
 export function parseProfile(text,baseline,options={}){
   requireThat(new TextEncoder().encode(text).length<=3_000_000,'配置文件超过 3 MB。');const data=JSON.parse(text);
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}
   const p=data?.format==='CherryMacHardware'?{format:'CherryMacProfile',version:1,snapshot:data,macros:[]}:data;validateProfile(p);
+  if(p.lightingRawSlots!=null)p.version=2;
   // Raw backups acquire an editable library only when the firmware bank is recognized.
-  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);if(p.lightingRawSlots!=null)editable.lightingRawSlots=clone(p.lightingRawSlots);if(p.lightingColorEncoding!=null)editable.lightingColorEncoding=p.lightingColorEncoding;else delete editable.lightingColorEncoding;return editable;}catch{}}
+  if(p.macroBindings==null&&p.macros.length===0){try{const editable=fromHardware(p.snapshot);editable.version=p.version;if(p.windowsTemplateJSON!=null)editable.windowsTemplateJSON=p.windowsTemplateJSON;if(p.hostTextJSON!=null)editable.hostTextJSON=p.hostTextJSON;if(p.lightingMapping!=null)editable.lightingMapping=clone(p.lightingMapping);if(p.lightingRawSlots!=null)editable.lightingRawSlots=clone(p.lightingRawSlots);if(p.lightingColorEncoding!=null)editable.lightingColorEncoding=p.lightingColorEncoding;else delete editable.lightingColorEncoding;return editable;}catch{}}
   if(p.macroBindings)for(const [slot,name] of Object.entries(p.macroBindings))p.macroBindings[slot]=p.macros.find(m=>sameMacroName(m.name,name)).name;
   return p;
 }
@@ -450,7 +452,21 @@ export function exportProfileWindowsLightingDraft(profile,template){
     }
     return exportWindowsLightingDraft(profile.snapshot,root,profile.lightingMapping);
   }
-  const p=profile.snapshot.parameters;requireThat(p[1]!==8,'当前逐键草稿包含存储色，无法无损导出完整 Windows 原始 RGB 表；请导出 CherryMac JSON 保存位置来源。');
+  const p=profile.snapshot.parameters;
+  if(p[1]===8){
+    const groups=root.CustomLightMode?.LightColorInfo;
+    requireThat(profile.lightingColorEncoding==='hardwareRGB'&&Array.isArray(groups)&&groups.length===1&&Array.isArray(groups[0])&&groups[0].length===126,'合并逐键配色需要原 Windows 颜色表；请导出 CherryMac JSON 保存位置来源。');
+    const slots=lightingMappingSlots(profile.lightingMapping,profile.snapshot),raw=new Set(profile.lightingRawSlots??[]),candidate=clone(profile);
+    candidate.snapshot.colors=Array(378).fill(0);candidate.lightingColorEncoding='officialRGB';delete candidate.lightingRawSlots;
+    groups[0].forEach((entry,index)=>{
+      requireThat(entry&&typeof entry==='object'&&!Array.isArray(entry),'逐键颜色记录结构无效。');
+      const rgb=['Red','Green','Blue'].map(name=>winInt(entry[name],name,0,255));if(Object.hasOwn(entry,'Alpha'))winInt(entry.Alpha,'Alpha',0,255);
+      const slot=slots[index];if(slot!=null)candidate.snapshot.colors.splice(slot*3,3,...(raw.has(slot)?profile.snapshot.colors.slice(slot*3,slot*3+3):rgb));
+    });
+    const output=exportWindowsLightingDraft(candidate.snapshot,root,profile.lightingMapping),actual=prepareOfficialCustomColors(output,profile.snapshot,profile.lightingMapping);
+    const expected=planCustomLighting(profile,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true}).stages.filter(stage=>stage.name==='customColors').flatMap(stage=>stage.writes.flatMap(write=>write.data));
+    requireThat(actual.length===378&&equal(actual,expected),'原 Windows 颜色表无法在当前亮度下完整保留此草稿；请导出 CherryMac JSON，避免未修改按键变色。');return output;
+  }
   const light=root.LightInfo,selected=MODE_CODES.indexOf(p[1]);
   requireThat(light&&typeof light==='object'&&!Array.isArray(light)&&modes.some(([v])=>v===p[1])&&selected>=0&&p[2]<=4&&p[3]<=4&&p[4]<=1&&p[5]<=1,'当前灯效参数或官方模板无效，不能导出。');
   Object.assign(light,{SelectItem:selected,Light:p[2],Speed:4-p[3],Fx:p[4],MultiColor:p[5],Red:p[6],Green:p[7],Blue:p[8],LightOpenFlag:p[21]});
@@ -1179,7 +1195,7 @@ export function captureRawLightingMetadata(profile,current){
 export function adoptRawLightingMetadata(profile,value){
   validateRawLightingMetadata(value);validateProfile(profile);
   if(!equal(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
-  const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding=value.version===1?'officialRGB':'hardwareRGB';if(value.version===2)next.lightingRawSlots=clone(value.rawSlots);else delete next.lightingRawSlots;validateProfile(next);return next;
+  const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding=value.version===1?'officialRGB':'hardwareRGB';if(value.version===2){next.lightingRawSlots=clone(value.rawSlots);next.version=2;}else delete next.lightingRawSlots;validateProfile(next);return next;
 }
 
 // Offline official layout only. The production writer uses resolveMacros and
@@ -1287,7 +1303,7 @@ export function paintLightingProfile(profile,selection,pattern,start,end){
   if(next.lightingColorEncoding==='hardwareRGB'){
     lightingMappingSlots(next.lightingMapping,next.snapshot);const raw=new Set(next.lightingRawSlots??[]);
     for(const key of keys.filter(key=>selection.has(key.id))){const slot=lightingColorSlot(next,key.slot);requireThat(slot!=null,'所选键没有有效 LED 映射。');raw.add(slot);}
-    next.lightingRawSlots=[...raw].sort((a,b)=>a-b);
+    next.lightingRawSlots=[...raw].sort((a,b)=>a-b);next.version=2;
   }
   validateProfile(next);return next;
 }
