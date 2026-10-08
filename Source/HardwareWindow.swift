@@ -231,6 +231,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var selected = "calculator"
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
+    var lightingResultDiscardButton:NSButton?
     var lightingReconnectSnapshot:HardwareSnapshot?
     var baselineLightingMapping:LightingMappingContext?
     var baselineWasRead=false
@@ -399,6 +400,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #endif
         place(label(scopeDescription,13),8,148,850,70,in:device)
         place(button("打开操作日志",#selector(openLogs)),8,253,180,32,in:device)
+        let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
+        place(discardResult,208,253,300,32,in:device)
         let settings=tabs.tabViewItems.last!.view!
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
@@ -606,6 +609,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }
     }
     @objc func installHostText(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
         guard !busy,macroRecordingSheet==nil,let data=hostTextJSON,let baseline,let window else{hostTextState.stringValue="请先读取键盘并选择文本配置。";return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false};hostTextState.stringValue="正在读取默认表并核对文本安装计划…"
         queue.async{[weak self] in
@@ -653,6 +657,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }
     }
     @objc func restoreHostText(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
         guard !busy,macroRecordingSheet==nil,let window else{return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
         let store=hostTextStore
@@ -749,6 +754,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         actionChanged()
     }
     func update(){
+        lightingResultDiscardButton?.isHidden=lightingReconnectSnapshot==nil
+        lightingResultDiscardButton?.isEnabled = !busy && lightingReconnectSnapshot != nil
         updateLightingOptions()
         updatePaletteControls()
         playbackChanged()
@@ -868,6 +875,16 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }catch{message.stringValue="本机宏编辑草稿无法载入：\(error.localizedDescription)"}
     }
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
+    @objc func discardLightingResult(){
+        guard !busy,lightingReconnectSnapshot != nil else{return}
+        let alert=NSAlert();alert.messageText="放弃待核对的灯效结果？";alert.informativeText="当前草稿保留，旧结果和读取基线会清除。下一次普通读取会替换编辑区，请先导出需要保留的草稿。不会修改键盘。";alert.addButton(withTitle:"取消，保留结果");alert.addButton(withTitle:"放弃结果")
+        guard alert.runModal() == .alertSecondButtonReturn else{return}
+        lightingReconnectSnapshot=nil;baseline=nil;baselineWasRead=false;baselineLightingMapping=nil
+        message.stringValue="待核对结果已放弃，草稿仍保留。请先导出草稿，再重新读取键盘。";update()
+    }
+    func requireLightingResultReconciled()throws{
+        guard lightingReconnectSnapshot==nil else{throw HardwareError(message:"请先重新读取核对灯效结果，或在设备与诊断中放弃待核对结果。草稿可先导出保存。")}
+    }
     @objc func readKeyboard(){
         guard !busy else{return}
         if lightingReconnectSnapshot==nil,let draft=profile{
@@ -930,6 +947,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }
     }
     @objc func writeKeys(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
         suspendHostTextForConfiguration()
         guard !busy,let draft=profile,let baseline else{message.stringValue="请先读取键盘，再编辑键位。";return}
         guard draft.snapshot.keymap != baseline.keymap else{message.stringValue="没有待写入的键位改动。";return}
@@ -979,6 +997,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard busy,let log=currentMacroOperation else{return};log.requestCancellation();message.stringValue="已请求停止发送，等待当前 USB 回复；原配置与恢复记录保留。";update()
     }
     @objc func restoreLastMacros(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
         suspendHostTextForConfiguration()
         guard !busy,let owner=window else{return}
         let authorization:MacroWriteAuthorization
@@ -1343,6 +1362,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }catch{message.stringValue=error.localizedDescription}
     }
     func loadImport(_ data:Data)throws {
+        try requireLightingResultReconciled()
         guard !busy else{throw HardwareError(message:"请等待键盘操作完成。")}
         guard data.count<=3_000_000 else{throw HardwareError(message:"配置文件超过 3 MB。")}
         let next:HardwareProfile;let summary:String
@@ -1486,6 +1506,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
     @objc func restoreLastKeys(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
         guard !busy else{return}
         guard let url=lastKeyBackup else{message.stringValue="还没有本客户端写入前的按键备份。其他备份可用“导入配置”载入。";return}
         let saved:HardwareSnapshot
