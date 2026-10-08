@@ -231,6 +231,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var selected = "calculator"
     var profile:HardwareProfile?
     var baseline:HardwareSnapshot?
+    var lightingReconnectSnapshot:HardwareSnapshot?
     var baselineLightingMapping:LightingMappingContext?
     var baselineWasRead=false
     var macroRecordingSheet:MacroRecordingSheet?
@@ -869,7 +870,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var backupDirectory:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")}
     @objc func readKeyboard(){
         guard !busy else{return}
-        if let draft=profile{
+        if lightingReconnectSnapshot==nil,let draft=profile{
             let original=baseline ?? HardwareSnapshot.demo()
             let resolved=(try? draft.resolvedMacros()) ?? draft.snapshot
             let contentChanged=resolved.deviceInfo != original.deviceInfo || resolved.keymap != original.keymap || resolved.parameters != original.parameters || resolved.colors != original.colors || resolved.macroData != original.macroData
@@ -899,10 +900,20 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             DispatchQueue.main.async{guard let self else{return};self.busy=false;self.controls.forEach{$0.isEnabled=true};self.writeButtons.forEach{$0.isEnabled=false}
                 switch result{case .success(let read):
                     let snapshot=read.snapshot
-                    self.baseline=snapshot;self.baselineWasRead=true;self.profile=self.recalledMacroProfile(snapshot,mapping:read.mapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)
+                    let keptLightingDraft=self.lightingReconnectSnapshot != nil
+                    if let expected=self.lightingReconnectSnapshot{
+                        do{
+                            guard snapshot.hasSameConfiguration(as:expected),let draft=self.profile else{throw HardwareError(message:"新读回与返回的灯效结果不同；草稿保留，请导出草稿并核对键盘。")}
+                            try draft.validate()
+                            if let expectedMapping=draft.lightingMapping{guard read.mapping==expectedMapping else{throw HardwareError(message:"返回结果需要重新取得一致的实际灯光映射；草稿保留，请重新读取。")}}
+                        }catch{self.baseline=nil;self.baselineWasRead=false;self.baselineLightingMapping=nil;self.message.stringValue=error.localizedDescription;self.update();return}
+                    }
+                    self.baseline=snapshot;self.baselineWasRead=true
+                    if !keptLightingDraft{self.profile=self.recalledMacroProfile(snapshot,mapping:read.mapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)}
+                    self.lightingReconnectSnapshot=nil
                     self.profile?.lightingMapping=read.mapping;self.baselineLightingMapping=read.mapping
                     if read.mapping != nil,self.profile?.macroStorageLayout==nil{self.profile?.macroStorageLayout = .officialBindings}
-                    if let current=self.profile,let saved=self.recalledRawLighting(current){self.profile=saved}
+                    if !keptLightingDraft,let current=self.profile,let saved=self.recalledRawLighting(current){self.profile=saved}
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
@@ -910,6 +921,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                         var backup=self.profile!;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB;backup.lightingRawSlots=nil
                         try backup.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
+                    if keptLightingDraft{self.message.stringValue += "\n返回结果已与新读回及映射核对，所有编辑草稿保留；草稿配色不一定是当前硬件配色。"}
                     if let error=read.mappingError{self.message.stringValue += "\n灯光映射未取得：\(error) 按键和宏读取结果已保留。"}
                     self.loadSelectedAssignment();self.update()
                     completion?(snapshot)

@@ -452,7 +452,7 @@ extension HardwareWindowController {
                     guard accepted else{throw HardwareError(message:"独立窗口结果与编辑区原计划不一致。")}
                     // Keep the official raw RGB draft; a firmware readback has
                     // already had brightness applied and must not replace it.
-                    self.profile=draft;self.baseline=receipt.current;self.baselineWasRead=true
+                    self.profile=draft;self.lightingReconnectSnapshot=receipt.current;self.baseline=nil;self.baselineWasRead=false
                     self.message.stringValue=receipt.kind == .write ? "灯效写入结果已接回编辑区，完整读回一致；未发送的键位、宏与文本草稿保留。外观与断电保存尚待验收。":"灯效恢复结果已接回编辑区，原始读回一致；所有未发送草稿保留。"
                     if receipt.kind == .write && preparedReview?.plan.defaultColorData != nil{
                         self.message.stringValue="默认灯效读回结果已接回，原编辑草稿仍保留；未把旧原始 RGB 记为默认配色。实体外观与断电保存尚待验收。"
@@ -466,6 +466,7 @@ extension HardwareWindowController {
                     }
                 }catch{self.message.stringValue="灯效窗口已关闭，草稿保留；\(error.localizedDescription) 请重新读取键盘。"}
             }
+            self.message.stringValue += "\n请重新读取键盘；实际配置和映射匹配后才更新编辑区基线，草稿保留。"
             self.loadLighting();self.loadSelectedAssignment();self.update()
         }
     }

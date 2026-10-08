@@ -156,8 +156,8 @@ async function read(){
   if(keepLightingDraft&&!sameSnapshot(s,lightingReconnectSnapshot)){
     baseline=null;throw new Error('新读回与返回的灯效结果不同；编辑区草稿保留，未写入。请保存草稿并核对键盘配置。');
   }
-  if(keepLightingDraft&&mapping&&profile.lightingMapping&&!equal(mapping,profile.lightingMapping)){
-    baseline=null;throw new Error('新读回的灯光映射与保留草稿不同；草稿保留，未写入。请保存配置并核对映射。');
+  if(keepLightingDraft&&profile.lightingMapping&&(!mapping||!equal(mapping,profile.lightingMapping))){
+    baseline=null;baselineLightingMapping=null;throw new Error('返回结果需要重新取得一致的实际灯光映射；草稿保留，未写入。请重新读取或先导出草稿。');
   }
   baseline=clone(s);baselineLightingMapping=clone(mapping);
   const metadataWarnings=[];let rawLightingMatched=false;
