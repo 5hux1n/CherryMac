@@ -723,7 +723,8 @@ export function reviewLightingDraft(profile,baseline){
       ?planOfficialLighting(exportProfileWindowsLightingDraft(profile,JSON.parse(profile.windowsTemplateJSON)),baseline,profile.lightingMapping,options)
       :planBuiltInLighting(profile.snapshot,options);
   const target=officialLightingReadbackTarget(plan,baseline);
-  return {format:'CherryMacLightingDraftReview',version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{})};
+  const encodedBlackColorSlots=target.parameters[1]===8?[...new Set(lightingMappingSlots(profile.lightingMapping,profile.snapshot).filter(slot=>slot!=null))].sort((a,b)=>a-b).filter(slot=>profile.snapshot.colors.slice(slot*3,slot*3+3).some(byte=>byte!==0)&&target.colors.slice(slot*3,slot*3+3).every(byte=>byte===0)):null;
+  return {format:'CherryMacLightingDraftReview' ,version:1,hardwareReady:false,plan,original:clone(baseline),target,changedParameterOffsets:Array.from({length:56},(_,i)=>i).filter(i=>baseline.parameters[i]!==target.parameters[i]),changedColorSlots:Array.from({length:126},(_,i)=>i).filter(i=>!equal(baseline.colors.slice(i*3,i*3+3),target.colors.slice(i*3,i*3+3))),...(profile.lightingMapping?{lightingMapping:clone(profile.lightingMapping)}:{}),...(encodedBlackColorSlots!==null?{encodedBlackColorSlots}:{})};
 }
 export function planOfficialLighting(template,baseline,lightingMapping,{bank,transportSelector,chunkCapacity,beginRequired}){
   validateSnapshot(baseline,true);

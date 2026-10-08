@@ -12,6 +12,30 @@ EXPECTED_SHA256 = "188836c15eb1560d0282ae3c2485b4a4d2edd5dfb69a91d4510b273c61047
 IMAGE_SHA256 = "31d0a07361ad531fa16867412d46e496737b126efc90482f86baa7e6bd5051bd"
 
 
+def inspect_custom_lighting_output(image):
+    """Pin mode8 bank-to-output transformation; no firmware execution."""
+    def at(a,n):return image[a-0x10000:a-0x10000+n]
+    bodies={(0x2BFE4,0x2C0C4):"ce2c0721d81747eae16ed435f2dc25238688f430116dca44e70543bf8b119ce6",
+            (0x2B2C4,0x2B302):"622caa2d361ec795760981c31e9ea3cddfc98c901bb6e6b0e70c0afb55c2e1b1",
+            (0x2D414,0x2D486):"f75450a0388e979a062e2989a3bc1dfd508f6bd6ab16113382baa4f13c0ba3c1"}
+    for (a,b),h in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=h:raise ValueError("Custom lighting output differs")
+    table=at(0x2C55C,48)
+    if hashlib.sha256(table).hexdigest()!="accc50fcd4de71ad3e0ffab535b26f435ca89b32cb3532820fe8c1d4addca551":raise ValueError("Lighting TBH data differs")
+    if struct.unpack_from('<H',table,16)[0]!=511 or at(0x2C95A,4)!=bytes.fromhex("fff743fb"):raise ValueError("Mode8 dispatch differs")
+    literals={0x2C0CC:0x20000CD8,0x2C0D8:0x20009AFC,0x2C0E0:0x20004DF8,0x2C0E4:0x20000D18,0x2C0E8:0x4E7EC,0x2C0F8:0x20000D1A,0x2B304:0x4E57C,0x2B308:0x20005284,0x2B30C:0x20005184,0x2D488:0x200053EC,0x2D48C:0x200053E4}
+    for a,v in literals.items():
+        if struct.unpack('<I',at(a,4))[0]!=v:raise ValueError("Custom output literal differs")
+    if at(0x4E7EC,5)!=bytes([0,64,128,192,255]):raise ValueError("Firmware custom brightness table differs")
+    return {"codeSegments":[{"start":hex(a),"endExclusive":hex(b),"sha256":h} for (a,b),h in bodies.items()],
+            "mode8Dispatch":{"table":"0x2c55c..0x2c58c","tableIsData":True,"target":"0x2c95a","call":"0x2bfe4"},
+            "bankSource":{"when20009afcZero":"0x20000d18 + 3*LED index","alternate":"0x20004df8 + 3*LED index"},
+            "brightness":{"parameterIndex":2,"tableROM":"0x4e7ec","coefficients":[0,64,128,192,255],"transform":"(bank channel * coefficient) >> 8 before mapper 0x2b2c4","relation":"Separate from the official host pre-scaling table [0,65,135,195,255]; do not remove host scaling to compensate"},
+            "channelMapper":{"tableROM":"0x4e57c","stride":4,"marker0x74Buffer":"0x20005284","marker0x77Buffer":"0x20005184","channelOffsets":"Three byte offsets, minus 1; not the USB color-bank order"},
+            "outputPacket":{"method":"0x2d414","buffer":"0x200053ec","header":"byte0 = argument1 OR 0x50; byte1 = argument2; source bytes copied at +2","send":"indirect interface on object from 0x200053e4"},
+            "limits":"Fixed packaged 0104 image only. This closes a bank/brightness/mapper/output path, not current firmware identity, whole timer ordering, every gating state or actual LED appearance. LED wiring table remains separate from actual USB mapping reads. No execution, emulation or hardware access."}
+
+
 def inspect_light_flag_callback(image):
     """Pin the byte21 consumer and callback registration, without execution."""
     def at(address,size):
@@ -1026,7 +1050,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 21,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 22,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1047,6 +1071,7 @@ def inspect(path):
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
             'lightFlagCallback': inspect_light_flag_callback(image),
+            'customLightingOutput': inspect_custom_lighting_output(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
             'saveWorkRegistration': inspect_save_work_registration(image),
             'queueWorker': inspect_queue_worker(image),

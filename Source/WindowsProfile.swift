@@ -1323,6 +1323,8 @@ enum WindowsProfile {
         var plan:OfficialLightingPlan;var original:HardwareSnapshot;var target:HardwareSnapshot
         var changedParameterOffsets:[Int];var changedColorSlots:[Int]
         var lightingMapping:LightingMappingContext? = nil
+        // Advisory only: mapped raw colors lost during official host encoding.
+        var encodedBlackColorSlots:[Int]? = nil
     }
     static func reviewLightingDraft(_ profile:HardwareProfile,baseline:HardwareSnapshot)throws->LightingDraftReview {
         try profile.validate();try baseline.validate();try profile.snapshot.validate()
@@ -1336,7 +1338,13 @@ enum WindowsProfile {
             plan=try planOfficialLighting(data,baseline:baseline,lightingMapping:profile.lightingMapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         }else{plan=try planBuiltInLighting(profile.snapshot,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)}
         let target=try plan.expectedReadback(from:baseline)
-        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]},lightingMapping:profile.lightingMapping)
+        var encodedBlackColorSlots:[Int]? = nil
+        if target.parameters[1]==8,let mapping=profile.lightingMapping,let raw=profile.snapshot.colors{
+            encodedBlackColorSlots=try Set(mapping.slots(for:profile.snapshot).compactMap{$0}).sorted().filter{slot in
+                raw[slot*3..<slot*3+3].contains(where:{$0 != 0}) && target.colors![slot*3..<slot*3+3].allSatisfy{$0==0}
+            }
+        }
+        return .init(plan:plan,original:baseline,target:target,changedParameterOffsets:(0..<56).filter{baseline.parameters[$0] != target.parameters[$0]},changedColorSlots:(0..<126).filter{slot in baseline.colors![slot*3..<slot*3+3] != target.colors![slot*3..<slot*3+3]},lightingMapping:profile.lightingMapping,encodedBlackColorSlots:encodedBlackColorSlots)
     }
     // A candidate sequence for the traced parameter/custom-load methods only.
     // This is not HardwareWritePlan and cannot authorize any USB operation.

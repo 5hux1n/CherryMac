@@ -96,6 +96,7 @@ extension HardwareWindowController {
             let alert=NSAlert();alert.messageText="核对灯效写入"
             let mode=modes.first(where:{$0.1==review.target.parameters[1]})?.0 ?? "未知模式"
             alert.informativeText="模式：\(mode)；亮度：\(review.target.parameters[2])/4。\n逐键颜色将改变 \(review.changedColorSlots.count) 个位置；灯效参数\(review.changedParameterOffsets.isEmpty ? "保持不变":"将更新")。\n此核对仅生成计划，尚未写入键盘。按键与宏保持读回配置。"
+            if let black=review.encodedBlackColorSlots,!black.isEmpty{alert.informativeText += "\n编码后有 \(black.count) 个原有颜色位置变为黑色，可提高全局亮度或颜色强度。这里核对配置数据，不保证实体灯光外观。"}
             alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回编辑")
             guard alert.runModal()==NSApplication.ModalResponse.alertFirstButtonReturn else{return}
             let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-灯效写入核对.json"

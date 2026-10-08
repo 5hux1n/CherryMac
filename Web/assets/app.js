@@ -289,7 +289,8 @@ $('lighting-draft-file').onchange=()=>{
 $('review-lighting').onclick=()=>operation(()=>{
   $('lighting-review-summary').textContent='';requireThat(baseline,'请先读取键盘。');
   const review=reviewLightingDraft(profile,baseline),mode=modes.find(([code])=>code===review.target.parameters[1])?.[1]??'未知模式';
-  const summary=`模式：${mode}；亮度：${review.target.parameters[2]}/4；逐键颜色将改变 ${review.changedColorSlots.length} 个位置；灯效参数${review.changedParameterOffsets.length?'将更新':'保持不变'}。尚未写入键盘，按键与宏保持读回配置。`;
+  const black=review.encodedBlackColorSlots??[];const note=black.length?` 编码后有 ${black.length} 个原有颜色位置变为黑色，可提高全局亮度或颜色强度；这里核对配置数据，不保证实体灯光外观。`: '';
+  const summary=`模式：${mode}；亮度：${review.target.parameters[2]}/4；逐键颜色将改变 ${review.changedColorSlots.length} 个位置；灯效参数${review.changedParameterOffsets.length?'将更新':'保持不变'}。尚未写入键盘，按键与宏保持读回配置。${note}`;
   $('lighting-review-summary').textContent=summary;download(review,'CherryMac-灯效写入核对.json');status(summary);
 },{localOnly:true});
 $('stage-lights').onclick=()=>act(()=>{const p=profile.snapshot.parameters;requireThat($('mode').value!=='','请选择已支持的灯效模式。');p[1]=Number($('mode').value);p[2]=Number($('brightness').value);const options=selectedLightingOptions();if(options?.speed)p[3]=4-Number($('speed').value);if(options?.direction&&$('direction').value!=='')p[4]=Number($('direction').value);if(options?.rainbow&&$('rainbow').value!=='')p[5]=Number($('rainbow').value);status('灯效参数已保存到编辑区，尚未写入。');});
