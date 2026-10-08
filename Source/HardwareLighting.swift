@@ -516,8 +516,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         buttons.forEach{$0.isEnabled = !running};buttons[4].isEnabled=running
         buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
         buttons[3].isEnabled = !running && recoveryData != nil && registryID != nil && readback != nil
-        buttons[5].isEnabled = !running && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
-        buttons[6].isEnabled = !running && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && registryID==cycle?.reconnectedRegistryID && readback != nil
+        buttons[5].isEnabled = !running && monitorFailure == nil && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
+        buttons[6].isEnabled = !running && monitorFailure == nil && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && registryID==cycle?.reconnectedRegistryID && readback != nil
     }
     func fail(_ error:Error){state.stringValue=error.localizedDescription}
     @objc func load(){

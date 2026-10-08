@@ -8,6 +8,16 @@ const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
 let editorRecord=null,pendingEditorRecord=null,pendingWriteTarget=null,editorReview=null,connectionRevision=0,returnChannel=null;
 let input=null,hid=null,busy=false,abort=null,latestRecord=null,writeAttempted=false,writtenTarget=null,powerCycle=null;
+const powerStorage=new WeakMap();
+function powerStorageReady(){const saved=powerCycle&&powerStorage.get(powerCycle);return saved!=null&&saved.pending===0&&saved.failure===null;}
+function persistPowerObservation(observation,cycle){
+  const saved=powerStorage.get(cycle);if(!saved)return;
+  artifacts.observations.push(observation);saved.pending++;render();
+  void persistSession().catch(error=>{
+    saved.failure=String(error?.message??error);observation.persistenceError=saved.failure;
+    if(powerCycle===cycle){editorRecord=null;status(`断电事件保存失败：${saved.failure}。本轮不能通过断电验收；可导出资料并恢复原配置。`,true);}
+  }).finally(()=>{saved.pending--;render();});
+}
 const deviceTokens=new WeakMap();
 function token(device){if(!deviceTokens.has(device))deviceTokens.set(device,crypto.randomUUID());return deviceTokens.get(device);}
 const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(k=>equal(a[k],b[k]));
@@ -22,8 +32,8 @@ function render(){
   $('lighting-restore').disabled=busy||!online||!latestRecord;
   $('lighting-stop').disabled=!abort||abort.signal.aborted;
   $('lighting-download-record').disabled=busy||!latestRecord;
-  $('lighting-power-off').disabled=busy||!writtenTarget||powerCycle?.disconnectedAt==null||online||powerCycle?.returnedAt!=null;
-  $('lighting-retention').disabled=busy||!online||!writtenTarget||powerCycle?.powerOffAt==null;
+  $('lighting-power-off').disabled=busy||!powerStorageReady()||!writtenTarget||powerCycle?.disconnectedAt==null||online||powerCycle?.returnedAt!=null;
+  $('lighting-retention').disabled=busy||!powerStorageReady()||!online||!writtenTarget||powerCycle?.powerOffAt==null;
 }
 async function persistSession(){await saveVerifiedLog({id:`lighting-session-${runID}`,at:artifacts.startedAt,kind:'lightingAcceptance',session:clone(artifacts)});}
 async function backup(snapshot){const record=await saveBackup(snapshot,null,{strict:true});artifacts.backups.push(clone(record));await persistSession();}
@@ -46,9 +56,10 @@ async function operation(kind,body){
     await recordLightingOperation(artifacts,kind,body,{persist:persistSession,cancelled:()=>abort?.signal.aborted===true});
     if(kind==='write'&&pendingWriteTarget){
       requireThat(revision===connectionRevision&&!abort?.signal.aborted&&hid&&!hid.dead,'写入结束后会话已改变或收到停止请求；记录已保留，请重新读取后核对恢复。');
-      writtenTarget=clone(pendingWriteTarget);powerCycle=new LightingPowerCycle(token(hid.device));
+      writtenTarget=clone(pendingWriteTarget);powerCycle=new LightingPowerCycle(token(hid.device));powerStorage.set(powerCycle,{pending:0,failure:null});
       status('写入、完整读回及会话保存一致。请观察灯光，再按提示断电重连。尚未验证外观或断电保留。');
     }
+    if(kind==='retention')requireThat(powerStorageReady(),'断电事件尚未完成保存或保存失败；本轮结果不能返回编辑器。');
     if(pendingEditorRecord&&revision===connectionRevision&&!abort?.signal.aborted&&hid&&!hid.dead){
       reviewLightingEditorResult(pendingEditorRecord,editorReview);editorRecord=clone(pendingEditorRecord);
     }
@@ -121,13 +132,11 @@ navigator.hid?.addEventListener('disconnect',event=>{
   if(event.device!==hid?.device)return;
   editorRecord=null;connectionRevision++;
   if(!powerCycle?.disconnect(token(event.device),performance.now()))return;
-  artifacts.observations.push({kind:'usbDisconnected',at:new Date().toISOString(),deviceToken:token(event.device)});
-  void persistSession().catch(error=>status(`断开记录保存失败：${error.message}`,true));render();
+  persistPowerObservation({kind:'usbDisconnected',at:new Date().toISOString(),deviceToken:token(event.device)},powerCycle);render();
 });
 navigator.hid?.addEventListener('connect',event=>{
   if(!supportsDevice(event.device)||!powerCycle?.reconnect(token(event.device),performance.now()))return;
-  artifacts.observations.push({kind:'usbReconnected',at:new Date().toISOString(),deviceToken:token(event.device)});
-  void persistSession().catch(error=>status(`重连记录保存失败：${error.message}`,true));render();
+  persistPowerObservation({kind:'usbReconnected',at:new Date().toISOString(),deviceToken:token(event.device)},powerCycle);render();
 });
 $('lighting-write').onclick=event=>operation('write',async()=>{
   requireThat(input?.kind==='write'&&!writeAttempted,'请先载入新的写入核对文件。');
@@ -152,13 +161,14 @@ $('lighting-restore').onclick=event=>operation('restore',async()=>{
 });
 $('lighting-stop').onclick=()=>{abort?.abort();gate.invalidate();status('已请求停止后续发送；正在发出的报告不能撤回，恢复记录会保留。');render();};
 $('lighting-power-off').onclick=()=>operation('confirm-power-off',async()=>{
-  requireThat(writtenTarget&&powerCycle&&hid?.dead,'需先检测到 USB 拔出，并关闭键盘电源。');
-  powerCycle.confirmPowerOff(performance.now());artifacts.observations.push({kind:'userConfirmedPowerOff',at:new Date().toISOString()});await persistSession();status('已记录你的关电确认。请等待至少 15 秒，再开电、接回 USB 并重新选择键盘。');
+  requireThat(powerStorageReady()&&writtenTarget&&powerCycle&&hid?.dead,'需先完成 USB 拔出记录保存，再关闭键盘电源。');
+  const cycle=powerCycle;cycle.confirmPowerOff(performance.now());artifacts.observations.push({kind:'userConfirmedPowerOff',at:new Date().toISOString()});
+  try{await persistSession();}catch(error){powerStorage.get(cycle).failure=String(error?.message??error);throw error;}status('已记录你的关电确认。请等待至少 15 秒，再开电、接回 USB 并重新选择键盘。');
 });
 $('lighting-retention').onclick=()=>operation('retention',async()=>{
-  requireThat(writtenTarget&&powerCycle,'尚无本轮断电记录。');
+  requireThat(powerStorageReady()&&writtenTarget&&powerCycle,'本轮断电记录尚未保存完成或保存失败；可导出资料并核对恢复。');
   const session=hid,selectedToken=token(session.device),evidence=powerCycle.evidence(selectedToken);
-  const current=await session.snapshot();requireThat(hid===session&&!session.dead,'重连读回期间 USB 会话改变。');powerCycle.evidence(selectedToken);
+  const current=await session.snapshot();requireThat(hid===session&&!session.dead&&powerStorageReady(),'重连读回期间 USB 会话或断电记录保存状态改变。');powerCycle.evidence(selectedToken);
   const matches=same(current,writtenTarget);
   artifacts.observations.push({kind:'powerCycleReadback',at:new Date().toISOString(),...evidence,matches,current:clone(current)});await persistSession();
   requireThat(matches,'重连后的配置与目标不同。请保留资料，核对原始数据恢复。');
