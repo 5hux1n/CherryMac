@@ -481,9 +481,10 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
     const slot=physicalSlot(WINDOWS_DEFAULTS[i]);if(slot===undefined||[6,71].includes(slot))return;
     let b;if(winInt(k.ActionLink??0,'ActionLink',0,1)===0)b=record(k.Assignment);
     else{
-      const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,actions.length-1),a=actions[index],c=a?.ActionContent;requireThat(c&&typeof c==='object','Windows 动作引用无效。');
-      const type=winInt(a.ActionType,'ActionType',0,4);
-      if(type===1)b=record(c.ActionKey);
+      const index=winInt(k.ActionLinkIndex,'ActionLinkIndex',0,actions.length-1),a=actions[index],c=a?.ActionContent;
+      const type=winInt(a?.ActionType,'ActionType',0,4);requireThat(type===0||c&&typeof c==='object'&&!Array.isArray(c),'Windows 动作内容无效。');
+      if(type===0)b=record(k.DefaultAssignment);
+      else if(type===1)b=record(c.ActionKey);
       else if(type===4){const code=MEDIA_CODES[winInt(c.ActionMedia,'ActionMedia',0,17)];b=[0x30,code&255,code>>8];}
       else if(type===2){
         importMacro(index);const name=imported.get(index);p.macroBindings[slot]=name;const mode=winInt(c.ActionMacroType,'宏模式',0,2);p.macroModes[slot]={mode:['count','held','toggle'][mode],count:mode===0?winInt(c.ActionMacroLoopValue??1,'重复次数',1,255):1};b=macroBinding(p.macroStorageLayout==='officialBindings'?0:p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes[slot]);

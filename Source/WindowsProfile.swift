@@ -1509,15 +1509,19 @@ enum WindowsProfile {
                 bytes=try record(integer(key["Assignment"],"Assignment",range:0...0xFFFFFF))
             }else {
                 let actionIndex=try integer(key["ActionLinkIndex"],"ActionLinkIndex",range:0...max(0,actions.count-1))
-                guard actions.indices.contains(actionIndex),let content=actions[actionIndex]["ActionContent"] as? [String:Any]else{throw HardwareError(message:"Windows 动作引用无效。")}
+                guard actions.indices.contains(actionIndex) else{throw HardwareError(message:"Windows 动作引用无效。")}
                 let type=try integer(actions[actionIndex]["ActionType"],"ActionType",range:0...4)
+                let content=actions[actionIndex]["ActionContent"] as? [String:Any]
+                guard type==0 || content != nil else{throw HardwareError(message:"Windows 动作内容无效。")}
+                let values=content ?? [:]
                 switch type {
-                case 1:bytes=try record(integer(content["ActionKey"],"ActionKey",range:0...0xFFFFFF))
+                case 0:bytes=try record(integer(key["DefaultAssignment"],"DefaultAssignment",range:0...0xFFFFFF))
+                case 1:bytes=try record(integer(values["ActionKey"],"ActionKey",range:0...0xFFFFFF))
                 case 2:
                     try importMacro(actionIndex)
                     let name=importedMacros[actionIndex]!;result.macroBindings![slot]=name
-                    let mode=try integer(content["ActionMacroType"],"ActionMacroType",range:0...2)
-                    let repeats=mode==0 ? try integer(content["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
+                    let mode=try integer(values["ActionMacroType"],"ActionMacroType",range:0...2)
+                    let repeats=mode==0 ? try integer(values["ActionMacroLoopValue"] ?? 1,"ActionMacroLoopValue",range:1...255):1
                     let playback=MacroPlayback(mode:[.count,.held,.toggle][mode],count:repeats)
                     result.macroModes![slot]=playback
                     bytes=try CherryMacroCodec.binding(result.macroStorageLayout == .officialBindings ? 0:result.macros.firstIndex{$0.name==name}!,playback:playback)
@@ -1531,7 +1535,7 @@ enum WindowsProfile {
                     }
                     throw HardwareError(message:"此配置含文本绑定，需要主机执行服务；普通配置导入尚不处理，请使用专用文本配置流程。原编辑区保留。")
                 case 4:
-                    let index=try integer(content["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
+                    let index=try integer(values["ActionMedia"],"ActionMedia",range:0...mediaCodes.count-1)
                     let media=mediaCodes[index];bytes=[0x30,UInt8(media&255),UInt8(media>>8)]
                 default:throw HardwareError(message:"Windows 文本和其他动作暂不支持导入，请在 Mac 中重新设置。")
                 }
