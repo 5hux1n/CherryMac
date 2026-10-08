@@ -213,7 +213,7 @@ extension HardwareWindowController {
         place(label("慢 ← 速度 → 快",12),8,103,125,24,in:builtins);place(speed,151,99,218,28,in:builtins)
         for slider in [brightness,speed]{slider.numberOfTickMarks=5;slider.allowsTickMarkValuesOnly=true;controls.append(slider)}
         place(label("方向"),431,12,95,24,in:builtins)
-        lightDirection.addItems(withTitles:["保留方向","正向","反向"]);controls.append(lightDirection);place(lightDirection,549,8,215,28,in:builtins)
+        lightDirection.addItems(withTitles:["保留方向","从左到右","从右到左"]);controls.append(lightDirection);place(lightDirection,549,8,215,28,in:builtins)
         place(label("颜色选项"),431,57,95,24,in:builtins)
         lightRainbow.addItems(withTitles:["保留颜色选项","单色","彩虹"]);controls.append(lightRainbow);place(lightRainbow,549,53,215,28,in:builtins)
         place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)

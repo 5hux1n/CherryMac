@@ -3171,7 +3171,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 70,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 71,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3241,6 +3241,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     }
     if skin is not None:
         result["modelResource"] = inspect_model_resources(skin)
+        result["lightingDirectionUI"] = inspect_lighting_direction(pe, skin)
         result["settingsResource"] = inspect_settings_resources(skin)
         result["basicSettingsDialog"] = inspect_basic_settings_dialog(skin)
     if ui_dll is not None:
@@ -3251,6 +3252,32 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         result["macroUI"] = inspect_macro_ui(pe, skin)
     return result
 
+
+
+def inspect_lighting_direction(pe, skin):
+    """Fixed host UI direction values; never infer physical LED behavior."""
+    bodies={
+        (0x443B70,0x443C7B):"a75395079fe5127696c334e66b145c32579bc4473f1783a11f19a542f8881282",
+        (0x4B1280,0x4B1345):"f1b671f28e1f410624da06484ac1a7739c13f17d65f12d482679747d7a6e3b6a",
+        (0x47AF3D,0x47AF54):"e8e05e56badd354a221b91f3cc4dc8dc37a297300b525221a7388afa4fd3c11f",
+    }
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:raise ValueError("Lighting direction UI body differs")
+    if pe.at(0x7454F4,3)!=b"Fx\0" or pe.at(0x47AF51,3)!=bytes.fromhex("8845c3"):raise ValueError("Direction JSON field differs")
+    path=Path(skin)/"XML/CustomControlXML/LightControl.xml";raw=path.read_bytes()
+    if hashlib.sha256(raw).hexdigest()!="fade3d80be473a8b0b21d552d902527e7e1618db3c9db80552bbf75d6d66af77":raise ValueError("Lighting direction resource differs")
+    text=re.sub(r"<!--.*?-->","",raw.decode("utf-8-sig"),flags=re.S)
+    rows=[]
+    for value,name,label,pointer in [(0,"deng_FXR_check","light_set_left_to_right_text",0x731F74),(1,"deng_FXL_check","light_set_right_to_left_text",0x731F94)]:
+        if pe.at(pointer,len(name)*2+2)!=name.encode("utf-16le")+b"\0\0":raise ValueError("Direction control name differs")
+        tags=[tag for tag in re.findall(r"<CheckBox\b[^>]*>",text) if f'name="{name}"' in tag]
+        if len(tags)!=1 or f'text="{label}"' not in tags[0]:raise ValueError("Direction control label differs")
+        rows.append({"Fx":value,"control":name,"textResource":label})
+    return {"values":rows,"jsonGetter":{"entry":"0x47ade0","field":"Fx","structureByte":3,"store":"0x47af51"},
+            "handler":"0x4b1280 forwards the argument to 443b70 and stores its low byte at LightInfo structure byte3",
+            "setter":"443b70: nonzero selects member+8a0 (FXL), zero selects member+8a4 (FXR); paired virtual+1c0 calls",
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},"resourceSHA256":hashlib.sha256(raw).hexdigest(),
+            "limits":"Host checkbox and JSON direction values only; layout1 mode eligibility is audited separately. No new transport, hardware access, animation or LED-direction proof."}
 
 
 def main():
