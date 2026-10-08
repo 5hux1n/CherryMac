@@ -6,7 +6,7 @@ import {saveRawLightingMetadata,lightingResultChannelName,reviewLightingEditorRe
 import {saveLog,saveVerifiedLog,latestLightingRecoveryLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
-let editorRecord=null,pendingEditorRecord=null,editorReview=null,connectionRevision=0,returnChannel=null;
+let editorRecord=null,pendingEditorRecord=null,pendingWriteTarget=null,editorReview=null,connectionRevision=0,returnChannel=null;
 let input=null,hid=null,busy=false,abort=null,latestRecord=null,writeAttempted=false,writtenTarget=null,powerCycle=null;
 const deviceTokens=new WeakMap();
 function token(device){if(!deviceTokens.has(device))deviceTokens.set(device,crypto.randomUUID());return deviceTokens.get(device);}
@@ -41,13 +41,22 @@ async function operation(kind,body){
   // failure so reconnection can retry the fresh read without another write.
   const retainedEditorRecord=kind==='return-editor'?clone(editorRecord):null;
   if(['load-file','load-editor-plan','connect','write','restore','retention','confirm-power-off'].includes(kind))editorRecord=null;
-  pendingEditorRecord=null;busy=true;render();
+  pendingEditorRecord=null;pendingWriteTarget=null;busy=true;render();
   try{
     await recordLightingOperation(artifacts,kind,body,{persist:persistSession,cancelled:()=>abort?.signal.aborted===true});
+    if(kind==='write'&&pendingWriteTarget){
+      requireThat(revision===connectionRevision&&!abort?.signal.aborted&&hid&&!hid.dead,'写入结束后会话已改变或收到停止请求；记录已保留，请重新读取后核对恢复。');
+      writtenTarget=clone(pendingWriteTarget);powerCycle=new LightingPowerCycle(token(hid.device));
+      status('写入、完整读回及会话保存一致。请观察灯光，再按提示断电重连。尚未验证外观或断电保留。');
+    }
     if(pendingEditorRecord&&revision===connectionRevision&&!abort?.signal.aborted&&hid&&!hid.dead){
       reviewLightingEditorResult(pendingEditorRecord,editorReview);editorRecord=clone(pendingEditorRecord);
     }
-  }catch(error){editorRecord=retainedEditorRecord;status(error.message,true);}finally{pendingEditorRecord=null;abort=null;busy=false;render();}
+  }catch(error){
+    editorRecord=revision===connectionRevision?retainedEditorRecord:null;
+    if(kind==='write'){writtenTarget=null;powerCycle=null;}
+    status(error.message,true);
+  }finally{pendingEditorRecord=null;pendingWriteTarget=null;abort=null;busy=false;render();}
 }
 async function loadInput(value,name){
   editorRecord=null;input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;
@@ -126,13 +135,13 @@ $('lighting-write').onclick=event=>operation('write',async()=>{
   gate.acknowledge(event);abort=new AbortController();writeAttempted=true;powerCycle=null;writtenTarget=null;render();
   if(input.value.rawLightingMetadata!=null){try{await saveRawLightingMetadata(input.value.rawLightingMetadata);}catch(error){throw new Error(`原始配色资料未保存，本次尚未进入灯效发送：${error.message} 请修复本机存储后重新载入计划并读取键盘。`);}}
   const result=await hid.applyLightingCandidate(input.value.plan,input.value.original,{lightingMapping:input.value.lightingMapping,gate,cancelled:()=>abort.signal.aborted,backup,persist});
-  if(result.readbackMatches){if(editorReview)pendingEditorRecord=clone(result.record);writtenTarget=clone(input.target);powerCycle=new LightingPowerCycle(token(hid.device));status('写入与完整读回一致。请观察灯光，再按下方提示断电重连。尚未验证外观或断电保留。');}
+  if(result.readbackMatches){if(editorReview)pendingEditorRecord=clone(result.record);pendingWriteTarget=clone(input.target);}
   else throw new Error(`本次写入未通过：${result.failure}。请保留记录，重新连接后核对恢复。`);
 });
 $('lighting-restore').onclick=event=>operation('restore',async()=>{
   requireThat(latestRecord,'尚无恢复记录。');
   requireThat(confirm('将从原始备份恢复灯效数据，颜色不再缩放。恢复前会重新读取并检查范围；请松开全部键。是否继续？'),'已取消，未恢复。');
-  gate.acknowledge(event);abort=new AbortController();render();
+  gate.acknowledge(event);abort=new AbortController();writtenTarget=null;powerCycle=null;render();
   const current=await hid.snapshot(),recovery=lightingRecoveryForFreshRead(latestRecord,current);
   const attempt=await hid.restoreLightingCandidate(recovery,{gate,cancelled:()=>abort.signal.aborted,backup,persist});
   const review=assessLightingRestoreAttempt(attempt);

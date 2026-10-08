@@ -672,6 +672,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         perform("lighting-acceptance-write",completed:{[weak self] current in
             guard current.hasSameConfiguration(as:review.target) else{return}
             self?.editorResult=EditorResult(kind:.write,current:current,review:review)
+            self?.writtenTarget=review.target
+            self?.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
             if let metadata=review.rawLightingMetadata{
@@ -681,14 +683,15 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             }
             let result=try usb.applyLightingCandidate(review.plan,baseline:review.original,lightingMapping:review.lightingMapping,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             guard result.readbackMatches else{throw HardwareError(message:result.failure)}
-            DispatchQueue.main.async{self.writtenTarget=review.target;self.state.stringValue="写入与完整读回一致。请观察灯光，再拔 USB、关电并确认。尚未验证外观与断电保留。"}
             return result.current
         }
     }
     @objc func restore(){
         guard !running,let data=recoveryData,let selectedID=registryID,readback != nil,confirmation("重新核对并恢复原始灯效数据？")else{return}
+        writtenTarget=nil;cycle=nil
         perform("lighting-acceptance-restore",completed:{[weak self] current in
             self?.editorResult=EditorResult(kind:.restore,current:current,review:nil)
+            self?.state.stringValue="恢复与原始备份读回一致。请核对键盘输出与灯光外观，再保存本轮资料。"
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"恢复会话与此前读取设备不同，请重新读取。")}
             let current=try usb.completeSnapshot()
@@ -696,7 +699,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             let plan=try WindowsProfile.restorePlanFromRecord(data,current:current)
             let attempt=try usb.restoreLightingCandidate(plan,cancelled:{log.isCancelled},backup:{try self.backup($0,log)},persist:{try self.persist($0,log)},log:log)
             let assessment=try attempt.assess();guard ["readbackMatched","alreadyMatched"].contains(assessment.status)else{throw HardwareError(message:attempt.failure.isEmpty ? assessment.status:attempt.failure)}
-            DispatchQueue.main.async{self.writtenTarget=nil;self.cycle=nil;self.state.stringValue="恢复与原始备份读回一致。请核对键盘输出与灯光外观，再保存本轮资料。"};return attempt.current
+            return attempt.current
         }
     }
     @objc func stop(){log?.requestCancellation();state.stringValue="已请求停止后续报告，不能撤回已发送的报告。"}
@@ -707,13 +710,14 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         perform("lighting-acceptance-retention",completed:{[weak self] current in
             guard let retainedReview,current.hasSameConfiguration(as:retainedReview.target) else{return}
             self?.editorResult=EditorResult(kind:.write,current:current,review:retainedReview)
+            self?.state.stringValue="关电确认后的重连读回符合目标。请观察灯光，之后恢复原始数据。"
         }){usb,log in
             guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"读回会话不是本轮记录的重连设备，请重新核对。")}
             log.record("userConfirmedPowerOff",true);log.record("confirmedOffInterval",evidence.confirmedOffInterval ?? -1);log.record("originalRegistryID",evidence.originalRegistryID);log.record("reconnectedRegistryID",evidence.reconnectedRegistryID ?? 0)
             let current=try usb.completeSnapshot();guard try usb.lightingRegistryID()==reconnectedID else{throw HardwareError(message:"断电读回期间 USB 设备改变。")};try self.saveSnapshot(current,log);let matches=current.deviceInfo==target.deviceInfo && current.keymap==target.keymap && current.parameters==target.parameters && current.colors==target.colors && current.macroData==target.macroData
             log.record("readbackMatches",matches);try log.requireStorageHealthy()
             guard matches else{throw HardwareError(message:"断电重连读回与目标不同。请保存资料并核对恢复。")}
-            DispatchQueue.main.async{self.state.stringValue="关电确认后的重连读回符合目标。请观察灯光，之后恢复原始数据。"};return current
+            return current
         }
     }
     @objc func showFiles(){do{try createLightingDirectory(directory);NSWorkspace.shared.open(directory)}catch{fail(error)}}
