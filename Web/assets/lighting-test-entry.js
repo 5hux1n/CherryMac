@@ -3,7 +3,7 @@ import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
 import {selectLightingDevice,recordLightingOperation,lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
 import {lightingResultChannelName,reviewLightingEditorResult,takeLightingHandoff,saveBackup,download} from './storage.js?v=0.6.0';
-import {saveLog,saveVerifiedLog} from './logs.js?v=0.6.0';
+import {saveLog,saveVerifiedLog,latestLightingRecoveryLog} from './logs.js?v=0.6.0';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
 let editorRecord=null,pendingEditorRecord=null,editorReview=null,connectionRevision=0,returnChannel=null;
@@ -14,7 +14,7 @@ const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].ever
 function status(text,error=false){$('lighting-state').textContent=text;$('lighting-state').classList.toggle('error',error);}
 function render(){
   const online=hid&&!hid.dead;
-  for(const id of ['lighting-file','lighting-connect','lighting-close','lighting-write','lighting-restore','lighting-power-off','lighting-retention','lighting-download','lighting-download-record','lighting-return'])$(id).disabled=busy;
+  for(const id of ['lighting-resume','lighting-file','lighting-connect','lighting-close','lighting-write','lighting-restore','lighting-power-off','lighting-retention','lighting-download','lighting-download-record','lighting-return'])$(id).disabled=busy;
   $('lighting-return').disabled=busy||!returnChannel||!editorRecord||!online;
   $('lighting-connect').disabled=busy||!isSecureContext||!('hid' in navigator);
   $('lighting-close').disabled=busy||!online;
@@ -60,6 +60,16 @@ async function loadInput(value,name){
   $('lighting-plan').textContent=prepared.kind==='write'?`已载入写入核对：模式 ${prepared.target.parameters[1]}，亮度 ${prepared.target.parameters[2]}/4。按键与宏保持备份。尚未写入。`:'已载入恢复记录；恢复前将重新读取完整配置。尚未发送。';
   status('计划已核对；请单独选择并读取 USB 键盘。');
 }
+$('lighting-resume').onclick=()=>{
+  if(busy)return;
+  // Invalidate before reading, so an unavailable/corrupt new source cannot
+  // leave an older plan eligible for writing.
+  editorRecord=null;input=null;latestRecord=null;writeAttempted=false;writtenTarget=null;powerCycle=null;
+  $('lighting-plan').textContent='正在读取本机恢复记录；此前选择已清除。';
+  return operation('load-file',async()=>{const saved=await latestLightingRecoveryLog();requireThat(saved.record&&saved.id===`lighting-record-${saved.record.operationID}`,'本机恢复记录身份无效，请使用原始文件。');
+  requireThat(new TextEncoder().encode(JSON.stringify(saved.record)).length<=3_000_000,'本机恢复记录超过 3 MB，请选择原始备份文件。');
+  await loadInput(saved.record,`本机最近恢复记录 · ${saved.at}`);});
+};
 $('lighting-file').onchange=()=>{
   if(busy)return;const file=$('lighting-file').files[0];if(!file)return;
   // Invalidate the previous selection even if recording this new attempt fails.

@@ -23,3 +23,22 @@ export async function saveVerifiedLog(entry){
     transaction.onabort=()=>reject(failure??transaction.error??new Error('恢复资料保存已中止。'));
   });
 }
+
+// Scan without materializing all USB logs. Loading never opens a device.
+export async function latestLightingRecoveryLog(){
+  const database=await db();return new Promise((resolve,reject)=>{
+    const transaction=database.transaction('logs','readonly'),request=transaction.objectStore('logs').openCursor();let latest=null,latestTime=-Infinity,failure=null;
+    request.onsuccess=()=>{
+      const cursor=request.result;if(!cursor)return;const entry=cursor.value;
+      if(entry.kind==='lightingRecovery'){
+        const time=Date.parse(entry.at);
+        if(!Number.isFinite(time)){failure=new Error('本机灯效恢复记录时间无效，请使用原始备份文件。');transaction.abort();return;}
+        if(time>latestTime||(time===latestTime&&String(entry.id)>String(latest?.id??''))){latest=entry;latestTime=time;}
+      }
+      cursor.continue();
+    };
+    transaction.oncomplete=()=>latest?resolve(structuredClone(latest)):reject(new Error('没有本机灯效恢复记录；可选择之前下载的恢复文件。'));
+    transaction.onerror=()=>reject(failure??transaction.error??new Error('本机恢复记录读取失败。'));
+    transaction.onabort=()=>reject(failure??transaction.error??new Error('本机恢复记录读取已中止。'));
+  });
+}

@@ -355,6 +355,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         let actions:[Selector]=[#selector(load),#selector(read),#selector(write),#selector(restore),#selector(stop),#selector(powerOff),#selector(retention),#selector(showFiles),#selector(finish)]
         let frames=[NSRect(x:610,y:58,width:178,height:30),NSRect(x:22,y:210,width:165,height:32),NSRect(x:202,y:210,width:165,height:32),NSRect(x:382,y:210,width:165,height:32),NSRect(x:562,y:210,width:226,height:32),NSRect(x:22,y:338,width:232,height:32),NSRect(x:272,y:338,width:254,height:32),NSRect(x:22,y:438,width:190,height:32),NSRect(x:668,y:438,width:120,height:32)]
         for i in titles.indices{let b=NSButton(title:titles[i],target:self,action:actions[i]);b.bezelStyle = .rounded;b.frame=frames[i];root.addSubview(b);buttons.append(b)}
+        let resume=NSButton(title:"载入最近恢复记录",target:self,action:#selector(loadLatestRecovery));resume.bezelStyle = .rounded;resume.frame=NSRect(x:402,y:58,width:194,height:30);root.addSubview(resume);buttons.append(resume)
         state.frame=NSRect(x:22,y:488,width:766,height:48);root.addSubview(state)
         focusObserver=NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:panel,queue:.main){[weak self] _ in if self?.running==true{self?.log?.requestCancellation()}}
         refresh=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true){[weak self] _ in self?.render()}
@@ -373,6 +374,27 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         guard !running else{return};let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
         guard panel.runModal() == .OK,let url=panel.url else{return}
         resetInput();do{loadData(try Data(contentsOf:url),source:"选择的文件")}catch{fail(error);render()}
+    }
+    @objc func loadLatestRecovery(){
+        guard !running else{return};resetInput()
+        do{
+            let root=directory.deletingLastPathComponent(),manager=FileManager.default
+            guard manager.fileExists(atPath:root.path)else{throw HardwareError(message:"没有本机灯效恢复记录；可选择之前保存的恢复文件。")}
+            let sessions=try manager.contentsOfDirectory(at:root,includingPropertiesForKeys:[.isDirectoryKey,.isSymbolicLinkKey],options:.skipsHiddenFiles)
+            var candidates:[(URL,Date)]=[]
+            for session in sessions{
+                let folder=try session.resourceValues(forKeys:[.isDirectoryKey,.isSymbolicLinkKey]);guard folder.isDirectory==true,folder.isSymbolicLink != true else{continue}
+                for url in try manager.contentsOfDirectory(at:session,includingPropertiesForKeys:[.isRegularFileKey,.isSymbolicLinkKey,.contentModificationDateKey],options:.skipsHiddenFiles) where url.lastPathComponent.hasPrefix("record-") && url.pathExtension=="json"{
+                    let values=try url.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey,.contentModificationDateKey]);guard values.isRegularFile==true,values.isSymbolicLink != true else{continue}
+                    guard let date=values.contentModificationDate else{throw HardwareError(message:"本机恢复记录缺少保存时间，请选择原始文件。")};candidates.append((url,date))
+                }
+            }
+            guard let latest=candidates.sorted(by:{$0.1==$1.1 ? $0.0.path>$1.0.path:$0.1>$1.1}).first?.0 else{throw HardwareError(message:"没有本机灯效恢复记录；可选择之前保存的恢复文件。")}
+            guard let size=try latest.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=3_000_000 else{throw HardwareError(message:"本机灯效恢复记录超过 3 MB，请选择原始备份。")}
+            let data=try Data(contentsOf:latest),object=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+            guard ["CherryMacLightingRecoveryRecord","CherryMacLightingRestoreAttempt"].contains(object?["format"] as? String ?? "")else{throw HardwareError(message:"最近恢复记录身份无效，请选择原始文件。")}
+            loadData(data,source:"本机最近恢复记录")
+        }catch{fail(error);render()}
     }
     func resetInput(){editorResult=nil;review=nil;recoveryData=nil;writtenTarget=nil;cycle=nil;attempted=false;summary.stringValue="正在核对新计划；旧选择已清除。"}
     func loadData(_ data:Data,source:String){
