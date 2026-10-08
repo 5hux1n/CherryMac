@@ -1,0 +1,32 @@
+{
+  "format": "CherryMacOfficialColorPresetSource",
+  "version": 1,
+  "file": "color_option_info.config",
+  "sha256": "59bf7736e328464abce7db3d97586b18c187117b329f482cff855c8acdc9c491",
+  "presets": [
+    "#FF0000",
+    "#FF7200",
+    "#FFF005",
+    "#00D70F",
+    "#0099FF",
+    "#3153FF",
+    "#5E01D2",
+    "#FF16A9",
+    "#FF008A",
+    "#FFA800",
+    "#8DFF8D",
+    "#3DEFFF",
+    "#004891",
+    "#FFFFFF",
+    "#FFFFFF",
+    "#3153FF",
+    "#5E01D2",
+    "#EE00F1",
+    "#FF008A",
+    "#FFA800"
+  ],
+  "favoriteDefaultsMatchPresets": true,
+  "presetSelection": 7,
+  "favoriteSelection": 8,
+  "scope": "Static bundled RGB data; does not authorize HID or establish device color output"
+}

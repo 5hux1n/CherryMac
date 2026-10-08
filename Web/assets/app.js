@@ -1,8 +1,8 @@
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
-import {rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {loadLightingColorLibrary,saveLightingColorLibrary,rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
 import {saveMacroEditorDraft,loadMacroEditorDraft,mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords,restoredMacroTransactionProfile} from './product-macros.js?v=0.6.0';
@@ -86,6 +86,7 @@ function render(){
 function paletteEditable(){return profile.lightingColorEncoding==='officialRGB'&&profile.lightingMapping!=null&&profile.snapshot.colors!=null;}
 function requireEditablePalette(){requireThat(paletteEditable(),'请先新建逐键配色或导入官方原始配色，取得 LED 映射；读回 RGB 不能直接作为原始配色编辑。');}
 function updatePaletteControls(){
+  for(const id of ['color-library-target','color-presets','color-favorites','use-color-preset','use-color-favorite','save-color-favorite','load-color-favorites','reset-color-favorites'])$(id).disabled=busy;
   const ready=paletteEditable(),level=profile.snapshot.parameters[2];for(const id of ['paint','off','clear-palette','palette-brightness'])$(id).disabled=busy||!ready;
   $('palette-brightness').value=Math.min(4,level);$('palette-brightness-label').textContent=`${level}/4`;
   $('palette-source-help').textContent=!ready?'请新建逐键配色或导入官方原始配色；读回颜色仅供查看，不能反推原始 RGB。':level===0?'全局亮度为 0，配色将全部熄灭；原始 RGB 保留。此处调整直接保存到草稿。':'原始配色可编辑。全局亮度与所选键 RGB 强度分别设置；不会自动写入。';
@@ -629,3 +630,29 @@ $('official-macros').onclick=()=>act(async()=>{
   const draft=clone(profile);draft.macroStorageLayout='officialBindings';draft.snapshot=resolveMacros(draft);profile=draft;render();await persistMacroEditor();
   status('已启用扩展宏编辑，尚未写入。多个键绑定同一宏会分别占用空间，未绑定宏保存在本机。');
 });
+
+// Color controls only: no draft mutation, HID or host-service operation.
+function renderColorFavorites(library){
+  const selected=$('color-favorites').selectedIndex;const list=$('color-favorites');list.replaceChildren();
+  library.colors.forEach((color,i)=>list.add(new Option(`收藏槽 ${i+1} · ${color}`,String(i))));list.selectedIndex=selected>=0?selected:8;
+}
+function applyLibraryColor(value){
+  const target=$('color-library-target').value;
+  if(target==='start')setColor(rgb(value));else if(target==='end')$('end-color').value=value;else{requireThat(selectedLightingOptions()?.color,'此模式不提供内置单色调整。');$('global-color-input').value=value;}
+  $('color-library-status').textContent=`已选择 ${value}，只更新颜色输入，尚未应用或写入。`;
+}
+officialColorPresets.forEach((color,i)=>$('color-presets').add(new Option(`官方色卡 ${i+1} · ${color}`,String(i))));$('color-presets').selectedIndex=7;
+$('load-color-favorites').onclick=()=>operation(()=>{renderColorFavorites(loadLightingColorLibrary(localStorage));$('color-library-status').textContent='已载入当前浏览器收藏。';},{localOnly:true});
+$('use-color-preset').onclick=()=>operation(()=>{const color=officialColorPresets[$('color-presets').selectedIndex];requireThat(color,'请选择官方色卡。');applyLibraryColor(color);},{localOnly:true});
+$('use-color-favorite').onclick=()=>operation(()=>{const library=loadLightingColorLibrary(localStorage);const index=$('color-favorites').selectedIndex;renderColorFavorites(library);requireThat(index>=0,'请先载入收藏并选择色卡。');applyLibraryColor(library.colors[index]);},{localOnly:true});
+$('save-color-favorite').onclick=()=>operation(()=>{
+  const library=loadLightingColorLibrary(localStorage),index=$('color-favorites').selectedIndex;renderColorFavorites(library);requireThat(index>=0,'请先载入收藏并选择收藏槽。');
+  const target=$('color-library-target').value,value=target==='start'?hex(rgb($('hex').value)):target==='end'?$('end-color').value:$('global-color-input').value;
+  if(!confirm(`用 ${value} 替换收藏槽 ${index+1} 的 ${library.colors[index]}？只保存本机收藏，不更改键盘配置。`))return;
+  library.colors[index]=value.toUpperCase();saveLightingColorLibrary(localStorage,library);renderColorFavorites(library);$('color-library-status').textContent='收藏已保存并核对，键盘配置未修改。';
+},{localOnly:true});
+
+$('reset-color-favorites').onclick=()=>operation(()=>{
+  if(!confirm('用官方 20 个默认色卡替换本机全部收藏？此操作会覆盖已有收藏；不更改键盘配置。'))return;
+  const library={format:'CherryMacLightingColorLibrary',version:1,colors:[...officialColorPresets]};saveLightingColorLibrary(localStorage,library);renderColorFavorites(library);$('color-library-status').textContent='收藏已恢复为官方默认色卡。';
+},{localOnly:true});

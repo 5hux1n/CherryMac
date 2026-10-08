@@ -1,3 +1,4 @@
+import {defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 import {databaseOpener} from './database.js?v=0.6.0';
@@ -140,4 +141,14 @@ export async function recalledRawLightingMetadata(profile){
   for(const record of await listRawLightingMetadata()){
     try{validateRawLightingMetadata(record.metadata);const next=adoptRawLightingMetadata(profile,record.metadata);if(next!==null)return next;}catch{}
   }return null;
+}
+
+// Color-library preferences are local UI data, separate from keyboard drafts/backups.
+export function loadLightingColorLibrary(storage){
+  const text=storage.getItem('CherryMacLightingColorLibrary');if(text===null)return defaultLightingColorLibrary();
+  requireThat(new TextEncoder().encode(text).length<=4096,'颜色收藏资料过大。');return validateLightingColorLibrary(JSON.parse(text));
+}
+export function saveLightingColorLibrary(storage,value){
+  const text=JSON.stringify(validateLightingColorLibrary(value));storage.setItem('CherryMacLightingColorLibrary',text);
+  requireThat(storage.getItem('CherryMacLightingColorLibrary')===text,'颜色收藏保存核对失败。');
 }

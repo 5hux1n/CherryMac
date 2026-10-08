@@ -1266,3 +1266,11 @@ export function macroStorageNames(profile){
   if(profile.macroStorageLayout==='officialBindings')return officialMacroReceipt(profile).layout.records.map(r=>profile.macros[r.libraryIndex].name);
   return profile.macros.map(m=>m.name);
 }
+
+// Extracted RGB facts from official color_option_info.config; 20 slots retain duplicates.
+export const officialColorPresets=Object.freeze(["#FF0000", "#FF7200", "#FFF005", "#00D70F", "#0099FF", "#3153FF", "#5E01D2", "#FF16A9", "#FF008A", "#FFA800", "#8DFF8D", "#3DEFFF", "#004891", "#FFFFFF", "#FFFFFF", "#3153FF", "#5E01D2", "#EE00F1", "#FF008A", "#FFA800"]);
+export function defaultLightingColorLibrary(){return {format:'CherryMacLightingColorLibrary',version:1,colors:[...officialColorPresets]};}
+export function validateLightingColorLibrary(value){
+  requireThat(value&&value.format==='CherryMacLightingColorLibrary'&&value.version===1&&Array.isArray(value.colors)&&value.colors.length===20,'颜色收藏必须包含 20 个色卡。');
+  requireThat(value.colors.every(color=>typeof color==='string'&&/^#[0-9A-F]{6}$/.test(color)),'收藏颜色格式无效。');return clone(value);
+}

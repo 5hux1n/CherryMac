@@ -148,6 +148,7 @@ extension HardwareWindowController {
         lightRainbow.addItems(withTitles:["保留颜色选项","单色","彩虹"]);controls.append(lightRainbow);place(lightRainbow,549,53,215,28,in:builtins)
         place(label("单色颜色"),431,105,95,24,in:builtins);controls.append(globalLightColor);place(globalLightColor,549,98,55,32,in:builtins)
         let colorButton=button("使用此颜色",#selector(stageGlobalLightColor));globalLightColorButton=colorButton;place(colorButton,625,99,139,30,in:builtins)
+        let globalCards=button("色卡与收藏…",#selector(openLightingColorLibrary(_:)));globalCards.tag=0;controls.append(globalCards);place(globalCards,785,99,137,30,in:builtins)
         place(button("保存灯效到编辑区",#selector(stageLights)),8,159,234,30,in:builtins)
         place(button("核对默认灯效…",#selector(reviewDefaultLighting)),258,159,162,30,in:builtins)
         place(button("仅导入官方灯效…",#selector(importLightingDraft)),431,159,260,30,in:builtins)
@@ -164,6 +165,7 @@ extension HardwareWindowController {
             place(label(["R","G","B"][index]),337+CGFloat(index)*110,57,20,23,in:colors)
             let field=lightRGB[index];field.tag=101+index;field.delegate=self;controls.append(field);place(field,360+CGFloat(index)*110,53,75,25,in:colors)
         }
+        let cards=button("色卡与收藏…",#selector(openLightingColorLibrary(_:)));cards.tag=1;controls.append(cards);place(cards,708,53,156,28,in:colors)
         place(label("颜色强度",12),8,105,75,23,in:colors);lightStrength.target=self;lightStrength.action=#selector(lightStrengthChanged);controls.append(lightStrength);place(lightStrength,94,100,168,25,in:colors)
         place(lightStrengthLabel,275,105,51,23,in:colors)
         lightPattern.addItems(withTitles:CherryLighting.patterns);controls.append(lightPattern);place(lightPattern,337,99,188,28,in:colors)
@@ -241,6 +243,41 @@ extension HardwareWindowController {
             draft.snapshot.parameters[2]=UInt8(level);profile=draft;brightness.doubleValue=Double(level);update()
             message.stringValue="配色全局亮度已保存到草稿，原始 RGB 保留；尚未写入。"
         }catch{message.stringValue=error.localizedDescription;updatePaletteControls()}
+    }
+    @objc func openLightingColorLibrary(_ sender:NSButton){
+        guard !busy else{return}
+        do{
+            var library:LightingColorLibrary
+            do{library=try LightingColorLibrary.load()}catch{
+                let alert=NSAlert();alert.messageText="颜色收藏无法读取";alert.informativeText=error.localizedDescription+" 可恢复官方默认 20 色，这会替换已有收藏；不更改键盘配置。";alert.addButton(withTitle:"恢复默认收藏");alert.addButton(withTitle:"返回")
+                guard alert.runModal() == .alertFirstButtonReturn else{return}
+                library = .defaults;try library.save()
+            }
+            let target=NSPopUpButton(frame:NSRect(x:0,y:104,width:310,height:28));target.addItems(withTitles:["内置单色","逐键／渐变起点","渐变终点"]);target.selectItem(at:sender.tag)
+            let presets=NSPopUpButton(frame:NSRect(x:0,y:68,width:310,height:28));presets.addItems(withTitles:LightingColorLibrary.defaultColors.enumerated().map{"官方色卡 \($0.offset+1) · \($0.element)"});presets.selectItem(at:7)
+            let favorites=NSPopUpButton(frame:NSRect(x:0,y:32,width:310,height:28));favorites.addItems(withTitles:library.colors.enumerated().map{"收藏槽 \($0.offset+1) · \($0.element)"});favorites.selectItem(at:8)
+            while true{
+                let panel=NSView(frame:NSRect(x:0,y:0,width:310,height:136));for view in [target,presets,favorites]{view.removeFromSuperview();panel.addSubview(view)}
+                let alert=NSAlert();alert.messageText="色卡与颜色收藏";alert.informativeText="官方预设和 20 个本机收藏槽。选色只更新颜色输入，之后再应用到按键或保存内置单色。收藏保存在这台 Mac，不写入键盘。";alert.accessoryView=panel
+                for title in ["使用官方色卡","使用收藏色","用当前颜色替换收藏槽","返回"]{alert.addButton(withTitle:title)}
+                let response=alert.runModal().rawValue;let index=target.indexOfSelectedItem
+                guard response != 1003 else{return}
+                if response==1002{
+                    let value:LightRGB
+                    if index==0{value=rgb(globalLightColor.color)}else if index==1{value=try readLightColor()}else{value=rgb(endColor.color)}
+                    let confirm=NSAlert();confirm.messageText="替换收藏槽 \(favorites.indexOfSelectedItem+1)？";confirm.informativeText="保存 \(value.hex)，旧色 \(library.colors[favorites.indexOfSelectedItem]) 将替换。只保存颜色收藏。";confirm.addButton(withTitle:"替换");confirm.addButton(withTitle:"取消")
+                    if confirm.runModal() == .alertFirstButtonReturn{
+                        var next=library;next.colors[favorites.indexOfSelectedItem]=value.hex;try next.save();library=next
+                        let selected=favorites.indexOfSelectedItem;favorites.removeAllItems();favorites.addItems(withTitles:library.colors.enumerated().map{"收藏槽 \($0.offset+1) · \($0.element)"});favorites.selectItem(at:selected)
+                    };continue
+                }
+                guard response==1000 || response==1001 else{return}
+                let value=try LightRGB(hex:response==1000 ? LightingColorLibrary.defaultColors[presets.indexOfSelectedItem]:library.colors[favorites.indexOfSelectedItem])
+                let native=NSColor(srgbRed:CGFloat(value.red)/255,green:CGFloat(value.green)/255,blue:CGFloat(value.blue)/255,alpha:1)
+                if index==0{globalLightColor.color=native}else if index==1{setLightColor(value)}else{endColor.color=native}
+                message.stringValue="已选择 \(value.hex)，只更新颜色输入，尚未应用或写入。";return
+            }
+        }catch{message.stringValue="颜色收藏无法载入／保存："+error.localizedDescription}
     }
     @objc func clearAllLightingColors(){
         guard !busy,let draft=profile else{return}

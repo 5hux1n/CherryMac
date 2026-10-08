@@ -31,6 +31,27 @@ struct LightRGB: Equatable {
     }
 }
 
+struct LightingColorLibrary:Codable {
+    var format="CherryMacLightingColorLibrary";var version=1
+    var colors:[String]
+    static let defaultColors:[String]=["#FF0000", "#FF7200", "#FFF005", "#00D70F", "#0099FF", "#3153FF", "#5E01D2", "#FF16A9", "#FF008A", "#FFA800", "#8DFF8D", "#3DEFFF", "#004891", "#FFFFFF", "#FFFFFF", "#3153FF", "#5E01D2", "#EE00F1", "#FF008A", "#FFA800"]
+    static var defaults:Self{Self(colors:defaultColors)}
+    func validate()throws{
+        guard format=="CherryMacLightingColorLibrary",version==1,colors.count==20 else{throw HardwareError(message:"颜色收藏必须包含 20 个色卡。")}
+        for value in colors{guard value.count==7,value.first=="#",value.dropFirst().unicodeScalars.allSatisfy({CharacterSet(charactersIn:"0123456789ABCDEF").contains($0)}) else{throw HardwareError(message:"收藏颜色格式无效。")}}
+    }
+    static func load()throws->Self{
+        guard let data=UserDefaults.standard.data(forKey:"hardware.lightingColorLibrary")else{return defaults}
+        guard data.count<=4096 else{throw HardwareError(message:"颜色收藏资料过大。")}
+        let value=try JSONDecoder().decode(Self.self,from:data);try value.validate();return value
+    }
+    func save()throws{
+        try validate();let data=try JSONEncoder().encode(self);let key="hardware.lightingColorLibrary"
+        UserDefaults.standard.set(data,forKey:key)
+        guard UserDefaults.standard.data(forKey:key)==data else{throw HardwareError(message:"颜色收藏保存核对失败。")}
+    }
+}
+
 enum CherryLighting {
     // Official DefaultLightName entry 47 for the supplied Pokémon model.
     // Names/codes come from the mode table, not this device's previous mode.
