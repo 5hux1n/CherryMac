@@ -60,6 +60,7 @@ function render(){
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
   $('review-default-lighting').disabled=$('review-default-lighting-file').disabled=busy||!baseline||!profile.lightingMapping;
+  if($('open-default-lighting-acceptance'))$('open-default-lighting-acceptance').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null;
   $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
   updatePaletteControls();
   $('save-local-lighting').disabled=busy||!baseline||!baselineLightingMapping||!profile.lightingMapping||profile.lightingColorEncoding!=='officialRGB';
@@ -229,7 +230,7 @@ $('save-polling-draft').onclick=()=>act(()=>{
   const output=officialPollingDraft(JSON.parse(profile.windowsTemplateJSON),Number(value));profile.windowsTemplateJSON=JSON.stringify(output);validateProfile(profile);status('回报率已保存到官方配置草稿，尚未写入键盘。请在配置与备份导出。');
 });
 function closeLightingReturnChannel(){lightingReturnChannel?.close();lightingReturnChannel=null;clearTimeout(lightingReturnTimer);lightingReturnTimer=null;}
-function prepareLightingReturnChannel(id,review){
+function prepareLightingReturnChannel(id,review,{defaultPlan=false,draftSnapshot=null}={}){
   closeLightingReturnChannel();requireThat(typeof BroadcastChannel==='function','浏览器不支持编辑器结果回传。');
   const channel=new BroadcastChannel(lightingResultChannelName(id));lightingReturnChannel=channel;
   let acceptedRecord=null;
@@ -248,7 +249,8 @@ function prepareLightingReturnChannel(id,review){
       requireThat(!busy&&!recorder,'编辑器正在操作，请稍后重试返回。');
       requireThat(!hid||hid.dead,'编辑器已有 USB 会话，请先断开再返回结果。');
       requireThat(equal(baseline,review.original),'编辑器读回基线已改变，请重新准备。');
-      requireThat(equal(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
+      if(defaultPlan)requireThat(equal(profile,draftSnapshot),'准备默认灯效后草稿已改变；结果未覆盖编辑区。');
+      else requireThat(equal(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
       // Keep all drafts, including official raw RGB. A new USB read is still
       // required before adopting this evidence as a connected baseline.
       lightingReconnectSnapshot=current;acceptedRecord=clone(value.record);accepted=true;
@@ -260,22 +262,24 @@ function prepareLightingReturnChannel(id,review){
   };
 }
 window.addEventListener('beforeunload',closeLightingReturnChannel);
-if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>{
+function handoffLightingAcceptance(makeReview,{defaultPlan=false}={}){
   if(busy||!baseline)return;
   if(lightingReconnectSnapshot){status('请先重新连接核对已返回的结果，再准备新的灯效计划。',true);return;}
   // Open during the click so popup blockers do not lose an async navigation.
   const view=window.open('about:blank','_blank');if(!view){status('请允许本网站打开新页面，再试一次。',true);return;}
   let sent=false;void operation(async()=>{
     try{
-      const review=reviewLightingDraft(profile,baseline),id=crypto.randomUUID();
+      const review=makeReview(),draftSnapshot=clone(profile),id=crypto.randomUUID();
       if(hid)await hid.close();hid=null;gate.invalidate();
       requireThat(!view.closed,'验收页面已关闭，请重新准备。');
-      view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);prepareLightingReturnChannel(id,review);view.opener=null;
+      view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);prepareLightingReturnChannel(id,review,{defaultPlan,draftSnapshot});view.opener=null;
       view.location.replace(`lighting-test.php?plan=${encodeURIComponent(id)}`);sent=true;
-      status('编辑区计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。');
+      status(`${defaultPlan?'官方默认灯效':'编辑区'}计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。`);
     }catch(error){closeLightingReturnChannel();view.close();throw error;}
   }).finally(()=>{if(!sent)view.close();});
-};
+}
+if($('open-lighting-acceptance'))$('open-lighting-acceptance').onclick=()=>handoffLightingAcceptance(()=>reviewLightingDraft(profile,baseline));
+if($('open-default-lighting-acceptance'))$('open-default-lighting-acceptance').onclick=()=>handoffLightingAcceptance(()=>reviewDefaultLighting(null,baseline,profile.lightingMapping),{defaultPlan:true});
 $('discard-lighting-result').onclick=()=>{
   if(busy||!lightingReconnectSnapshot)return;
   if(!confirm('放弃待核对的返回结果？当前草稿仍保留，但下次普通读取会替换草稿，请先导出保存。此操作不修改键盘。'))return;

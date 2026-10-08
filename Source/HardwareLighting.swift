@@ -115,6 +115,9 @@ extension HardwareWindowController {
         do{let review=try WindowsProfile.reviewDefaultLighting(data,baseline:baseline,mapping:mapping)
             let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复\(data == nil ? "内置官方默认" : "所选文件")的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。这里只导出计划，不改变编辑草稿或键盘。"
             alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回");alert.addButton(withTitle:"选择其他官方默认文件…")
+            #if CHERRY_LIGHTING_TEST
+            alert.addButton(withTitle:"准备此计划验收…")
+            #endif
             let response=alert.runModal()
             if response == .alertThirdButtonReturn{
                 let input=NSOpenPanel();input.canChooseDirectories=false;input.allowsMultipleSelection=false
@@ -122,6 +125,9 @@ extension HardwareWindowController {
                 guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
                 exportDefaultLightingReview(try Data(contentsOf:url));return
             }
+            #if CHERRY_LIGHTING_TEST
+            if response.rawValue==1003{presentLightingAcceptance(review);return}
+            #endif
             guard response == .alertFirstButtonReturn else{return}
             let output=NSSavePanel();output.nameFieldStringValue="CherryMac-默认灯效核对.json";guard output.runModal() == .OK,let destination=output.url else{return}
             let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];try encoder.encode(review).write(to:destination,options:.atomic)
@@ -350,15 +356,23 @@ import IOKit.hid
 
 extension HardwareWindowController {
     @objc func openLightingAcceptance(){
-        guard !busy,macroRecordingSheet==nil,let owner=window else{return}
-        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
-        let prepared:Data?;var preparationFailure:String?
+        guard !busy,macroRecordingSheet==nil else{return}
         do{
-            if baselineWasRead,let baseline,let profile{
-                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
-                prepared=try encoder.encode(WindowsProfile.reviewLightingDraft(profile,baseline:baseline))
+            let review:WindowsProfile.LightingDraftReview?
+            if baselineWasRead,let baseline,let profile{review=try WindowsProfile.reviewLightingDraft(profile,baseline:baseline)}else{review=nil}
+            presentLightingAcceptance(review)
+        }catch{presentLightingAcceptance(nil,preparationFailure:error.localizedDescription)}
+    }
+    func presentLightingAcceptance(_ review:WindowsProfile.LightingDraftReview?,preparationFailure:String?=nil){
+        guard !busy,macroRecordingSheet==nil,let owner=window else{return}
+        let prepared:Data?
+        do{
+            if let review{
+                guard let baseline,baselineWasRead,review.original==baseline,try review.plan.expectedReadback(from:baseline).hasSameConfiguration(as:review.target) else{throw HardwareError(message:"灯效计划与当前基线不一致。")}
+                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];prepared=try encoder.encode(review)
             }else{prepared=nil}
-        }catch{prepared=nil;preparationFailure=error.localizedDescription}
+        }catch{message.stringValue=error.localizedDescription;return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
         let editorBaseline=baseline,editorDraft=profile
         let preparedReview=prepared.flatMap{try? JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:$0)}
         let acceptance=LightingAcceptanceWindow(queue:queue,prepared:prepared);lightingAcceptance=acceptance
@@ -383,7 +397,10 @@ extension HardwareWindowController {
                     // already had brightness applied and must not replace it.
                     self.profile=draft;self.baseline=receipt.current;self.baselineWasRead=true
                     self.message.stringValue=receipt.kind == .write ? "灯效写入结果已接回编辑区，完整读回一致；未发送的键位、宏与文本草稿保留。外观与断电保存尚待验收。":"灯效恢复结果已接回编辑区，原始读回一致；所有未发送草稿保留。"
-                    if receipt.kind == .write {
+                    if receipt.kind == .write && preparedReview?.plan.defaultColorData != nil{
+                        self.message.stringValue="默认灯效读回结果已接回，原编辑草稿仍保留；未把旧原始 RGB 记为默认配色。实体外观与断电保存尚待验收。"
+                    }
+                    if receipt.kind == .write && preparedReview?.plan.defaultColorData == nil {
                         do{try self.rememberRawLighting(draft,current:receipt.current)}
                         catch{self.message.stringValue += "\n读回已核对，但本机原始配色资料保存失败：\(error.localizedDescription)"}
                     }
