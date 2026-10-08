@@ -1327,6 +1327,6 @@ export function mergeLightingEditorDraft(value,current){
   next.snapshot.colors=clone(saved.snapshot.colors);
   for(const field of ['lightingColorEncoding','lightingRawSlots']){if(saved[field]!=null)next[field]=clone(saved[field]);else delete next[field];}
   if(next.lightingRawSlots!=null)next.version=2;
-  if(current.windowsTemplateJSON!=null&&saved.windowsTemplateJSON!=null){const root=JSON.parse(current.windowsTemplateJSON),donor=JSON.parse(saved.windowsTemplateJSON);if(root.LightInfo&&donor.LightInfo)for(const name of ['SelectItem','Light','Speed','Fx','MultiColor','Red','Green','Blue','LightOpenFlag'])if(Object.hasOwn(donor.LightInfo,name))root.LightInfo[name]=clone(donor.LightInfo[name]);if(Object.hasOwn(donor,'CustomLightMode'))root.CustomLightMode=clone(donor.CustomLightMode);next.windowsTemplateJSON=JSON.stringify(root);}
+  if(current.windowsTemplateJSON!=null&&saved.windowsTemplateJSON!=null){const root=JSON.parse(current.windowsTemplateJSON),donor=JSON.parse(saved.windowsTemplateJSON);if(root.LightInfo&&typeof root.LightInfo==='object'&&!Array.isArray(root.LightInfo)&&donor.LightInfo&&typeof donor.LightInfo==='object'&&!Array.isArray(donor.LightInfo))for(const name of ['SelectItem','Light','Speed','Fx','MultiColor','Red','Green','Blue','LightOpenFlag'])if(Object.hasOwn(donor.LightInfo,name))root.LightInfo[name]=clone(donor.LightInfo[name]);if(Object.hasOwn(donor,'CustomLightMode'))root.CustomLightMode=clone(donor.CustomLightMode);next.windowsTemplateJSON=JSON.stringify(root);}
   validateProfile(next);return next;
 }
