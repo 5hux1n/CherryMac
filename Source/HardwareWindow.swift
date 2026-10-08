@@ -912,13 +912,13 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                     if !keptLightingDraft{self.profile=self.recalledMacroProfile(snapshot,mapping:read.mapping) ?? (try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)}
                     self.lightingReconnectSnapshot=nil
                     self.profile?.lightingMapping=read.mapping;self.baselineLightingMapping=read.mapping
-                    if read.mapping != nil,self.profile?.macroStorageLayout==nil{self.profile?.macroStorageLayout = .officialBindings}
+                    if !keptLightingDraft,read.mapping != nil,self.profile?.macroStorageLayout==nil{self.profile?.macroStorageLayout = .officialBindings}
                     if !keptLightingDraft,let current=self.profile,let saved=self.recalledRawLighting(current){self.profile=saved}
                     self.connection.stringValue="USB 已连接 · 126 个固件键位 · 已读取键位、灯效与宏区"
                     self.loadLighting();self.refreshMacroPicker()
                     do{try FileManager.default.createDirectory(at:self.backupDirectory,withIntermediateDirectories:true)
                         let url=self.backupDirectory.appendingPathComponent("USB-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
-                        var backup=self.profile!;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB;backup.lightingRawSlots=nil
+                        var backup=keptLightingDraft ? ((try? HardwareProfile.fromHardware(snapshot)) ?? HardwareProfile(snapshot:snapshot)):self.profile!;backup.lightingMapping=read.mapping;backup.snapshot=snapshot;backup.lightingColorEncoding = .hardwareRGB;backup.lightingRawSlots=nil
                         try backup.encoded().write(to:url,options:.atomic);self.message.stringValue=self.profile!.macroBindings==nil ? "读取并备份完成。原宏格式暂不支持编辑，原始宏区已保留。":"读取完成，已自动备份。可以点选键位、编辑灯效与宏。"}
                     catch{self.message.stringValue="读取完成，备份失败：\(error.localizedDescription)"}
                     if keptLightingDraft{self.message.stringValue += "\n返回结果已与新读回及映射核对，所有编辑草稿保留；草稿配色不一定是当前硬件配色。"}
