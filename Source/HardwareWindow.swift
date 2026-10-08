@@ -198,6 +198,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let lightStrength = NSSlider(value:100,minValue:0,maxValue:100,target:nil,action:nil)
     let lightStrengthLabel = NSTextField(labelWithString:"100%")
     let lightCount = NSTextField(labelWithString:"已选 1 键")
+    let paletteBrightness=NSSlider(value:4,minValue:0,maxValue:4,target:nil,action:nil)
+    let paletteBrightnessLabel=NSTextField(labelWithString:"4/4")
+    let paletteHelp=NSTextField(wrappingLabelWithString:"")
+    var paletteEditButtons:[NSButton]=[]
     let lightMultiple = NSButton(checkboxWithTitle:"多选",target:nil,action:nil)
     let lightRegion = NSPopUpButton()
     let lightPattern = NSPopUpButton()
@@ -745,6 +749,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     func update(){
         updateLightingOptions()
+        updatePaletteControls()
         playbackChanged()
         macroCancellationButton?.isHidden=currentMacroOperation==nil
         macroCancellationButton?.isEnabled=busy && currentMacroOperation?.isCancelled==false

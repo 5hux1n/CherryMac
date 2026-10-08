@@ -60,6 +60,7 @@ function render(){
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
   $('new-custom-lighting').disabled=busy||!baseline||!profile.lightingMapping;
+  updatePaletteControls();
   $('save-local-lighting').disabled=busy||!baseline||!baselineLightingMapping||!profile.lightingMapping||profile.lightingColorEncoding!=='officialRGB';
   if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
@@ -80,6 +81,13 @@ function render(){
   if(busy)$('connect').disabled=true;
   updateLightingOptions();
   renderMacroSummary();
+}
+function paletteEditable(){return profile.lightingColorEncoding==='officialRGB'&&profile.lightingMapping!=null&&profile.snapshot.colors!=null;}
+function requireEditablePalette(){requireThat(paletteEditable(),'请先新建逐键配色或导入官方原始配色，取得 LED 映射；读回 RGB 不能直接作为原始配色编辑。');}
+function updatePaletteControls(){
+  const ready=paletteEditable(),level=profile.snapshot.parameters[2];for(const id of ['paint','off','palette-brightness'])$(id).disabled=busy||!ready;
+  $('palette-brightness').value=Math.min(4,level);$('palette-brightness-label').textContent=`${level}/4`;
+  $('palette-source-help').textContent=!ready?'请新建逐键配色或导入官方原始配色；读回颜色仅供查看，不能反推原始 RGB。':level===0?'全局亮度为 0，配色将全部熄灭；原始 RGB 保留。此处调整直接保存到草稿。':'原始配色可编辑。全局亮度与所选键 RGB 强度分别设置；不会自动写入。';
 }
 function selectedLightingOptions(){return $('mode').value===''?null:lightingOptions(Number($('mode').value));}
 function updateLightingOptions(){
@@ -205,8 +213,9 @@ $('new-custom-lighting').onclick=()=>operation(()=>{
   profile=newCustomLightingDraft(profile);syncLights();
   status('已新建空白逐键配色。选择按键并应用颜色后核对计划；尚未写入键盘。');
 },{localOnly:true});
-$('paint').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,$('pattern').value,rgb($('hex').value),rgb($('end-color').value),profile.lightingMapping);syncLights();status(`已为 ${selection.size} 键加入配色，尚未写入。`);});
-$('off').onclick=()=>act(()=>{requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,'solid',[0,0,0],[0,0,0],profile.lightingMapping);syncLights();status('所选键已设为熄灭，尚未写入。');});
+$('palette-brightness').oninput=()=>act(()=>{requireEditablePalette();const level=Number($('palette-brightness').value);requireThat(Number.isInteger(level)&&level>=0&&level<=4,'亮度须为 0～4。');profile.snapshot.parameters[2]=level;$('brightness').value=level;$('brightness-label').textContent=level;status('配色全局亮度已保存到草稿，原始 RGB 保留；尚未写入。');});
+$('paint').onclick=()=>act(()=>{requireEditablePalette();requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,$('pattern').value,rgb($('hex').value),rgb($('end-color').value),profile.lightingMapping);syncLights();status(`已为 ${selection.size} 键加入配色，尚未写入。`);});
+$('off').onclick=()=>act(()=>{requireEditablePalette();requireThat(profile.snapshot.colors,'请读取包含颜色的完整配置。');paint(profile.snapshot,selection,'solid',[0,0,0],[0,0,0],profile.lightingMapping);syncLights();status('所选键已设为熄灭，尚未写入。');});
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;
 $('save-polling-draft').onclick=()=>act(()=>{
   requireThat(typeof profile.windowsTemplateJSON==='string','请先导入包含设备设置的 Windows 官方 JSON。');
