@@ -1915,6 +1915,52 @@ def inspect_basic_apply_refresh(pe):
             "limits": "Classifies these refresh inputs and helper destinations. The mode methods and indirect or nested calls are not an exhaustive transport audit; this does not prove that no other setting command exists. No program execution, device write or polling-rate acceptance."}
 
 
+def inspect_basic_apply_transport_chain(pe):
+    """Pin the entire ordinary polling apply tail, not only its JSON store."""
+    bodies = {
+        0x4AFF1F: (0x4B009E, "8f585476038b156c98bcd40cf4ae94eabd26f8677d75f39a8009f6f350aad063"),
+        0x42B4B0: (0x42B4C4, "2e23e878a1a20b7d4efb6ab7b062acfa909bb757012140977f596d70b23a8eff"),
+    }
+    for start, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Unexpected ordinary polling apply tail or cached profile getter")
+    checks = {
+        0x4AFFF4: "668945e6", 0x4B001C: "e89fb80400",
+        0x4B002F: "8b8200030000", 0x4B0035: "ffd0",
+        0x4B0045: "8b8230020000", 0x4B004B: "ffd0",
+        0x4B004D: "8b0d7cd07c00", 0x4B0054: "8b1580d07c00",
+        0x4B005B: "6a01", 0x4B005D: "6a00",
+        0x4B0065: "8b88c01e0000", 0x4B006B: "e840b4f7ff",
+        0x4B0070: "50", 0x4B007F: "8b82bc020000",
+        0x4B0085: "ffd0", 0x4B0087: "c745fcffffffff",
+        0x4B0094: "e8874df7ff", 0x42B4BA: "8b80240b0000",
+    }
+    for address, raw in checks.items():
+        if pe.at(address, len(bytes.fromhex(raw))) != bytes.fromhex(raw):
+            raise ValueError(f"Unexpected ordinary polling apply ABI instruction at {address:#x}")
+    virtuals = {0x300: 0x4FB2F0, 0x230: 0x4F9C10, 0x2BC: 0x500790}
+    for offset, target in virtuals.items():
+        if pe.pointer(0x77F604+offset) != target:
+            raise ValueError("Unexpected ordinary polling apply target virtual")
+    return {
+        "functionBodies": {hex(a): {"endExclusive": hex(b), "sha256": h}
+                           for a, (b, h) in bodies.items()},
+        "instructionChecks": len(checks),
+        "ordinarySettingStore": {"field": "ReportSelectItem", "structureByte": 6,
+                                 "call": "0x4b001c -> 0x4fb8c0"},
+        "orderedCalls": ["+0x300 -> 0x4fb2f0 profile save",
+                         "+0x230 -> 0x4f9c10 state refresh",
+                         "0x42b4b0 profile index getter",
+                         "+0x2bc -> 0x500790 parameter sender"],
+        "profileIndex": {"source": "control+0xb24 host cache", "controlSource": "host+0x1ec0",
+                         "getterReadsItsStackArguments": False},
+        "senderArguments": ["cachedProfileIndex", 0, 1, "global+0x7cd080", "global+0x7cd07c"],
+        "senderReturnCheckedInThisTail": False,
+        "senderNextAction": "0x4b0087 cleanup state; string destructor; jump out",
+        "limits": "Applies only when the selected object uses the audited 01CE table and ordinary PID branch. This tail has no extra polling report or sender-result acceptance, but nested refresh callbacks and other entry points are not excluded. Existing parameter sender coverage still excludes offsets53/54 for 01CE; no conclusion that all official polling settings are ineffective or unsupported. No hardware write/persistence proof.",
+    }
+
+
 def inspect_basic_apply_save(pe):
     """Resolve the save virtuals separately from the following USB sender."""
     checks = {
@@ -3276,7 +3322,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 75,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 76,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3318,6 +3364,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "pollingReloadAllowlist": inspect_polling_reload_allowlist(pe),
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
+        "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
