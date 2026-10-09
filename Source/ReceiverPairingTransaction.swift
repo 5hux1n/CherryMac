@@ -40,6 +40,7 @@ struct ReceiverPairingTransaction {
     }
     mutating func backupSaved(reference: String) throws {
         guard phase == .backup, !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,reference.utf16.count<=4096 else { throw InvalidTransition() }
+        try ReceiverPairingBackupReference.validate(reference)
         backupReference = reference
         record("backupSaved", reference)
         phase = .keyboardStart

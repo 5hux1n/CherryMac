@@ -68,7 +68,7 @@ struct ReceiverPairingJournal {
                     throw JournalError(message:"配对日志历史已变化或已结束，不覆盖原记录。")
                 }
             }
-            let record=Record(format:"CherryMacPairingCheckpoint",version:3,id:operationID,
+            let record=Record(format:"CherryMacPairingCheckpoint",version:4,id:operationID,
                               revision:state.events.count,savedAt:ISO8601DateFormatter().string(from:Date()),state:state)
             try validate(record, id:operationID)
             let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys,.prettyPrinted]
@@ -94,7 +94,7 @@ struct ReceiverPairingJournal {
     private func validate(_ record: Record, id: String) throws {
         let s=record.state
         try s.selection.validate()
-        guard record.format=="CherryMacPairingCheckpoint",record.version==3,record.id==id,
+        guard record.format=="CherryMacPairingCheckpoint",record.version==4,record.id==id,
               record.revision==s.events.count,(1...256).contains(record.revision),(0...5).contains(s.pollCount),
               s.events.enumerated().allSatisfy({ $0.element.sequence==$0.offset+1 && !$0.element.action.isEmpty && $0.element.action.utf16.count<=64 && $0.element.detail.utf16.count<=8192 }),
               s.backupReference == nil || (!(s.backupReference!.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty) && s.backupReference!.utf16.count<=4096),

@@ -1,3 +1,4 @@
+import {validateCompletePairingBackupReference} from './receiver-pairing-backup-reference.js';
 import {checkedReceiverPairingSelection,sameReceiverPairingSelection} from './receiver-pairing-selection.js';
 // Pure stage controller. Caller owns saved backup, validated replies, liveness,
 // request logging and complete post-pair configuration comparison. No HID calls.
@@ -14,7 +15,7 @@ export class ReceiverPairingTransaction {
   #record(action,detail){this.#events.push({sequence:this.#events.length+1,phase:this.#phase,action,detail});}
   backupSaved(reference){
     this.#require(this.#phase==='backup'&&typeof reference==='string'&&reference.trim().length>0&&reference.length<=4096);
-    this.#backup=reference;this.#record('backupSaved',reference);this.#phase='keyboardStart';
+    validateCompletePairingBackupReference(reference);this.#backup=reference;this.#record('backupSaved',reference);this.#phase='keyboardStart';
   }
   beginOperation(current){
     this.#require(!this.terminal&&!this.#pending&&this.#phase!=='backup'&&this.#backup!==null);

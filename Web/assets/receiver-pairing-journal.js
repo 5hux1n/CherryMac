@@ -51,9 +51,9 @@ function validateTransitions(state){
 }
 function checkedRecord(value,id){
   const keys=['format','version','id','revision','savedAt','state'];
-  if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key))||value.format!=='CherryMacPairingCheckpoint'||value.version!==3||value.id!==id||!Number.isInteger(value.revision)||value.revision<1||value.revision>256||typeof value.savedAt!=='string'||!Number.isFinite(Date.parse(value.savedAt)))fail('配对日志格式或身份缺失，保留原记录。');
+  if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key))||value.format!=='CherryMacPairingCheckpoint'||value.version!==4||value.id!==id||!Number.isInteger(value.revision)||value.revision<1||value.revision>256||typeof value.savedAt!=='string'||!Number.isFinite(Date.parse(value.savedAt)))fail('配对日志格式或身份缺失，保留原记录。');
   const state=checkpoint(value.state);if(value.revision!==state.events.length)fail('配对日志事件编号不一致。');
-  return {format:value.format,version:3,id,revision:value.revision,savedAt:value.savedAt,state};
+  return {format:value.format,version:4,id,revision:value.revision,savedAt:value.savedAt,state};
 }
 function checkedRecords(input,id){
   if(!Array.isArray(input)||input.length>256)fail('配对日志数量异常。');
@@ -81,7 +81,7 @@ export async function savePairingCheckpoint(id,input){
           if(previous.revision===revision&&JSON.stringify(previous.state)===JSON.stringify(state)){result=previous;return;}
           if(previous.revision>=revision||JSON.stringify(previous.state.events)!==JSON.stringify(state.events.slice(0,previous.revision))||(previous.state.backupReference!==null&&previous.state.backupReference!==state.backupReference)||['completed','failed','cancelled'].includes(previous.state.phase))fail('配对日志历史已变化或已结束，不覆盖原记录。');
         }
-        result={format:'CherryMacPairingCheckpoint',version:3,id,revision,savedAt:new Date().toISOString(),state};checkedRecord(result,id);
+        result={format:'CherryMacPairingCheckpoint',version:4,id,revision,savedAt:new Date().toISOString(),state};checkedRecord(result,id);
         if(new TextEncoder().encode(JSON.stringify(result)).length>3_000_000)fail('配对日志超过大小限制。');
         const added=records.add(result);added.onsuccess=()=>{
           const read=records.get([id,revision]);read.onsuccess=()=>{try{
