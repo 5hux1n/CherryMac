@@ -3186,11 +3186,32 @@ def inspect_pairing_completion(pe):
     for (start,end), expected in bodies.items():
         if hashlib.sha256(pe.at(start,end-start)).hexdigest() != expected:
             raise ValueError("Pairing completion code differs")
+    packet_checks={
+        0x4DEE79:'c645bc00',0x4DEE7D:'6a3f',0x4DEE7F:'6a00',0x4DEE95:'c64415bc04',
+        0x4DEEA0:'0fb74844',0x4DEEB1:'c64405bca1',0x4DEEC0:'c64415bc21',
+        0x4DEF69:'c78574ffffff03000000',0x4DEF8E:'83bd74ffffff40',
+        0x4DF0A9:'c645bc00',0x4DF0AD:'6a3f',0x4DF0AF:'6a00',
+        0x4DF0E1:'c64405bca0',0x4DF0F0:'c64415bc20',
+        0x4DDE69:'c645bc00',0x4DDE6D:'6a3f',0x4DDE6F:'6a00',0x4DDE99:'c6440dbcaa',
+        0x4DDF42:'c78570ffffff03000000',0x4DDF67:'83bd70ffffff40',
+        0x4DDF97:'88540dbc',0x4DE022:'0fb6940d7cffffff',
+        0x4DE042:'83bd58ffffff01',0x4DE05A:'0fb6940d7cffffff',
+    }
+    for address,encoded in packet_checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:raise ValueError("Unexpected pairing packet field instruction")
     imported=b'Sleep\0'
     if pe.at(pe.base+pe.pointer(0x6ebcf4)+2,len(imported)) != imported:
         raise ValueError("Pairing polling delay import differs")
     return {
         'codeSHA256':{f'{a:#x}..{b:#x}':v for (a,b),v in bodies.items()},
+        'packetFieldChecks':len(packet_checks),
+        'requestLayout':{'reportBytes':64,'reportID':4,'reportIDOffset':0,'commandOffset':3,
+                         'selectorField':'communication UInt16+0x44; exactly1 selects high command, all other values select low command',
+                         'checksumOffsets':[1,2],'checksumCoverage':[3,63],
+                         'payload':'Zero-filled; length/offset/status request bytes4..7 remain zero',
+                         'startCommands':[0x21,0xa1],'prepareCommands':[0x20,0xa0],'queryCommand':0xaa,
+                         'responseLimits':'Named methods establish transport result1, byte7 error flags FF/FE and query byte8 FF; they do not establish command/checksum echo acceptance. A real adapter still needs endpoint/reply correlation and finite I/O.'},
         'polling':{'workflow':'0x4b66a5..0x4b6712','helper':'0x4dde50',
                    'maximumCalls':5,'delayAfterFalseMilliseconds':2000,
                    'successMessage':'message_text_32','failureMessage':'message_text_33',
@@ -3498,7 +3519,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 81,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 82,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
