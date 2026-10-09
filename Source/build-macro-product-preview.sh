@@ -17,15 +17,15 @@ TASK_PREVIEW_APP_NAME="CherryMacMacroPreview.app"
 TASK_PREVIEW_IDENTIFIER="local.cherrymac.macro-product-preview"
 TASK_PREVIEW_DISPLAY="CherryMac Macro & Text Preview"
 TASK_PREVIEW_BUNDLE_NAME="CherryMac Macro Preview"
-TASK_PREVIEW_VERSION="0.94.0"
-TASK_PREVIEW_BUILD="96"
+TASK_PREVIEW_VERSION="0.95.0"
+TASK_PREVIEW_BUILD="97"
 TASK_PREVIEW_FLAGS=(-D CHERRY_MACRO_PRODUCT)
 if [[ $# -eq 2 ]]; then
     TASK_PREVIEW_APP_NAME="CherryMacLightingAcceptance.app"
     TASK_PREVIEW_IDENTIFIER="local.cherrymac.lighting-acceptance"
     TASK_PREVIEW_DISPLAY="CherryMac Lighting Acceptance"
-    TASK_PREVIEW_VERSION="0.1.49"
-    TASK_PREVIEW_BUILD="50"
+    TASK_PREVIEW_VERSION="0.1.50"
+    TASK_PREVIEW_BUILD="51"
     TASK_PREVIEW_FLAGS+=(-D CHERRY_LIGHTING_TEST)
     TASK_PREVIEW_BUNDLE_NAME="$TASK_PREVIEW_DISPLAY"
 fi
@@ -39,7 +39,7 @@ TASK_PREVIEW_STAGE="$(mktemp -d "$TASK_PREVIEW_DIR/.macro-preview.XXXXXX")"
 trap 'rm -rf "$TASK_PREVIEW_STAGE"' EXIT
 mkdir -p "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/MacOS"
 TASK_PREVIEW_SOURCES=()
-for TASK_PREVIEW_NAME in main InputRouter CherryHardware CalculatorKeyTest KeymapWrite CalculatorHardwareTestController CherryMacro HardwareProfile WindowsProfile LightingModel HardwareWindow HardwareLighting HardwareExtendedBackup ExtendedHardwareBackup ExtendedHardwareBackupStore ExtendedHardwareCapture ExtendedHardwareReadFrames ExtendedCaptureJournal ExtendedHardwareUSB ExtendedUSBRegistryIdentity CalculatorService HardwareTests MacroPhysicalStop; do
+for TASK_PREVIEW_NAME in main InputRouter CherryHardware CalculatorKeyTest KeymapWrite CalculatorHardwareTestController CherryMacro HardwareProfile WindowsProfile LightingModel HardwareWindow HardwareLighting HardwareExtendedBackup ExtendedHardwareBackup ExtendedHardwareBackupStore ExtendedHardwareCapture ExtendedHardwareReadFrames ExtendedCaptureJournal ExtendedHardwareUSB ExtendedUSBRegistryIdentity ReceiverUSBInventory ReceiverPairingReports CalculatorService HardwareTests MacroPhysicalStop; do
     TASK_PREVIEW_SOURCES+=("$TASK_SOURCE_DIR/$TASK_PREVIEW_NAME.swift")
 done
 xcrun swiftc "${TASK_PREVIEW_FLAGS[@]}" "${TASK_PREVIEW_SOURCES[@]}" \

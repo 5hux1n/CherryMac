@@ -415,6 +415,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("查看已接受的读取数、中断阶段和备份编号；可导出日志供网页版检查。历史日志不会恢复配置。",12),8,468,850,45,in:device)
         let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
         place(discardResult,208,253,300,32,in:device)
+        place(button("查看接收器连接",#selector(inspectReceiverConnection)),8,529,260,32,in:device)
         let settings=tabs.tabViewItems.last!.view!
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
@@ -562,6 +563,15 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 var reply=hostTextBridgeStatus()
                 reply["usbIdentity"]=["sessionToken":identity.sessionToken,"vendorID":identity.vendorID,
                     "productID":identity.productID,"usbRevision":identity.usbRevision,"transport":identity.transport]
+                completion(HostTextBridgeRequest.response(origin:origin,object:reply))
+            case "/v1/receiver-inventory":
+                guard body.isEmpty,!busy,macroRecordingSheet==nil,window?.attachedSheet==nil,
+                      window?.isVisible==true,hostTextService.stage == .stopped else{
+                    throw HardwareError(message:"请先停止文本服务、完成客户端操作，并保持配置窗口开启。")
+                }
+                let inventory=try ReceiverUSBInventory.read()
+                var reply=hostTextBridgeStatus()
+                reply["receiverInventory"]=try JSONSerialization.jsonObject(with:JSONEncoder().encode(inventory))
                 completion(HostTextBridgeRequest.response(origin:origin,object:reply))
             case "/v1/activate":
                 guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,window?.isVisible==true,let root=body["officialJSON"] as? [String:Any] else{throw HardwareError(message:"请先完成客户端当前操作，并保持配置窗口开启。")}
@@ -734,6 +744,24 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
     #endif
+    @objc func inspectReceiverConnection(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        do{
+            let inventory=try ReceiverUSBInventory.read()
+            let counts=[("keyboard","键盘"),("receiver","接收器")].map{role,name in
+                let rows=inventory.entries.filter{$0.role==role}
+                if rows.isEmpty{return "\(name)：未发现 USB 连接"}
+                let supported=rows.filter(\.configurationReportSupported).count
+                return "\(name)：发现 \(rows.count) 个接口，其中 \(supported) 个具备配置报告接口"
+            }
+            let details=inventory.entries.prefix(6).map{entry in
+                "\(entry.role=="keyboard" ? "键盘":"接收器") · \(String(format:"%04X:%04X",entry.vendorID,entry.productID)) · USB 描述版本 \(String(format:"%04X",entry.usbRevision))"
+            }
+            let alert=NSAlert();alert.messageText="键盘与接收器连接"
+            alert.informativeText=(counts+details+["仅显示本次查询的 USB 描述信息，不代表已配对或配置保持。配对配置尚未开放。"] ).joined(separator:"\n")
+            alert.beginSheetModal(for:window)
+        }catch{message.stringValue=error.localizedDescription}
+    }
     @objc func openMacSettings(){(NSApp.delegate as? Adapter)?.showSettings()}
     @objc func chooseTab(_ sender:NSButton){
         guard let tabs=tabView,(0..<tabs.tabViewItems.count).contains(sender.tag) else{return}

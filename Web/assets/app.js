@@ -1,3 +1,4 @@
+import {receiverInventorySummary} from './receiver-inventory.js?v=0.6.0';
 import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
 import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
@@ -561,6 +562,11 @@ if(textProduct){
       $('usb-identity-summary').textContent=`目标 USB：${identity.vendorID.toString(16).padStart(4,'0').toUpperCase()}:${identity.productID.toString(16).padStart(4,'0').toUpperCase()} · USB 版本 ${identity.usbRevision.toString(16).padStart(4,'0').toUpperCase()} · 连接标识 ${identity.sessionToken}。仅本次查询时有效；未读取或写入配置。`;
       status('已核对当前 USB 描述信息。');
     }catch(error){$('usb-identity-summary').textContent='核对失败：'+error.message;throw error;}
+  });
+  $('receiver-inventory-read').onclick=()=>operation(async()=>{
+    $('receiver-inventory-summary').textContent='正在查看接收器连接…';
+    try{const inventory=await textBridge.receiverInventory();$('receiver-inventory-summary').textContent=receiverInventorySummary(inventory);status('已查看键盘与接收器的 USB 描述信息。');}
+    catch(error){$('receiver-inventory-summary').textContent='查看失败：'+error.message;throw error;}
   });
   $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
   $('text-bridge-start').onclick=()=>operation(async()=>{

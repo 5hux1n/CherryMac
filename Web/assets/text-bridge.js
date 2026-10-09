@@ -1,3 +1,4 @@
+import {checkedReceiverInventory} from './receiver-inventory.js?v=0.6.0';
 import {requireThat} from './model.js?v=0.6.0';
 import {checkedCaptureIdentity} from './extended-hardware-capture.js?v=0.6.0';
 
@@ -31,6 +32,12 @@ export class HostTextBridge{
     await this.resume();const value=await this.request('usb-identity');
     requireThat(value.state==='stopped'&&!value.busy,'客户端尚未释放配置接口。');
     return checkedCaptureIdentity(value.usbIdentity);
+  }
+  async receiverInventory(){
+    requireThat(this.paired,'请先连接 Mac 联动服务，以查看接收器。');
+    await this.resume();const value=await this.request('receiver-inventory');
+    requireThat(value.state==='stopped'&&!value.busy,'客户端尚未释放配置接口。');
+    return checkedReceiverInventory(value.receiverInventory);
   }
   async activate(root){requireThat(this.paired,'请先连接 Mac 服务。');await this.resume();return this.request('activate',{officialJSON:root});}
   async suspend(){if(!this.paired)return;await this.resume();const value=await this.request('suspend');requireThat(value.state==='stopped'&&!value.busy,'Mac 服务尚未释放配置接口。');}

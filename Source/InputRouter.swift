@@ -362,7 +362,7 @@ struct HostTextBridgeRequest {
         }
         guard delimiter.lowerBound<=16_384,let header=String(data:bytes[..<delimiter.lowerBound],encoding:.utf8) else{throw HardwareError(message:"联动请求头无效。")}
         let lines=header.components(separatedBy:"\r\n"),first=lines[0].components(separatedBy:" ")
-        guard first.count==3,first[2]=="HTTP/1.1",["POST","OPTIONS"].contains(first[0]),["/v1/pair","/v1/status","/v1/activate","/v1/suspend","/v1/unpair","/v1/usb-identity"].contains(first[1]) else{throw HardwareError(message:"联动请求不支持。")}
+        guard first.count==3,first[2]=="HTTP/1.1",["POST","OPTIONS"].contains(first[0]),["/v1/pair","/v1/status","/v1/activate","/v1/suspend","/v1/unpair","/v1/usb-identity","/v1/receiver-inventory"].contains(first[1]) else{throw HardwareError(message:"联动请求不支持。")}
         var fields:[String:String]=[:]
         for line in lines.dropFirst(){
             guard let colon=line.firstIndex(of:":") else{throw HardwareError(message:"联动请求头无效。")}
