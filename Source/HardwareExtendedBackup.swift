@@ -33,25 +33,67 @@ extension HardwareWindowController {
             }
         }catch{message.stringValue="扩展捕获日志无法检查："+error.localizedDescription+"。原始记录保留。"}
     }
+    @objc func cancelExtendedCapture(){
+        guard extendedCaptureActive else{return}
+        extendedCaptureCancelled=true;extendedCaptureCancelButton?.isEnabled=false
+        extendedCaptureProgress.stringValue="正在停止后续读取；已保存事件和备份保留。"
+    }
+    @objc func openLastExtendedCaptureJournal(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{return}
+        guard let id=UserDefaults.standard.string(forKey:"hardware.lastExtendedCaptureID"),
+              let uuid=UUID(uuidString:id),uuid.uuidString.lowercased()==id else{
+            message.stringValue="尚无已保存的扩展捕获日志；可检查已有日志文件夹。";return
+        }
+        let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/ExtendedCaptureJournal")
+        let folder=directory.appendingPathComponent(id)
+        do{
+            guard !(try ExtendedCaptureJournal(directory:directory).load(id:id)).isEmpty else{
+                throw HardwareError(message:"最近捕获没有可核对的事件。")
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([folder])
+        }catch{message.stringValue="最近捕获日志无法打开："+error.localizedDescription}
+    }
     @objc func captureExtendedBackup(){
         guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        extendedCaptureActive=true;extendedCaptureCancelled=false
+        extendedCaptureCancelButton?.isHidden=false;extendedCaptureCancelButton?.isEnabled=true
+        extendedCaptureProgress.stringValue="正在等待文本服务释放 USB；可以取消，不写入键盘。"
         message.stringValue="正在读取两遍扩展前缀并保存核对；不写入配置…"
         // Wait behind the queued host-text shutdown before opening another
         // USB session, then use the main run loop for the read-only adapter.
         queue.async{[weak self] in DispatchQueue.main.async{[weak self] in
             guard let self else{return}
-            defer{self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()}
+            defer{
+                self.extendedCaptureActive=false;self.extendedCaptureCancelButton?.isHidden=true
+                self.extendedCaptureCancelButton?.isEnabled=false
+                self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+            }
+            guard !self.extendedCaptureCancelled,self.window?.isVisible==true else{
+                self.extendedCaptureProgress.stringValue="已取消，未开始扩展 USB 读取。"
+                self.message.stringValue="扩展读取已取消，键盘未改写。";return
+            }
             let base=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac")
             let store=ExtendedHardwareBackupStore(directory:base.appendingPathComponent("ExtendedHardwareBackups"))
             let journal=ExtendedCaptureJournal(directory:base.appendingPathComponent("ExtendedCaptureJournal"))
             do{
                 let usb=try ExtendedHardwareUSB()
-                let result=try usb.capture(store:store,journal:journal,cancelled:{self.window?.isVisible != true})
+                let result=try usb.capture(store:store,journal:journal,
+                    cancelled:{self.extendedCaptureCancelled || self.window?.isVisible != true},
+                    progress:{id,event in
+                        if event.phase=="started"{UserDefaults.standard.set(id,forKey:"hardware.lastExtendedCaptureID")}
+                        if event.phase=="readAccepted"{
+                            self.extendedCaptureProgress.stringValue="只读捕获：\((event.sequence-1)/2)/160，正在核对第 \(event.pass) 遍。已保存事件日志；可取消。"
+                        }else if event.phase=="saving" || event.phase=="saved"{
+                            self.extendedCaptureProgress.stringValue="160 条读取已接受，正在保存扩展备份并加载核对…"
+                        }
+                    })
                 let file=store.directory.appendingPathComponent(result.receipt.backupReference+".json")
                 self.message.stringValue="扩展前缀已保存，两遍一致且本机读回核对通过；仍缺四个末字节，不是完整恢复备份。"
+                self.extendedCaptureProgress.stringValue="两遍读取一致，备份已保存并重新加载核对；可下载副本或打开最近捕获日志。"
                 NSWorkspace.shared.activateFileViewerSelecting([file])
             }catch{
+                self.extendedCaptureProgress.stringValue="读取未完成；已保存记录保留，可打开最近捕获日志。"
                 self.message.stringValue="扩展只读捕获未完成："+error.localizedDescription
                 if let failure=error as? ExtendedHardwareUSB.OperationFailure{
                     self.message.stringValue+="。日志编号："+failure.operationID

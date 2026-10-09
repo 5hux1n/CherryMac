@@ -5,6 +5,7 @@ import {listExtendedCaptureJournalIDs,loadExtendedCaptureJournal,inspectExtended
 
 // Captured and imported records never enter the editor or a write sender.
 export function installExtendedBackupEditor(operation,{capture=null}={}){
+  const phases={started:'开始',readPrepared:'待读取回复',readAccepted:'已接受读取',saving:'保存中',saved:'已保存，待核对',complete:'记录显示流程结束',failed:'失败',cancelled:'已取消'};
   const $=id=>document.getElementById(id);let selected=null,activeCapture=null,lastCaptureID=null;
   const render=busy=>{
     for(const id of ['extended-inspect','extended-file','extended-list','extended-saved','extended-load','extended-log-inspect','extended-log-file','extended-log-list','extended-log-saved','extended-log-load'])$(id).disabled=busy;
@@ -25,7 +26,8 @@ export function installExtendedBackupEditor(operation,{capture=null}={}){
     clear();const controller=new AbortController();activeCapture=controller;lastCaptureID=crypto.randomUUID();render(true);
     $('extended-log-summary').textContent=`捕获编号：${lastCaptureID}；准备读取。`;
     try{
-      const result=await capture({id:lastCaptureID,cancelled:()=>controller.signal.aborted,progress:count=>{
+      const result=await capture({id:lastCaptureID,cancelled:()=>controller.signal.aborted,progress:(count,phase)=>{
+        if(['saving','saved'].includes(phase)){$('extended-summary').textContent='两遍读取一致，正在保存备份并加载核对…';return;}
         $('extended-summary').textContent=`只读捕获进度：${count}/160。取消会停止后续读取，并保留已保存记录。`;
       }});
       show(result.snapshot);$('extended-summary').textContent+=` 已保存并从本机库重新核对：${result.backupReference}。建议下载备份及日志；不代表完整恢复或断电验收通过。`;
@@ -65,7 +67,7 @@ export function installExtendedBackupEditor(operation,{capture=null}={}){
   $('extended-log-load').onclick=()=>operation(async()=>{
     const id=$('extended-log-saved').value;if(!id)throw new Error('请先查看捕获记录并选择编号。');
     const summary=inspectExtendedCaptureRecords(await loadExtendedCaptureJournal(id));lastCaptureID=id;
-    $('extended-log-summary').textContent=`日志编号：${id}；已接受读取 ${summary.acceptedReads}/160；最后阶段：${summary.lastPhase}；备份编号：${summary.backupReference??'尚无'}。${summary.detail} 可下载本记录；历史记录不证明当前状态。`;
+    $('extended-log-summary').textContent=`日志编号：${id}；已接受读取 ${summary.acceptedReads}/160；最后阶段：${phases[summary.lastPhase]??summary.lastPhase}；备份编号：${summary.backupReference??'尚无'}。${summary.detail} 可下载本记录；历史记录不证明当前状态。`;
   },{localOnly:true});
   $('extended-log-inspect').onclick=()=>$('extended-log-file').click();
   $('extended-log-file').onchange=()=>{
@@ -74,7 +76,6 @@ export function installExtendedBackupEditor(operation,{capture=null}={}){
     return operation(async()=>{
       if(file.size>2_000_000)throw new Error('扩展捕获日志超过 2 MB。');
       const summary=inspectExtendedCaptureRecords(JSON.parse(await file.text()));
-      const phases={started:'开始',readPrepared:'待读取回复',readAccepted:'已接受读取',saving:'保存中',saved:'已保存，待核对',complete:'记录显示流程结束',failed:'失败',cancelled:'已取消'};
       $('extended-log-summary').textContent=`日志编号：${summary.id}；已接受读取：${summary.acceptedReads}/160；最后阶段：${phases[summary.lastPhase]??summary.lastPhase}；备份编号：${summary.backupReference??'尚无'}。${summary.detail} 这里只检查历史文件，不连接键盘；记录结束不等于当前配置核对、完整恢复或断电验收。`;
     },{localOnly:true});
   };

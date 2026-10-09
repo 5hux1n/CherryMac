@@ -60,13 +60,21 @@ final class ExtendedHardwareUSB {
     }
     private func currentIdentity()throws->ExtendedHardwareCapture.Identity{
         guard Thread.isMainThread,!dead,let device else{try fail("扩展只读USB会话已失效。")}
+        func integer(_ key:String)throws->Int{
+            guard let value=IOHIDDeviceGetProperty(device,key as CFString) as? NSNumber,
+                  CFGetTypeID(value) != CFBooleanGetTypeID(),value.doubleValue.isFinite,
+                  value.doubleValue.rounded()==value.doubleValue,value.doubleValue>=0,value.doubleValue<=65535 else{
+                try fail("目标USB描述字段缺失或无效。")
+            }
+            return value.intValue
+        }
         var registryID:UInt64=0
         guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&registryID)==KERN_SUCCESS,
-              let vendor=IOHIDDeviceGetProperty(device,kIOHIDVendorIDKey as CFString) as? NSNumber,
-              let product=IOHIDDeviceGetProperty(device,kIOHIDProductIDKey as CFString) as? NSNumber,
-              let revision=IOHIDDeviceGetProperty(device,kIOHIDVersionNumberKey as CFString) as? NSNumber,
-              let transport=IOHIDDeviceGetProperty(device,kIOHIDTransportKey as CFString) as? String else{try fail("无法读取扩展USB会话的真实身份。")}
-        return .init(sessionToken:String(registryID),vendorID:vendor.intValue,productID:product.intValue,usbRevision:revision.intValue,transport:transport)
+              let transport=IOHIDDeviceGetProperty(device,kIOHIDTransportKey as CFString) as? String else{
+            try fail("无法读取扩展USB会话的真实身份。")
+        }
+        return .init(sessionToken:String(registryID),vendorID:try integer(kIOHIDVendorIDKey),
+            productID:try integer(kIOHIDProductIDKey),usbRevision:try integer(kIOHIDVersionNumberKey),transport:transport)
     }
     func identity()throws->ExtendedHardwareCapture.Identity{
         let current=try currentIdentity();try current.validate()
@@ -97,14 +105,14 @@ final class ExtendedHardwareUSB {
         }catch{dead=true;throw error}
     }
     func capture(store:ExtendedHardwareBackupStore,journal:ExtendedCaptureJournal,
-                 cancelled:()->Bool)throws->(operationID:String,receipt:ExtendedHardwareCapture.Receipt){
+                 cancelled:()->Bool,progress:(String,ExtendedHardwareCapture.Event)->Void={_,_ in})throws->(operationID:String,receipt:ExtendedHardwareCapture.Receipt){
         guard !captureActive else{try fail("扩展捕获尚未结束，不能重复启动。")}
         captureActive=true;defer{captureActive=false}
         let bound=try identity(),operationID=UUID().uuidString.lowercased()
         do{
             let receipt=try ExtendedHardwareCapture.capture(identity:{try self.identity()},cancelled:cancelled,
                 nowMilliseconds:{Date().timeIntervalSince1970*1000},
-                persist:{try journal.save(id:operationID,identity:bound,event:$0)},
+                persist:{event in try journal.save(id:operationID,identity:bound,event:event);progress(operationID,event)},
                 exchange:{try self.exchange($0,cancelled:cancelled)},save:store.save,load:store.load)
             return (operationID,receipt)
         }catch{throw OperationFailure(operationID:operationID,cause:error)}

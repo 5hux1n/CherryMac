@@ -24,7 +24,7 @@ const extendedBackupEditor=installExtendedBackupEditor(operation,{capture:async(
     const current=await textBridge.usbIdentity();
     requireThat(Object.keys(identity).every(key=>identity[key]===current[key]),'USB 身份已改变，请重新连接并开始新的捕获。');return current;
   },cancelled:()=>cancelled()||session!==hid,
-    persist:async event=>{await saveExtendedCaptureEvent(id,identity,event);if(event.phase==='readAccepted')progress(Math.ceil((event.sequence-1)/2));},
+    persist:async event=>{await saveExtendedCaptureEvent(id,identity,event);if(event.phase==='readAccepted')progress(Math.ceil((event.sequence-1)/2),event.phase);else if(['saving','saved'].includes(event.phase))progress(160,event.phase);},
     save:saveExtendedHardwareBackup,load:loadExtendedHardwareBackup});
 }});
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};

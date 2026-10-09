@@ -253,6 +253,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let hostTextState=NSTextField(wrappingLabelWithString:"文本服务未开启")
     lazy var hostTextService=HostTextService(onState:{[weak self] state in self?.hostTextState.stringValue=state})
     #endif
+    var extendedCaptureActive=false
+    var extendedCaptureCancelled=false
+    var extendedCaptureCancelButton:NSButton?
+    let extendedCaptureProgress=NSTextField(wrappingLabelWithString:"读取按钮通过 USB 获取两遍扩展前缀并核对保存；文件检查可导出副本。显示未覆盖字节，不写入键盘。")
     var busy=false
     var lastKeyBackup:URL?{UserDefaults.standard.string(forKey:"hardware.lastKeyBackup").map{URL(fileURLWithPath:$0)}}
     var controls:[NSControl]=[]
@@ -403,8 +407,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("打开操作日志",#selector(openLogs)),8,253,180,32,in:device)
         place(button("检查扩展备份文件…",#selector(inspectExtendedBackup)),8,321,260,32,in:device)
         place(button("读取并保存扩展备份",#selector(captureExtendedBackup)),290,321,260,32,in:device)
-        place(label("读取按钮通过 USB 获取两遍扩展前缀并核对保存；文件检查可导出副本。显示未覆盖字节，不写入键盘。",12),8,364,850,45,in:device)
+        let captureCancel=NSButton(title:"取消读取",target:self,action:#selector(cancelExtendedCapture))
+        captureCancel.isHidden=true;extendedCaptureCancelButton=captureCancel;place(captureCancel,570,321,150,32,in:device)
+        extendedCaptureProgress.font = .systemFont(ofSize:12);place(extendedCaptureProgress,8,364,850,45,in:device)
         place(button("检查扩展捕获日志…",#selector(inspectExtendedCaptureJournal)),8,424,260,32,in:device)
+        place(button("打开最近捕获日志",#selector(openLastExtendedCaptureJournal)),290,424,260,32,in:device)
         place(label("查看已接受的读取数、中断阶段和备份编号；可导出日志供网页版检查。历史日志不会恢复配置。",12),8,468,850,45,in:device)
         let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
         place(discardResult,208,253,300,32,in:device)
