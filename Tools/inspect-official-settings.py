@@ -1337,6 +1337,45 @@ def inspect_external_property_binding(pe, dll_path=None):
     return result
 
 
+def inspect_lighting_optional_controls(pe, skin=None):
+    # Bound host UI guards; a hidden XML node alone is not a capability rule.
+    bodies={(0x442480,0x4424A5):"aea561ea71e1cbd7b45f9246af3f90ac390a5e71affc9b8a97969766a8783216",
+            (0x4F7236,0x4F7263):"084ee3f46994f8fb29dffc1e3d60196af5d2d1583df278488a1e8195d4739ef0",
+            (0x442B50,0x442BF7):"519f0e4d5c5453804de4a1adbfc9865171df15b9932aba20ddd39c75ffdc61ce",
+            (0x443CE0,0x443D32):"ffa50e7c3cf92bec885534490f2e590406e9a47c6c6993cc71a9a9806135f89f",
+            (0x446C40,0x446D37):"77c2209b805f7b82dbe0cbe5f99e4087d9c26527aeb5ac62e0cef2231fa7f142"}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:raise ValueError("Optional lighting UI body differs")
+    names={0x731ECC:"deng_highlight_btn",0x731EF4:"sync_light_butt_prosave",0x731A98:"deng_speed_msstyle_layout"}
+    for address,name in names.items():
+        raw=name.encode("utf-16le")+b"\0\0"
+        if pe.at(address,len(raw))!=raw:raise ValueError("Optional lighting UI name differs")
+    if pe.at(0x445399,5)!=b"\x68"+struct.pack("<I",0x731A98):raise ValueError("Milliseconds control helper differs")
+    result={"highlight":{"control":"deng_highlight_btn","visibilitySetter":"0x443ce0 virtual+118 receives argument!=0",
+                         "guard":"442b50: member+86c == 01fb enables highlight; other values hide it",
+                         "memberOrigin":"4f7236: device word+1e1a passed as argument2 to 442480, which stores control+86c; device word+1e18 passed as argument1 to +868",
+                         "targetComparison":"01ce differs from 01fb; the inspected guard takes its hide branch for this PID",
+                         "syncHelper":"446c40 changes normal/sync save visibility; its highlight update is also guarded by +86c==01fb"},
+            "millisecondSpeed":{"control":"deng_speed_msstyle_layout","lookup":"445399 in layout2 helper 445300",
+                                "targetLayout":"Existing target constructor/layout audit selects layout1 helper443e50, not layout2",
+                                "range":"Resource declares deng_speed_slider30 integer0..29 and labels1000ms..30000ms; no target protocol unit is inferred"},
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "limits":"Fixed guard/helper and resource evidence only. Later member changes, indirect visibility calls and complete live notifications remain unproved. Does not authorize highlight or millisecond timing for target; no hardware, runtime or animation proof."}
+    if skin is not None:
+        raw=(Path(skin)/"XML/CustomControlXML/LightControl.xml").read_bytes();digest=hashlib.sha256(raw).hexdigest()
+        if digest!="fade3d80be473a8b0b21d552d902527e7e1618db3c9db80552bbf75d6d66af77":raise ValueError("Optional lighting control resource differs")
+        text=re.sub(r"<!--.*?-->","",raw.decode("utf-8-sig"),flags=re.S)
+        declarations={}
+        for name in ["deng_highlight_btn","sync_light_butt_prosave","deng_speed_msstyle_layout","deng_speed_slider30"]:
+            tags=[tag for tag in re.findall(r"<[^<>]+>",text) if f'name="{name}"' in tag]
+            if len(tags)!=1:raise ValueError("Optional lighting control declaration differs")
+            if name!="deng_speed_slider30" and 'visible="false"' not in tags[0]:raise ValueError("Optional control initial visibility differs")
+            if name=="deng_speed_slider30" and not all(a in tags[0] for a in ['min="0"','max="29"']):raise ValueError("Milliseconds resource range differs")
+            declarations[name]={"initiallyHidden":name!="deng_speed_slider30"}
+        result["resource"]={"sha256":digest,"declarations":declarations}
+    return result
+
+
 def inspect_lighting_color_palette(path):
     data=Path(path).read_bytes();digest=hashlib.sha256(data).hexdigest()
     if digest!="aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b":raise ValueError("ColorPalette DLL differs from analyzed version")
@@ -3194,7 +3233,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 72,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 73,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3215,6 +3254,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultLightingControlUpdates": inspect_default_lighting_control_updates(pe, skin),
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
+        "lightingOptionalControls": inspect_lighting_optional_controls(pe, skin),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
         "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
