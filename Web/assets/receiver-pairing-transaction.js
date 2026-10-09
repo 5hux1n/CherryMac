@@ -3,12 +3,12 @@ import {checkedReceiverPairingSelection,sameReceiverPairingSelection} from './re
 // request logging and complete post-pair configuration comparison. No HID calls.
 export class ReceiverPairingTransaction {
   #selection;#phase='backup';#backup=null;#pending=false;
-  #operation=null;#pollCount=0;#changed=false;#recovery=false;#events=[];
+  #operation=null;#pollCount=0;#changed=false;#recovery=false;#restoreAttempted=false;#events=[];
   constructor(selection){
     this.#selection=checkedReceiverPairingSelection(selection);
     this.#record('created','等待完整备份保存。');
   }
-  get snapshot(){return {selection:structuredClone(this.#selection),phase:this.#phase,backupReference:this.#backup,pending:this.#pending,operationID:this.#operation,pollCount:this.#pollCount,mayHaveChanged:this.#changed,recoveryRequired:this.#recovery,events:this.#events.map(event=>({...event}))};}
+  get snapshot(){return {selection:structuredClone(this.#selection),phase:this.#phase,backupReference:this.#backup,pending:this.#pending,operationID:this.#operation,pollCount:this.#pollCount,mayHaveChanged:this.#changed,recoveryRequired:this.#recovery,restoreAttempted:this.#restoreAttempted,events:this.#events.map(event=>({...event}))};}
   get terminal(){return ['completed','failed','cancelled'].includes(this.#phase);}
   #require(condition){if(!condition)throw new Error('配对流程状态已改变，请重新开始；已有备份仍需保留。');}
   #record(action,detail){this.#events.push({sequence:this.#events.length+1,phase:this.#phase,action,detail});}
@@ -21,7 +21,8 @@ export class ReceiverPairingTransaction {
     let matched=false;try{matched=sameReceiverPairingSelection(current,this.#selection);}catch{}
     if(!matched){this.fail('设备选择已变化，停止配对。');this.#require(false);}
     if(this.#phase==='polling'){this.#require(this.#pollCount<5);this.#pollCount++;}
-    if(['keyboardStart','receiverPrepare','receiverStart'].includes(this.#phase))this.#changed=true;
+    if(this.#phase==='configurationRestore'){this.#require(!this.#restoreAttempted);this.#restoreAttempted=true;}
+    if(['keyboardStart','receiverPrepare','receiverStart','configurationRestore'].includes(this.#phase))this.#changed=true;
     this.#pending=true;this.#operation=this.#events.length+1;
     this.#record('begin',this.#phase==='polling'?`状态查询 ${this.#pollCount}/5`:'开始本阶段操作。');
     return this.#operation;
@@ -39,8 +40,13 @@ export class ReceiverPairingTransaction {
   configurationChecked(operation,unchanged){
     this.#require(this.#phase==='configurationCheck'&&this.#pending&&this.#operation===operation&&typeof unchanged==='boolean');
     this.#pending=false;this.#operation=null;
-    if(unchanged){this.#phase='completed';this.#record('completed','配对状态和原配置核对通过；断电保留尚未验证。');}
-    else this.fail('配对后配置与备份不一致，需要恢复原配置。');
+    if(unchanged){this.#recovery=false;this.#phase='completed';this.#record('completed','配对状态和原配置核对通过；断电保留尚未验证。');}
+    else if(!this.#restoreAttempted){this.#recovery=true;this.#phase='configurationRestore';this.#record('changed','配对后配置发生变化，进入完整备份恢复。');}
+    else this.fail('恢复后配置仍与完整备份不一致，停止且不重试。');
+  }
+  configurationRestored(operation){
+    this.#require(this.#phase==='configurationRestore'&&this.#pending&&this.#operation===operation&&this.#restoreAttempted);
+    this.#pending=false;this.#operation=null;this.#record('restored','完整配置恢复已返回，仍须重新读回核对。');this.#phase='configurationCheck';
   }
   fail(reason){
     if(this.terminal)return;

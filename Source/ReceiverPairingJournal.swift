@@ -12,15 +12,16 @@ struct ReceiverPairingJournal {
         let pollCount: Int
         let mayHaveChanged: Bool
         let recoveryRequired: Bool
+        let restoreAttempted: Bool
         let events: [ReceiverPairingTransaction.Event]
         init(_ value: ReceiverPairingTransaction) {
             selection=value.selection;phase=value.phase; backupReference=value.backupReference; pending=value.pending
             operationID=value.operationID; pollCount=value.pollCount; mayHaveChanged=value.mayHaveChanged
-            recoveryRequired=value.recoveryRequired; events=value.events
+            recoveryRequired=value.recoveryRequired; restoreAttempted=value.restoreAttempted; events=value.events
         }
         private enum CodingKeys: String, CodingKey {
             case selection, phase, backupReference, pending, operationID, pollCount
-            case mayHaveChanged, recoveryRequired, events
+            case mayHaveChanged, recoveryRequired, restoreAttempted, events
         }
         func encode(to encoder: Encoder) throws {
             var container=encoder.container(keyedBy:CodingKeys.self)
@@ -32,6 +33,7 @@ struct ReceiverPairingJournal {
             try container.encode(pollCount,forKey:.pollCount)
             try container.encode(mayHaveChanged,forKey:.mayHaveChanged)
             try container.encode(recoveryRequired,forKey:.recoveryRequired)
+            try container.encode(restoreAttempted,forKey:.restoreAttempted)
             try container.encode(events,forKey:.events)
         }
     }
@@ -66,7 +68,7 @@ struct ReceiverPairingJournal {
                     throw JournalError(message:"配对日志历史已变化或已结束，不覆盖原记录。")
                 }
             }
-            let record=Record(format:"CherryMacPairingCheckpoint",version:2,id:operationID,
+            let record=Record(format:"CherryMacPairingCheckpoint",version:3,id:operationID,
                               revision:state.events.count,savedAt:ISO8601DateFormatter().string(from:Date()),state:state)
             try validate(record, id:operationID)
             let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys,.prettyPrinted]
@@ -92,7 +94,7 @@ struct ReceiverPairingJournal {
     private func validate(_ record: Record, id: String) throws {
         let s=record.state
         try s.selection.validate()
-        guard record.format=="CherryMacPairingCheckpoint",record.version==2,record.id==id,
+        guard record.format=="CherryMacPairingCheckpoint",record.version==3,record.id==id,
               record.revision==s.events.count,(1...256).contains(record.revision),(0...5).contains(s.pollCount),
               s.events.enumerated().allSatisfy({ $0.element.sequence==$0.offset+1 && !$0.element.action.isEmpty && $0.element.action.utf16.count<=64 && $0.element.detail.utf16.count<=8192 }),
               s.backupReference == nil || (!(s.backupReference!.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty) && s.backupReference!.utf16.count<=4096),
@@ -124,6 +126,12 @@ struct ReceiverPairingJournal {
                     throw JournalError(message:"配对日志查询结果无效。")
                 }
                 try replay.statusReceived(operation:operation,paired:event.detail=="设备报告配对完成，继续核对原配置。")
+            case "changed":
+                guard let operation=replay.operationID else{throw JournalError(message:"配对日志缺少配置核对操作。")}
+                try replay.configurationChecked(operation:operation,unchanged:false)
+            case "restored":
+                guard let operation=replay.operationID else{throw JournalError(message:"配对日志缺少恢复操作。")}
+                try replay.configurationRestored(operation:operation)
             case "completed":
                 guard let operation=replay.operationID else{throw JournalError(message:"配对日志缺少配置核对操作。")}
                 try replay.configurationChecked(operation:operation,unchanged:true)
@@ -153,7 +161,7 @@ struct ReceiverPairingJournal {
             guard let raw=try JSONSerialization.jsonObject(with:data) as? [String:Any],
                   Set(raw.keys)==Set(["format","version","id","revision","savedAt","state"]),
                   let state=raw["state"] as? [String:Any],
-                  Set(state.keys)==Set(["selection","phase","backupReference","pending","operationID","pollCount","mayHaveChanged","recoveryRequired","events"]),
+                  Set(state.keys)==Set(["selection","phase","backupReference","pending","operationID","pollCount","mayHaveChanged","recoveryRequired","restoreAttempted","events"]),
                   let selected=state["selection"] as? [String:Any],Set(selected.keys)==Set(["keyboard","receiver"]),
                   ["keyboard","receiver"].allSatisfy({role in
                       guard let endpoint=selected[role] as? [String:Any] else{return false}

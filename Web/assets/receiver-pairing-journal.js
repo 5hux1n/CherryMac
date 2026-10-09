@@ -7,15 +7,15 @@ const open=databaseOpener('CherryMacPairingTransactions',1,database=>{
   database.createObjectStore('heads',{keyPath:'id'});
   database.createObjectStore('checkpoints',{keyPath:['id','revision']});
 },'配对日志数据库被其他页面占用。');
-const phases=new Set(['backup','keyboardStart','receiverPrepare','receiverStart','polling','configurationCheck','completed','failed','cancelled']);
+const phases=new Set(['backup','keyboardStart','receiverPrepare','receiverStart','polling','configurationCheck','configurationRestore','completed','failed','cancelled']);
 const fail=message=>{throw new Error(message);};
 function operationID(id){if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(id))fail('配对日志标识无效。');}
 function checkpoint(input){
-  const value=structuredClone(input),keys=['selection','phase','backupReference','pending','operationID','pollCount','mayHaveChanged','recoveryRequired','events'];
+  const value=structuredClone(input),keys=['selection','phase','backupReference','pending','operationID','pollCount','mayHaveChanged','recoveryRequired','restoreAttempted','events'];
   if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key)))fail('配对日志字段不完整，保留原记录。');
   const selection=checkedReceiverPairingSelection(value.selection);
   if(!value||!phases.has(value.phase)||!Array.isArray(value.events)||value.events.length<1||value.events.length>256)fail('配对日志阶段或事件无效。');
-  for(const key of ['pending','mayHaveChanged','recoveryRequired'])if(typeof value[key]!=='boolean')fail('配对日志状态无效。');
+  for(const key of ['pending','mayHaveChanged','recoveryRequired','restoreAttempted'])if(typeof value[key]!=='boolean')fail('配对日志状态无效。');
   if(!Number.isInteger(value.pollCount)||value.pollCount<0||value.pollCount>5)fail('配对日志查询次数无效。');
   if(value.backupReference!==null&&(typeof value.backupReference!=='string'||!value.backupReference.trim()||value.backupReference.length>4096))fail('配对日志备份引用无效。');
   if(value.pending?(!Number.isInteger(value.operationID)||value.operationID<1||value.operationID>value.events.length):value.operationID!==null)fail('配对日志操作编号无效。');
@@ -23,7 +23,7 @@ function checkpoint(input){
     if(!event||Object.keys(event).length!==4||event.sequence!==index+1||!phases.has(event.phase)||typeof event.action!=='string'||!event.action.length||event.action.length>64||typeof event.detail!=='string'||event.detail.length>8192)fail('配对日志事件无效。');
     return {sequence:event.sequence,phase:event.phase,action:event.action,detail:event.detail};
   });
-  const normalized={selection:structuredClone(selection),phase:value.phase,backupReference:value.backupReference,pending:value.pending,operationID:value.operationID,pollCount:value.pollCount,mayHaveChanged:value.mayHaveChanged,recoveryRequired:value.recoveryRequired,events};
+  const normalized={selection:structuredClone(selection),phase:value.phase,backupReference:value.backupReference,pending:value.pending,operationID:value.operationID,pollCount:value.pollCount,mayHaveChanged:value.mayHaveChanged,recoveryRequired:value.recoveryRequired,restoreAttempted:value.restoreAttempted,events};
   validateTransitions(normalized);return normalized;
 }
 function validateTransitions(state){
@@ -38,6 +38,8 @@ function validateTransitions(state){
       case 'status':
         if(!['设备报告配对完成，继续核对原配置。','设备尚未报告配对完成。'].includes(event.detail))fail('配对日志查询结果无效。');
         replay.statusReceived(snapshot.operationID,event.detail==='设备报告配对完成，继续核对原配置。');break;
+      case 'changed':replay.configurationChecked(snapshot.operationID,false);break;
+      case 'restored':replay.configurationRestored(snapshot.operationID);break;
       case 'completed':replay.configurationChecked(snapshot.operationID,true);break;
       case 'failed':replay.fail(event.detail);break;
       case 'cancelled':replay.cancel();break;
@@ -49,9 +51,9 @@ function validateTransitions(state){
 }
 function checkedRecord(value,id){
   const keys=['format','version','id','revision','savedAt','state'];
-  if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key))||value.format!=='CherryMacPairingCheckpoint'||value.version!==2||value.id!==id||!Number.isInteger(value.revision)||value.revision<1||value.revision>256||typeof value.savedAt!=='string'||!Number.isFinite(Date.parse(value.savedAt)))fail('配对日志格式或身份缺失，保留原记录。');
+  if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key))||value.format!=='CherryMacPairingCheckpoint'||value.version!==3||value.id!==id||!Number.isInteger(value.revision)||value.revision<1||value.revision>256||typeof value.savedAt!=='string'||!Number.isFinite(Date.parse(value.savedAt)))fail('配对日志格式或身份缺失，保留原记录。');
   const state=checkpoint(value.state);if(value.revision!==state.events.length)fail('配对日志事件编号不一致。');
-  return {format:value.format,version:2,id,revision:value.revision,savedAt:value.savedAt,state};
+  return {format:value.format,version:3,id,revision:value.revision,savedAt:value.savedAt,state};
 }
 function checkedRecords(input,id){
   if(!Array.isArray(input)||input.length>256)fail('配对日志数量异常。');
@@ -79,7 +81,7 @@ export async function savePairingCheckpoint(id,input){
           if(previous.revision===revision&&JSON.stringify(previous.state)===JSON.stringify(state)){result=previous;return;}
           if(previous.revision>=revision||JSON.stringify(previous.state.events)!==JSON.stringify(state.events.slice(0,previous.revision))||(previous.state.backupReference!==null&&previous.state.backupReference!==state.backupReference)||['completed','failed','cancelled'].includes(previous.state.phase))fail('配对日志历史已变化或已结束，不覆盖原记录。');
         }
-        result={format:'CherryMacPairingCheckpoint',version:2,id,revision,savedAt:new Date().toISOString(),state};checkedRecord(result,id);
+        result={format:'CherryMacPairingCheckpoint',version:3,id,revision,savedAt:new Date().toISOString(),state};checkedRecord(result,id);
         if(new TextEncoder().encode(JSON.stringify(result)).length>3_000_000)fail('配对日志超过大小限制。');
         const added=records.add(result);added.onsuccess=()=>{
           const read=records.get([id,revision]);read.onsuccess=()=>{try{

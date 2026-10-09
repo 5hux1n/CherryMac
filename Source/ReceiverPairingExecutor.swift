@@ -9,6 +9,7 @@ protocol ReceiverPairingExecutorIO {
     func saveCompleteBackup() async throws -> String
     func performCommand(_ phase: ReceiverPairingTransaction.Phase) async throws
     func queryPaired() async throws -> Bool
+    func restoreCompleteConfiguration(_ reference: String) async throws
     func configurationMatchesBackup(_ reference: String) async throws -> Bool
     func persist(_ transaction: ReceiverPairingTransaction) async throws
     func close() throws
@@ -72,6 +73,10 @@ final class ReceiverPairingExecutor {
                     let paired = try await io.queryPaired()
                     try check()
                     try transaction.statusReceived(operation: operation, paired: paired)
+                case .configurationRestore:
+                    try await io.restoreCompleteConfiguration(reference)
+                    try check()
+                    try transaction.configurationRestored(operation:operation)
                 case .configurationCheck:
                     let matches = try await io.configurationMatchesBackup(reference)
                     try check()

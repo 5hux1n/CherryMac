@@ -43,6 +43,7 @@ import Foundation
     private let selector:(ReceiverPairingFrames.Endpoint)throws->UInt16
     private let exchange:(ReceiverPairingFrames.Plan,String,Int)async throws->[UInt8]
     private let backup:()async throws->String
+    private let restore:(String)async throws->Void
     private let matches:(String)async throws->Bool
     private let rawLog:ReceiverPairingRawLog
     private let shutdown:()throws->Void
@@ -56,12 +57,12 @@ import Foundation
          live:@escaping()throws->ReceiverPairingSelection,
          selector:@escaping(ReceiverPairingFrames.Endpoint)throws->UInt16,
          exchange:@escaping(ReceiverPairingFrames.Plan,String,Int)async throws->[UInt8],
-         backup:@escaping()async throws->String,matches:@escaping(String)async throws->Bool,
+         backup:@escaping()async throws->String,restore:@escaping(String)async throws->Void,matches:@escaping(String)async throws->Bool,
          shutdown:@escaping()throws->Void)throws{
         try selection.validate()
         guard UUID(uuidString:id)?.uuidString.lowercased()==id else{throw WireError(message:"配对操作编号无效。")}
         self.selection=selection;self.id=id;self.journal=journal;self.live=live;self.selector=selector
-        self.exchange=exchange;self.backup=backup;self.matches=matches
+        self.exchange=exchange;self.backup=backup;self.restore=restore;self.matches=matches
         self.rawLog=ReceiverPairingRawLog(directory:journal.directory.appendingPathComponent("raw-reports",isDirectory:true))
         self.shutdown=shutdown
     }
@@ -131,6 +132,22 @@ import Foundation
     }
     func queryPaired()async throws->Bool{
         let reply=try await perform(.polling);guard let paired=reply.paired else{throw WireError(message:"配对查询没有有效判据。")};return paired
+    }
+    func restoreCompleteConfiguration(_ reference:String)async throws{
+        guard !closed,!failed,let checkpoint,checkpoint.phase == .configurationRestore,checkpoint.pending,
+              checkpoint.restoreAttempted,checkpoint.backupReference==reference,
+              let intent=checkpoint.operationID,!consumed.contains(intent) else{
+            throw WireError(message:"完整恢复缺少本次已保存意图。")
+        }
+        consumed.insert(intent)
+        do{
+            _=try currentSelection();try Task.checkCancellation()
+            // Mandatory real complete restore, including its own durable raw
+            // exchange logs and readback; no fallback to prefix-only storage.
+            try await restore(reference)
+            guard !closed,!failed,self.checkpoint==checkpoint else{throw WireError(message:"完整恢复意图已变化。")}
+            _=try currentSelection();try Task.checkCancellation()
+        }catch{failed=true;throw error}
     }
     func configurationMatchesBackup(_ reference:String)async throws->Bool{
         guard !closed,!failed,let checkpoint,checkpoint.phase == .configurationCheck,checkpoint.pending,

@@ -6,13 +6,13 @@ import {savePairingRawExchange} from './receiver-pairing-raw-log.js';
 // The caller must provide a real bounded raw transport and verified complete
 // backup storage. There is no default sender, device opening or selector guess.
 export class ReceiverPairingWireAdapter{
-  #selection;#id;#live;#selector;#exchange;#backup;#matches;#shutdown;
+  #selection;#id;#live;#selector;#exchange;#backup;#restore;#matches;#shutdown;
   #checkpoint=null;#consumed=new Set();#backupAttempted=false;#failed=false;#closed=false;#closeError=null;
-  constructor({selection,id,live,selector,exchange,backup,matches,shutdown}){
+  constructor({selection,id,live,selector,exchange,backup,restore,matches,shutdown}){
     this.#selection=checkedReceiverPairingSelection(selection);
-    if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)||![live,selector,exchange,backup,matches,shutdown].every(fn=>typeof fn==='function'))throw new Error('配对传输适配器缺少操作编号或必需接口。');
+    if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)||![live,selector,exchange,backup,restore,matches,shutdown].every(fn=>typeof fn==='function'))throw new Error('配对传输适配器缺少操作编号或必需接口。');
     this.#id=id;this.#live=live;this.#selector=selector;this.#exchange=exchange;
-    this.#backup=backup;this.#matches=matches;this.#shutdown=shutdown;
+    this.#backup=backup;this.#restore=restore;this.#matches=matches;this.#shutdown=shutdown;
   }
   currentSelection(){
     if(this.#closed)throw new Error('配对传输已经关闭。');
@@ -68,6 +68,19 @@ export class ReceiverPairingWireAdapter{
     await this.#perform(phase,options);
   }
   async queryPaired(options={}){return (await this.#perform('polling',options)).paired;}
+  async restoreCompleteConfiguration(reference,{signal}={}){
+    const state=this.#checkpoint;
+    if(this.#closed||this.#failed||state?.phase!=='configurationRestore'||!state.pending||!state.restoreAttempted||state.backupReference!==reference||!Number.isInteger(state.operationID)||this.#consumed.has(state.operationID))throw new Error('完整恢复缺少本次已保存意图。');
+    this.#consumed.add(state.operationID);
+    try{
+      this.currentSelection();cancel(signal);
+      // Must restore actual complete coverage with durable raw I/O logs. This
+      // adapter provides no prefix-only fallback or automatic command retry.
+      await this.#restore(reference,{signal});
+      if(this.#closed||this.#failed||JSON.stringify(this.#checkpoint)!==JSON.stringify(state))throw new Error('完整恢复意图已变化。');
+      this.currentSelection();cancel(signal);
+    }catch(error){this.#failed=true;throw error;}
+  }
   async configurationMatchesBackup(reference,{signal}={}){
     const state=this.#checkpoint;
     if(this.#closed||this.#failed||state?.phase!=='configurationCheck'||!state.pending||state.backupReference!==reference||!Number.isInteger(state.operationID)||this.#consumed.has(state.operationID))throw new Error('配对配置核对缺少本次已保存意图。');

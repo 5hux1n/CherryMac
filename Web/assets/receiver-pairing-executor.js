@@ -8,7 +8,7 @@ export class ReceiverPairingExecutor {
   get running(){return this.#running;}
   async run(io,{signal}={}){
     if(this.#running)throw new Error('配对流程正在进行，请等待当前操作结束。');
-    for(const name of ['currentSelection','saveCompleteBackup','performCommand','queryPaired','configurationMatchesBackup','persist','close'])
+    for(const name of ['currentSelection','saveCompleteBackup','performCommand','queryPaired','configurationMatchesBackup','restoreCompleteConfiguration','persist','close'])
       if(typeof io?.[name]!=='function')throw new Error('配对通信适配器尚未完整接入。');
     this.#running=true;
     let transaction,journalError=null,cleanupError=null,journalStopped=false,savedBackupReference=null;
@@ -39,6 +39,9 @@ export class ReceiverPairingExecutor {
               await io.performCommand(phase,{signal});check();transaction.commandAccepted(operation);break;
             case 'polling':{
               const paired=await io.queryPaired({signal});check();transaction.statusReceived(operation,paired);break;
+            }
+            case 'configurationRestore':{
+              await io.restoreCompleteConfiguration(reference,{signal});check();transaction.configurationRestored(operation);break;
             }
             case 'configurationCheck':{
               const matches=await io.configurationMatchesBackup(reference,{signal});check();transaction.configurationChecked(operation,matches);break;

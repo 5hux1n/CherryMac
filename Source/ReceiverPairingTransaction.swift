@@ -6,7 +6,7 @@ import Foundation
 struct ReceiverPairingTransaction {
     enum Phase: String, Codable {
         case backup, keyboardStart, receiverPrepare, receiverStart, polling
-        case configurationCheck, completed, failed, cancelled
+        case configurationCheck, configurationRestore, completed, failed, cancelled
     }
     struct Event: Codable, Equatable {
         let sequence: Int
@@ -27,6 +27,7 @@ struct ReceiverPairingTransaction {
     private(set) var pollCount = 0
     private(set) var mayHaveChanged = false
     private(set) var recoveryRequired = false
+    private(set) var restoreAttempted = false
     private(set) var events: [Event] = []
     var terminal: Bool { [.completed, .failed, .cancelled].contains(phase) }
 
@@ -55,7 +56,11 @@ struct ReceiverPairingTransaction {
             guard pollCount < 5 else { throw InvalidTransition() }
             pollCount += 1
         }
-        if [.keyboardStart, .receiverPrepare, .receiverStart].contains(phase) { mayHaveChanged = true }
+        if phase == .configurationRestore {
+            guard !restoreAttempted else { throw InvalidTransition() }
+            restoreAttempted = true
+        }
+        if [.keyboardStart, .receiverPrepare, .receiverStart, .configurationRestore].contains(phase) { mayHaveChanged = true }
         pending = true
         operationID = events.count + 1
         record("begin", phase == .polling ? "状态查询 \(pollCount)/5" : "开始本阶段操作。")
@@ -82,9 +87,18 @@ struct ReceiverPairingTransaction {
         guard phase == .configurationCheck, pending, operationID == operation else { throw InvalidTransition() }
         pending = false; operationID = nil
         if unchanged {
-            phase = .completed
+            recoveryRequired = false; phase = .completed
             record("completed", "配对状态和原配置核对通过；断电保留尚未验证。")
-        } else { fail("配对后配置与备份不一致，需要恢复原配置。") }
+        } else if !restoreAttempted {
+            recoveryRequired = true; phase = .configurationRestore
+            record("changed", "配对后配置发生变化，进入完整备份恢复。")
+        } else { fail("恢复后配置仍与完整备份不一致，停止且不重试。") }
+    }
+    mutating func configurationRestored(operation: Int) throws {
+        guard phase == .configurationRestore, pending, operationID == operation, restoreAttempted else { throw InvalidTransition() }
+        pending = false; operationID = nil
+        record("restored", "完整配置恢复已返回，仍须重新读回核对。")
+        phase = .configurationCheck
     }
     mutating func fail(_ reason: String) {
         guard !terminal else { return }
