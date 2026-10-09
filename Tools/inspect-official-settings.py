@@ -3134,6 +3134,34 @@ def inspect_dongle_model_gate(pe):
         'limits':'The target PID is explicitly admitted by the static dialog branch. This is not observed UI, successful pairing, a complete enable-state model or authorization to send pairing reports.'}
 
 
+def inspect_pairing_selector_copies(pe):
+    """Close named initialization/copy edges, not every possible mutation."""
+    fragment = (0x4d922e, 0x4d925b)
+    expected = "c6d0152e75004964bad0e365654b1226c96996b310caebf9299f53a425b232af"
+    if hashlib.sha256(pe.at(fragment[0], fragment[1]-fragment[0])).hexdigest() != expected:
+        raise ValueError("Communication selector initialization fragment differs")
+    checks = {
+        0x4d9252: "33d2", 0x4d9257: "66895044",
+        0x4291b8: "668b829c000000", 0x4291bf: "6689819c000000",
+        0x498328: "668b829c000000", 0x49832f: "6689819c000000",
+        0x4f7d89: "0fb782b41e0000", 0x4de676: "668b4518",
+        0x4de67a: "66894244",
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address,len(raw)) != raw:
+            raise ValueError("Metadata selector copy instruction differs")
+    return {
+        "fragmentSHA256": {f"{fragment[0]:#x}..{fragment[1]:#x}":expected},
+        "instructionChecks":len(checks),
+        "communicationInitialization":{"store":"0x4d9257", "source":"DX zeroed at0x4d9252", "destination":"UInt16 member+0x44", "value":0},
+        "metadataAssignment":{"method":"0x429100", "read":"0x4291b8 source word+0x9c", "write":"0x4291bf destination word+0x9c", "conversion":False},
+        "metadataValueCopy":{"method":"0x498270", "read":"0x498328 source word+0x9c", "write":"0x49832f destination word+0x9c", "conversion":False},
+        "communicationTransfer":{"deviceRead":"0x4f7d89 word+0x1eb4", "setter":"0x4de640 fifth argument low word", "store":"0x4de67a member+0x44"},
+        "coverage":"Reuses the already pinned complete metadata copy functions and model setter bodies; the additional constructor evidence is a named fragment only",
+        "limits":"Initial zero and lossless copies are established for named paths. No census of alias writes, bulk copies, runtime producers, selector changes or actual Windows object values; not permission to default a live transport to zero or transmit pairing commands."}
+
+
 def inspect_pairing_transport_routes(pe):
     """Pin actual I/O dispatch; do not execute or construct pairing reports."""
     bodies = {
@@ -3519,7 +3547,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 82,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 83,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3530,6 +3558,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "donglePairingEntry": inspect_dongle_pairing_entry(pe, skin),
         "dongleModelGate": inspect_dongle_model_gate(pe),
         "pairingTransportRoutes": inspect_pairing_transport_routes(pe),
+        "pairingSelectorCopies": inspect_pairing_selector_copies(pe),
         "pairingCompletion": inspect_pairing_completion(pe),
         "receiverRegistration": inspect_receiver_registration(pe),
         "pairingPathAssignment": inspect_pairing_path_assignment(pe),
