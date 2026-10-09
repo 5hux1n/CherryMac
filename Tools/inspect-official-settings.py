@@ -1915,6 +1915,64 @@ def inspect_basic_apply_refresh(pe):
             "limits": "Classifies these refresh inputs and helper destinations. The mode methods and indirect or nested calls are not an exhaustive transport audit; this does not prove that no other setting command exists. No program execution, device write or polling-rate acceptance."}
 
 
+def inspect_basic_refresh_color_read(pe):
+    """Resolve the remaining refresh color loader to bounded query commands."""
+    bodies = {
+        0x4348F0:(0x43495A,"9dd4b886f27eb61a0e41951394cd2488dfc0266e06a0fa3e974b4794271310c3"),
+        0x4FE200:(0x4FE82A,"79d9457a2bf6bd251776abeedcb6c294e0c622deb85ae623d56b8d50aea8bd43"),
+        0x4DCB20:(0x4DCDD7,"ec3c888475ef7723d5fecfded0d287ff0d82e959175946afdc7d8fc3c8d793f6"),
+        0x442F70:(0x442FCC,"6ed427a3c8677877cf85f6f55fe6119435e5e030904fa5828d30e5aa83933313"),
+    }
+    for start,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError(f"Unexpected refresh color read body at {start:#x}")
+    checks = {
+        0x505922:"e8d988ffff",0x4FE278:"83b84022000000",
+        0x4FE30E:"c1e009",0x4FE312:"6800020000",0x4FE32A:"e8f1e7fdff",
+        0x4FE436:"c1e209",0x4FE43A:"6a11",0x4FE44C:"e8cfe6fdff",
+        0x4FE454:"c1e109",0x4FE458:"6a15",0x4FE46A:"e8b1e6fdff",
+        0x4DCB79:"0fb74244",0x4DCB7D:"83f801",0x4DCB8A:"c64415bc8a",
+        0x4DCB99:"c6440dbc0a",0x4DCBF2:"3b4d0c",0x4DCC0E:"3b450c",
+        0x4DCC28:"8b450c",0x4DCC2B:"2b8574ffffff",0x4DCD1F:"e85cc6ffff",
+        0x4DCD47:"83bd5cffffff01",0x4DCD68:"3dff000000",0x4DCD6F:"b89affffff",
+        0x4DCD86:"3dfe000000",0x4DCD8D:"b899ffffff",0x4DCDB5:"e8669f1a00",
+        0x4FE32F:"c785c0fdffff00000000",0x4FE451:"8b4d08",
+        0x4FE46F:"c785bcfdffff00000000",0x434951:"8b4208",
+        0x442FC0:"ff15c0b06e00",
+    }
+    for address,raw in checks.items():
+        if pe.at(address,len(bytes.fromhex(raw)))!=bytes.fromhex(raw):
+            raise ValueError(f"Unexpected refresh color read instruction at {address:#x}")
+    names={0x72FB80:"device_nprofile_combo",0x7320EC:"light_combo_custommodeSelect"}
+    for address,name in names.items():
+        raw=(name+"\0").encode('utf-16-le')
+        if pe.at(address,len(raw))!=raw:raise ValueError("Unexpected refresh color control name")
+    imports={0x6EB3A4:"?FindSubControlByName@CPaintManagerUI@DuiLib@@QBEPAVCControlUI@2@PAV32@PB_W@Z",
+             0x6EB0C0:"?SelectItem1@CComboUI@DuiLib@@QAE_NH_N0@Z"}
+    for address,name in imports.items():
+        raw=(name+"\0").encode('ascii')
+        if pe.at(pe.base+pe.pointer(address)+2,len(raw))!=raw:raise ValueError("Unexpected refresh color control import")
+    return {
+        "functionBodies":{hex(a):{"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+        "instructionChecks":len(checks),
+        "entry":"0x505900 -> 0x4fe200",
+        "profileIndexControl":"device_nprofile_combo via 0x4348f0; embedded virtual+8; differs from cached getter42b4b0",
+        "colorLoader":{"branchMember":"device+0x2240",
+                       "nonzeroOrdinaryPIDRead":{"bytes":512,"baseOffset":"profile index <<9","call":"0x4fe32a"},
+                       "zeroBranchReads":[{"bytes":17,"baseOffset":"profile index <<9","call":"0x4fe44c"},
+                                          {"bytes":21,"baseOffset":"profile index <<9","call":"0x4fe46a"}],
+                       "readReturnCheckedAtTheseCalls":False},
+        "queryHelper":{"entry":"0x4dcb20","reportID":4,"selector":"communication word+0x44",
+                       "commands":{"selector1":138,"otherwise":10},"flag":0,
+                       "lengthSource":"argument2; chunks up to communication byte+0x690; final remainder retained",
+                       "exchange":"0x4d9380","transportErrorPropagated":True,
+                       "replyStatusErrors":{"255":-102,"254":-103},
+                       "copyOnlyAfterExchangeAndStatusPass":True},
+        "customModeControl":"light_combo_custommodeSelect via 0x442f70, SelectItem1(index, false, false)",
+        "limits":"This proves nested color queries, not a polling write. Does not identify a live session's selector, classify every JSON/vector/control callback or prove actual Windows packets. Caller-ignored read errors and 512-byte request do not establish the cause of a lighting failure, complete region access or restore/pairing support. No read or write commands were sent.",
+    }
+
+
 def inspect_basic_refresh_mode_helpers(pe):
     """Classify the actual target table's nested refresh methods by pinned bodies."""
     bodies = {
@@ -3383,7 +3441,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 77,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 78,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3427,6 +3485,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplySave": inspect_basic_apply_save(pe),
         "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
+        "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
