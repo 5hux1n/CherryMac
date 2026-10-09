@@ -2,7 +2,7 @@
 
 为 **CHERRY MX 3.0S 宝可梦无线键盘**提供 Mac 客户端和网页版。点选键盘图，设置按键、编辑宏与配色，备份和迁移配置。
 
-[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.89.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.89.0) · [PHP 0.88.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.88.0)
+[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.90.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.90.0) · [PHP 0.89.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.89.0)
 
 **当前是开发预览，完整复刻仍未完成。** USB 有线模式下提供按键、宏和文本触发键的独立写入、备份与读回核对。灯效可以编辑、保存和导出计划，普通版未开放灯效发送。新版两端仍待统一真机验收；旧网页灯效故障根因尚未确认。[各功能的实际验收范围](docs/当前功能与验收状态.md)
 
@@ -32,7 +32,7 @@ CHERRY_MACRO_PRODUCT=1 CHERRY_TEXT_PRODUCT=1 php -S 127.0.0.1:8770 -t .
 | 文本 | 编辑文字和按键绑定、安装触发键；通过 Mac 服务向前台应用输入 |
 | 配置与备份 | 导入／导出官方和 CherryMac JSON、撤销草稿、恢复按键或宏、核对恢复记录 |
 | 设备设置 | 保存官方 USB 回报率文件草稿；客户端提供 Mac 快捷操作与按键适配 |
-| 设备与诊断 | 查看连接与日志；Mac 可读取并保存扩展前缀，两端可检查、保存和导出文件，查看未覆盖字节 |
+| 设备与诊断 | 查看连接与日志；Mac 可读取扩展前缀并导出捕获日志，两端可检查备份及日志，查看未覆盖字节 |
 
 单个普通键保持正方形；计算器、上一曲、播放／暂停、下一曲位于数字区上方。切换页面保留草稿，导入和编辑不会自动写入。
 

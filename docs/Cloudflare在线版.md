@@ -51,3 +51,6 @@ sh Web/deploy-cloudflare.sh
 `/release.json` 提供版本、来源提交、硬件验收状态与页面／脚本哈希。线上缓存设置为 no-store，避免继续使用旧版本资源。源码文件及部署配置更新应先提交，再部署，以保持版本清单的来源可追溯。
 
 托管使用 [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/)。硬件访问使用浏览器的 [WebHID](https://developer.chrome.com/docs/capabilities/hid)，部署工具不读取或写入键盘。
+
+
+官网的 Mac／PHP 下载按钮现在由部署脚本根据构包版本自动生成。普通发布仍运行 `sh Web/deploy-cloudflare.sh`。若只修官网或部署说明，可使用 `--runtime-source-commit` 指定已发布运行源码的完整40位提交；脚本必须确认全部PHP包运行文件、网页版本文件及原生版本脚本与该提交完全一致，否则拒绝构建。线上manifest的sourceCommit表示配置程序来源，siteSourceCommit表示官网／部署来源，文件摘要覆盖实际部署内容；不能用此选项隐藏配置程序变化。0.90／0.89交付使用运行d2bba50b2d1e15c8b96b4f4b68d7d8493e7db21d与官网c543054c0bc61fd186d92ec6f6fed1df0ec7d11d，线上下载链接已核对。
