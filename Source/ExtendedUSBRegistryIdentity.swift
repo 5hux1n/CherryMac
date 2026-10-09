@@ -3,8 +3,8 @@ import IOKit
 import IOKit.hid
 
 // Descriptor metadata only: no IOHIDManager/device opening, callbacks or report
-// exchange. A future loopback bridge must bind this unique live target to the
-// browser's selected HID endpoint before admitting extended reads.
+// exchange. The authenticated loopback bridge exposes this metadata; a future
+// browser capture adapter must also bind its selected HID endpoint.
 enum ExtendedUSBRegistryIdentity {
     struct IdentityError:LocalizedError {
         let message:String

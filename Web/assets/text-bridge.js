@@ -1,4 +1,5 @@
 import {requireThat} from './model.js?v=0.6.0';
+import {checkedCaptureIdentity} from './extended-hardware-capture.js?v=0.6.0';
 
 // No requests at construction. Optional session storage retains the paired tab
 // across reloads, without localStorage or cookies. Commands never write HID.
@@ -25,6 +26,12 @@ export class HostTextBridge{
   }
   async pair(code){const token=code.trim();requireThat(!this.paired||this.resuming||token===this.token,'请先解除当前联动。');await this.request('pair',{},token);this.token=token;this.paired=true;this.resuming=true;this.save();this.resuming=false;}
   async status(){requireThat(this.paired,'网页尚未联动。');await this.resume();return this.request('status');}
+  async usbIdentity(){
+    requireThat(this.paired,'请先连接 Mac 联动服务，以核对真实 USB 身份。');
+    await this.resume();const value=await this.request('usb-identity');
+    requireThat(value.state==='stopped'&&!value.busy,'客户端尚未释放配置接口。');
+    return checkedCaptureIdentity(value.usbIdentity);
+  }
   async activate(root){requireThat(this.paired,'请先连接 Mac 服务。');await this.resume();return this.request('activate',{officialJSON:root});}
   async suspend(){if(!this.paired)return;await this.resume();const value=await this.request('suspend');requireThat(value.state==='stopped'&&!value.busy,'Mac 服务尚未释放配置接口。');}
   async unpair(options={}){if(!this.paired)return;await this.resume();const value=await this.request('unpair',{},this.token,options);requireThat(value.state==='stopped'&&!value.busy,'Mac 服务尚未停止。');this.storage?.removeItem('CherryMacHostTextBridgeSession');this.paired=false;this.resuming=false;this.token=null;}

@@ -86,7 +86,7 @@ function render(){
   if(recorder)recordControls(true);
   $('cancel-macro-operation').hidden=!macroAbort;$('cancel-macro-operation').disabled=!macroAbort||macroAbort.signal.aborted;
   $('recover-macro').hidden=!macroProduct;$('recover-macro').disabled=busy||!online;
-  if(textProduct){$('text-bridge-pair').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-code').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-start').disabled=busy||!!recorder||!textBridge.paired||!textRoot;$('text-bridge-stop').disabled=busy||!textBridge.paired;$('text-bridge-unpair').disabled=busy||!textBridge.paired;$('text-bridge-state').textContent=textBridge.paired?(textBridge.resuming?'Mac 联动待核对 · 配置操作前确认服务状态':`Mac 已联动 · ${({stopped:'服务已停止',preparing:'正在准备服务',observing:'文本服务已开启',failed:'服务发生错误'})[textBridge.state]}`):'尚未连接 Mac 服务';$('text-edit-open').disabled=busy||!!recorder||!online||!textRoot;$('text-edit-value').disabled=busy;if(textFactory){const trigger=resolveHostTextTrigger(0x700+Number($('text-edit-key').value),textFactory),item=trigger&&textRoot.KeyList[trigger.logicalIndex];$('text-edit-remove').disabled=busy||item?.ActionLink!==1||textRoot.ActionInfo[item.ActionLinkIndex]?.ActionType!==3;}$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
+  if(textProduct){$('usb-identity-read').disabled=busy||!!recorder||!textBridge.paired;$('text-bridge-pair').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-code').disabled=busy||(textBridge.paired&&!textBridge.resuming);$('text-bridge-start').disabled=busy||!!recorder||!textBridge.paired||!textRoot;$('text-bridge-stop').disabled=busy||!textBridge.paired;$('text-bridge-unpair').disabled=busy||!textBridge.paired;$('text-bridge-state').textContent=textBridge.paired?(textBridge.resuming?'Mac 联动待核对 · 配置操作前确认服务状态':`Mac 已联动 · ${({stopped:'服务已停止',preparing:'正在准备服务',observing:'文本服务已开启',failed:'服务发生错误'})[textBridge.state]}`):'尚未连接 Mac 服务';$('text-edit-open').disabled=busy||!!recorder||!online||!textRoot;$('text-edit-value').disabled=busy;if(textFactory){const trigger=resolveHostTextTrigger(0x700+Number($('text-edit-key').value),textFactory),item=trigger&&textRoot.KeyList[trigger.logicalIndex];$('text-edit-remove').disabled=busy||item?.ActionLink!==1||textRoot.ActionInfo[item.ActionLinkIndex]?.ActionType!==3;}$('text-install').disabled=busy||!!recorder||!online||!textRoot;$('text-restore').disabled=busy||!!recorder||!online;$('text-export').disabled=busy||!textRoot;}
   if(busy)$('connect').disabled=true;
   if(lightingReconnectSnapshot!==null){for(const id of ['write','recover-macro','discard','text-install','text-restore'])if($(id))$(id).disabled=true;}
   updateLightingOptions();
@@ -541,6 +541,14 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
 
 
 if(textProduct){
+  $('usb-identity-read').onclick=()=>operation(async()=>{
+    $('usb-identity-summary').textContent='正在核对当前 USB 身份…';
+    try{
+      const identity=await textBridge.usbIdentity();
+      $('usb-identity-summary').textContent=`目标 USB：${identity.vendorID.toString(16).padStart(4,'0').toUpperCase()}:${identity.productID.toString(16).padStart(4,'0').toUpperCase()} · USB 版本 ${identity.usbRevision.toString(16).padStart(4,'0').toUpperCase()} · 连接标识 ${identity.sessionToken}。仅本次查询时有效；未读取或写入配置。`;
+      status('已核对当前 USB 描述信息。');
+    }catch(error){$('usb-identity-summary').textContent='核对失败：'+error.message;throw error;}
+  });
   $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
   $('text-bridge-start').onclick=()=>operation(async()=>{
     requireThat(textRoot&&equal(textRoot,await textStore.active()),'请先安装此文本配置，或载入已保存配置；未写入的编辑不能启用。');

@@ -544,6 +544,18 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             guard let body=try JSONSerialization.jsonObject(with:request.body) as? [String:Any] else{throw HardwareError(message:"联动请求需要 JSON 对象。")}
             switch request.path {
             case "/v1/pair","/v1/status":completion(HostTextBridgeRequest.response(origin:origin,object:hostTextBridgeStatus()))
+            case "/v1/usb-identity":
+                // Authenticated metadata query only. The caller must suspend
+                // text first; this route never opens HID or alters ownership.
+                guard body.isEmpty,!busy,macroRecordingSheet==nil,window?.attachedSheet==nil,
+                      window?.isVisible==true,hostTextService.stage == .stopped else{
+                    throw HardwareError(message:"请先停止文本服务、完成客户端操作，并保持配置窗口开启。")
+                }
+                let identity=try ExtendedUSBRegistryIdentity.read()
+                var reply=hostTextBridgeStatus()
+                reply["usbIdentity"]=["sessionToken":identity.sessionToken,"vendorID":identity.vendorID,
+                    "productID":identity.productID,"usbRevision":identity.usbRevision,"transport":identity.transport]
+                completion(HostTextBridgeRequest.response(origin:origin,object:reply))
             case "/v1/activate":
                 guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,window?.isVisible==true,let root=body["officialJSON"] as? [String:Any] else{throw HardwareError(message:"请先完成客户端当前操作，并保持配置窗口开启。")}
                 let data=try JSONSerialization.data(withJSONObject:root,options:[.sortedKeys]);try loadHostTextProfile(data,name:"网页文本配置")
