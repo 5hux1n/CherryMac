@@ -1,17 +1,18 @@
 import {checkedReceiverPairingSelection,sameReceiverPairingSelection} from './receiver-pairing-selection.js';
 import {receiverPairingFrame,receiverPairingReply} from './receiver-pairing-frames.js';
 import {savePairingCheckpoint} from './receiver-pairing-journal.js';
+import {savePairingRawExchange} from './receiver-pairing-raw-log.js';
 
 // The caller must provide a real bounded raw transport and verified complete
 // backup storage. There is no default sender, device opening or selector guess.
 export class ReceiverPairingWireAdapter{
-  #selection;#id;#live;#selector;#exchange;#backup;#matches;#log;#shutdown;
+  #selection;#id;#live;#selector;#exchange;#backup;#matches;#shutdown;
   #checkpoint=null;#consumed=new Set();#backupAttempted=false;#failed=false;#closed=false;#closeError=null;
-  constructor({selection,id,live,selector,exchange,backup,matches,log,shutdown}){
+  constructor({selection,id,live,selector,exchange,backup,matches,shutdown}){
     this.#selection=checkedReceiverPairingSelection(selection);
-    if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)||![live,selector,exchange,backup,matches,log,shutdown].every(fn=>typeof fn==='function'))throw new Error('配对传输适配器缺少操作编号或必需接口。');
+    if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)||![live,selector,exchange,backup,matches,shutdown].every(fn=>typeof fn==='function'))throw new Error('配对传输适配器缺少操作编号或必需接口。');
     this.#id=id;this.#live=live;this.#selector=selector;this.#exchange=exchange;
-    this.#backup=backup;this.#matches=matches;this.#log=log;this.#shutdown=shutdown;
+    this.#backup=backup;this.#matches=matches;this.#shutdown=shutdown;
   }
   currentSelection(){
     if(this.#closed)throw new Error('配对传输已经关闭。');
@@ -34,7 +35,7 @@ export class ReceiverPairingWireAdapter{
     const intent=state.operationID;this.#consumed.add(intent);let plan=null,reply=null,logStopped=false,receivedLength=0;
     const record=async(stage,error=null)=>{
       if(!plan)return;
-      try{await this.#log(structuredClone({format:'CherryMacPairingRawExchange',version:1,id:this.#id,intent,phase,endpoint:plan.endpoint,selection:this.#selection,request:plan.request,reply,receivedLength,stage,error}));}
+      try{await savePairingRawExchange(structuredClone({format:'CherryMacPairingRawExchange',version:2,id:this.#id,intent,phase,endpoint:plan.endpoint,selection:this.#selection,selector:plan.selector,request:plan.request,reply,receivedLength,stage,error}));}
       catch(error){logStopped=true;throw error;}
     };
     const checkIntent=()=>{

@@ -6,17 +6,31 @@ import Foundation
 @MainActor final class ReceiverPairingWireAdapter:ReceiverPairingExecutorIO {
     struct ExchangeRecord:Encodable {
         let format:String="CherryMacPairingRawExchange"
-        let version:Int=1
+        let version:Int=2
         let id:String
         let intent:Int
         let phase:ReceiverPairingTransaction.Phase
         let endpoint:String
         let selection:ReceiverPairingSelection
+        let selector:UInt16?
         let request:[UInt8]
         let reply:[UInt8]?
         let receivedLength:Int
         let stage:String
         let error:String?
+        private enum CodingKeys:String,CodingKey {
+            case format,version,id,intent,phase,endpoint,selection,selector,request,reply,receivedLength,stage,error
+        }
+        func encode(to encoder:Encoder)throws{
+            var c=encoder.container(keyedBy:CodingKeys.self)
+            try c.encode(format,forKey:.format);try c.encode(version,forKey:.version)
+            try c.encode(id,forKey:.id);try c.encode(intent,forKey:.intent)
+            try c.encode(phase,forKey:.phase);try c.encode(endpoint,forKey:.endpoint)
+            try c.encode(selection,forKey:.selection);try c.encode(selector,forKey:.selector)
+            try c.encode(request,forKey:.request);try c.encode(reply,forKey:.reply)
+            try c.encode(receivedLength,forKey:.receivedLength);try c.encode(stage,forKey:.stage)
+            try c.encode(error,forKey:.error)
+        }
     }
     struct WireError:LocalizedError {
         let message:String
@@ -30,7 +44,7 @@ import Foundation
     private let exchange:(ReceiverPairingFrames.Endpoint,[UInt8])async throws->[UInt8]
     private let backup:()async throws->String
     private let matches:(String)async throws->Bool
-    private let log:(ExchangeRecord)async throws->Void
+    private let rawLog:ReceiverPairingRawLog
     private let shutdown:()throws->Void
     private var checkpoint:ReceiverPairingJournal.State?
     private var consumed=Set<Int>()
@@ -43,11 +57,13 @@ import Foundation
          selector:@escaping(ReceiverPairingFrames.Endpoint)throws->UInt16,
          exchange:@escaping(ReceiverPairingFrames.Endpoint,[UInt8])async throws->[UInt8],
          backup:@escaping()async throws->String,matches:@escaping(String)async throws->Bool,
-         log:@escaping(ExchangeRecord)async throws->Void,shutdown:@escaping()throws->Void)throws{
+         shutdown:@escaping()throws->Void)throws{
         try selection.validate()
         guard UUID(uuidString:id)?.uuidString.lowercased()==id else{throw WireError(message:"配对操作编号无效。")}
         self.selection=selection;self.id=id;self.journal=journal;self.live=live;self.selector=selector
-        self.exchange=exchange;self.backup=backup;self.matches=matches;self.log=log;self.shutdown=shutdown
+        self.exchange=exchange;self.backup=backup;self.matches=matches
+        self.rawLog=ReceiverPairingRawLog(directory:journal.directory.appendingPathComponent("raw-reports",isDirectory:true))
+        self.shutdown=shutdown
     }
     func currentSelection()throws->ReceiverPairingSelection{
         guard !closed else{throw WireError(message:"配对传输已经关闭。")}
@@ -80,8 +96,8 @@ import Foundation
         var plan:ReceiverPairingFrames.Plan?,reply:[UInt8]?,logStopped=false,receivedLength=0
         func record(_ stage:String,error:String?=nil)async throws{
             guard let plan else{return}
-            do{try await log(.init(id:id,intent:intent,phase:phase,endpoint:plan.endpoint.rawValue,
-                selection:selection,request:plan.request,reply:reply,receivedLength:receivedLength,stage:stage,error:error))}
+            do{try rawLog.save(.init(id:id,intent:intent,phase:phase,endpoint:plan.endpoint.rawValue,
+                selection:selection,selector:plan.selector,request:plan.request,reply:reply,receivedLength:receivedLength,stage:stage,error:error))}
             catch{logStopped=true;throw error}
         }
         func checkIntent()throws{
