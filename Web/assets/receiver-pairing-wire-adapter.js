@@ -48,7 +48,7 @@ export class ReceiverPairingWireAdapter{
       plan=receiverPairingFrame(phase,phase==='polling'?null:await this.#selector(endpoint,{signal}));
       await record('prepared');checkIntent();
       // Give the transport its own copy; callbacks cannot alter the plan.
-      const received=await this.#exchange(plan.endpoint,Array.from(plan.request),{signal});
+      const received=await this.#exchange(plan.endpoint,Array.from(plan.request),{signal,id:this.#id,intent,phase,selector:plan.selector});
       if(!(Array.isArray(received)||received instanceof Uint8Array))throw new Error('配对传输没有返回原始报告。');
       receivedLength=received.length;const sample=Array.from(received.slice(0,64));
       const validBytes=sample.every(byte=>Number.isInteger(byte)&&byte>=0&&byte<=255);reply=validBytes?sample:null;
