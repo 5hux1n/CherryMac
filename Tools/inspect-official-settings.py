@@ -2001,6 +2001,58 @@ def inspect_basic_refresh_color_read(pe):
     }
 
 
+def inspect_refresh_color_vector_transfer(pe):
+    """Resolve the remaining named color-vector helper, not a new sender."""
+    bodies = {
+        0x4F4CF0:(0x4F4D8A,"f6940eac9d5a01e4004b0f740686579f294eeff6ddb73ad437fc0fb16452a64b"),
+        0x46DCB0:(0x46DD37,"fa79c03203c22bfdeb285ca92ad694acce03bd1531172594a043c9cbf13e1919"),
+        0x46DD40:(0x46DD65,"eda1016b6d36c0b807549461a124565c84587e12edff6daba9b5a80feaaa69df"),
+        0x4224F0:(0x42250D,"8b7a0f6719074ccb4fbefa31aba2ac8498be83a6ddb1838ed42ec40a3b2ad32e"),
+        0x422510:(0x422538,"21128c92d85ce5609129e80f7da4d726ac108ea202aa113ff85a4c3a44439303"),
+        0x41E950:(0x41E957,"8c802cff817fdf6fe5a54e1838577f97a5b842ea2a87ef4faf70abd2b500b8eb"),
+        0x41E960:(0x41E975,"8d4d09358147eb14d03baf3d50b9eb09f4ab1918b0a925d2b700b2c4ca3b6182"),
+        0x41E980:(0x41E9B2,"7c36a9922748714403f14f580dbdeb853ecc90dbc849adf9002d2e311f956377"),
+        0x41F6D0:(0x41F762,"6e1358bbf9da27707b2f20fd16c877d371680e1123e8186271c511d91aa2c904"),
+        0x6A051E:(0x6A0558,"7484b6a01c667b565d324a64e743f73c22d206effc5ebb03ff7c80b65404e0d9"),
+        0x4BC800:(0x4BC829,"c6457e357bba79af4ad3b5ed9afd2da39c7dd917f6f8e8fd4fefd285aa7d0dd0"),
+    }
+    for start,(end,digest) in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Unexpected color-vector transfer helper body")
+    checks={
+        0x50596E:"81c150210000",0x505974:"e877f3feff",
+        0x4F4D21:"e89acbf2ff",0x4F4D41:"e83a9cf2ff",0x4F4D4E:"7411",
+        0x4F4D71:"e88a7afcff",0x4BC81E:"e88d14fbff",
+        0x46DCD8:"8908",0x46DCEE:"8910",0x46DD04:"8908",
+        0x46DD0E:"c70000000000",0x46DD1C:"c70000000000",0x46DD2A:"c70000000000",
+        0x41E953:"b001",0x422504:"8d0488",0x42252E:"c1f902",
+        0x421867:"6a04",0x41F756:"e8291c1300",0x551384:"e9c7c51300",
+        0x68D950:"e9c92b0100",0x6A0534:"ff1524bc6e00",
+        0x5059A9:"0fb6b05d210000",0x5059BD:"e82ecbf1ff",
+        0x5059C2:"8a9650a37400",0x5059C8:"885003",
+    }
+    for address,encoded in checks.items():
+        raw=bytes.fromhex(encoded)
+        if pe.at(address,len(raw))!=raw:raise ValueError("Unexpected refresh-vector instruction")
+    for iat,name in [(0x6EBC24,"HeapFree"),(0x6EBCA4,"GetLastError")]:
+        raw=(name+"\0").encode("ascii")
+        if pe.at(pe.base+pe.pointer(iat)+2,len(raw))!=raw:
+            raise ValueError("Unexpected color-vector heap import")
+    coefficients=list(pe.at(0x74A350,5))
+    if coefficients!=[0,65,135,195,255]:raise ValueError("Unexpected refresh brightness coefficients")
+    return {
+        "functionBodies":{hex(a):{"endExclusive":hex(b),"sha256":h} for a,(b,h) in bodies.items()},
+        "instructionChecks":len(checks),"importNames":["HeapFree","GetLastError"],
+        "caller":"0x505900 -> 0x4f4cf0; destination device+0x2150",
+        "elementBytes":4,"assignment":"release previous vector, transfer begin/end/capacity pointers, clear source pointers",
+        "allocatorComparison":"0x41e950 returns true; 0x41e980 negates it, skipping unequal-allocator copy branch at0x4f4d4e",
+        "releasePath":"0x421880 -> 0x421860 -> 0x41f6d0 -> 0x551384 -> 0x68d950 -> 0x6a051e -> HeapFree",
+        "refreshAlpha":{"source":"device+0x215d brightness index","table":"0x74a350","coefficients":coefficients,"destination":"RGBA element byte3"},
+        "classification":"Named normal-path vector ownership transfer and alpha refresh, not a polling-rate report builder",
+        "limits":"Fixed executable named paths only. Existing coefficients already match both products. Error/invalid-parameter CRT paths, other callbacks and settings entry points are not exhaustively classified; no whole-program absence of polling support, firmware acceptance, persistence or prior blackout cause is proved. No execution or device I/O.",
+    }
+
+
 def inspect_basic_refresh_mode_helpers(pe):
     """Reuse the pre-existing closed mode audit and add the remaining color edge."""
     base = inspect_refresh_mode_memory(pe)
@@ -3446,7 +3498,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 80,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 81,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3492,6 +3544,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
+        "refreshColorVectorTransfer": inspect_refresh_color_vector_transfer(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
