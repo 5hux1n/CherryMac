@@ -53,7 +53,7 @@ struct ExtendedCaptureJournal {
             guard try Data(contentsOf:target)==data else{try fail()};return record
         }
     }
-    func load(id:String)throws->[Record]{try locked(id){try read($0,id:id)}}
+    func load(id:String)throws->[Record]{try locked(id,create:false){try read($0,id:id)}}
     private func file(_ folder:URL,_ revision:Int)->URL{folder.appendingPathComponent(String(format:"event-%03d.json",revision))}
     private func read(_ folder:URL,id:String)throws->[Record]{
         let files=try FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).filter{$0.pathExtension=="json"}.sorted{$0.lastPathComponent<$1.lastPathComponent}
@@ -72,15 +72,16 @@ struct ExtendedCaptureJournal {
         }
         if !records.isEmpty{try Self.validateEvents(records.map(\.event))};return records
     }
-    private func locked<T>(_ id:String,_ body:(URL)throws->T)throws->T{
+    private func locked<T>(_ id:String,create:Bool=true,_ body:(URL)throws->T)throws->T{
         guard UUID(uuidString:id)?.uuidString.lowercased()==id else{try fail()}
         let folder=directory.appendingPathComponent(id,isDirectory:true)
+        guard create || FileManager.default.fileExists(atPath:folder.path) else{try fail()}
         var missing:[URL]=[],cursor=folder
         while !FileManager.default.fileExists(atPath:cursor.path){missing.append(cursor);let parent=cursor.deletingLastPathComponent();guard parent.path != cursor.path else{try fail()};cursor=parent}
-        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        if create{try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])}
         for created in missing.reversed(){try sync(created);try sync(created.deletingLastPathComponent())}
         guard try folder.resourceValues(forKeys:[.isSymbolicLinkKey]).isSymbolicLink != true else{try fail()}
-        let fd=Darwin.open(folder.appendingPathComponent(".lock").path,O_CREAT|O_RDWR|O_NOFOLLOW,0o600);guard fd>=0 else{try fail()};defer{Darwin.close(fd)}
+        let fd=Darwin.open(folder.appendingPathComponent(".lock").path,(create ? O_CREAT:0)|O_RDWR|O_NOFOLLOW,0o600);guard fd>=0 else{try fail()};defer{Darwin.close(fd)}
         guard flock(fd,LOCK_EX)==0 else{try fail()};defer{flock(fd,LOCK_UN)};return try body(folder)
     }
     private func sync(_ url:URL)throws{let fd=Darwin.open(url.path,O_RDONLY|O_NOFOLLOW);guard fd>=0 else{try fail()};defer{Darwin.close(fd)};guard fsync(fd)==0 else{try fail()}}

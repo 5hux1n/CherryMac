@@ -3,6 +3,36 @@ import AppKit
 // Separate file inspection and explicitly selected read-only capture.
 // Neither adopts a profile or authorizes restoration/configuration writes.
 extension HardwareWindowController {
+    @objc func inspectExtendedCaptureJournal(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{return}
+        let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/ExtendedCaptureJournal")
+        let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.allowsMultipleSelection=false
+        panel.directoryURL=directory;panel.message="选择一次扩展捕获的日志文件夹；这里只检查已有记录。"
+        guard panel.runModal() == .OK,let folder=panel.url else{return}
+        do{
+            let journal=ExtendedCaptureJournal(directory:folder.deletingLastPathComponent())
+            let records=try journal.load(id:folder.lastPathComponent)
+            guard let last=records.last else{throw HardwareError(message:"日志没有已保存事件。")}
+            let count=records.filter{$0.event.phase=="readAccepted"}.count
+            let phases=["started":"开始","readPrepared":"待读取回复","readAccepted":"已接受读取","saving":"保存中","saved":"已保存，待核对","complete":"记录显示流程结束","failed":"失败","cancelled":"已取消"]
+            let summary="日志编号：\(last.id)\n记录的 USB 版本：\(String(format:"%04X",last.identity.usbRevision))\n已接受读取：\(count)/160\n最后阶段：\(phases[last.event.phase] ?? last.event.phase)\n备份编号：\(last.event.backupReference ?? "尚无")\n\(last.event.detail)\n\n这里只检查历史日志，不连接键盘。记录结束不等于当前配置核对、完整恢复或断电验收。"
+            while true{
+                let alert=NSAlert();alert.messageText="扩展捕获日志";alert.informativeText=summary
+                for title in ["导出日志 JSON…","打开日志文件夹","返回"]{alert.addButton(withTitle:title)}
+                let choice=alert.runModal()
+                if choice == .alertSecondButtonReturn{NSWorkspace.shared.open(folder);return}
+                guard choice == .alertFirstButtonReturn else{return}
+                let save=NSSavePanel();save.nameFieldStringValue="CherryMac-extended-capture-log.json"
+                guard save.runModal() == .OK,let output=save.url else{continue}
+                guard output.deletingLastPathComponent().resolvingSymlinksInPath()!=folder.resolvingSymlinksInPath() else{throw HardwareError(message:"请将导出副本放在原日志文件夹以外，保留原始事件。")}
+                let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+                let data=try encoder.encode(records);guard data.count<=2_000_000 else{throw HardwareError(message:"导出日志超过 2 MB。")}
+                try data.write(to:output,options:.atomic)
+                guard try Data(contentsOf:output)==data else{throw HardwareError(message:"日志副本保存核对失败。")}
+                message.stringValue="已导出扩展捕获日志；可在网页版设备与诊断中检查，没有操作键盘。";return
+            }
+        }catch{message.stringValue="扩展捕获日志无法检查："+error.localizedDescription+"。原始记录保留。"}
+    }
     @objc func captureExtendedBackup(){
         guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}

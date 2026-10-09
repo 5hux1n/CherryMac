@@ -10,7 +10,7 @@ for(const phase of ['saving','saved','complete'])expected.push({phase,pass:0,reg
 const fields=['sequence','phase','pass','region','offset','length','backupReference','detail'];
 function checkedEvents(input){
   if(!Array.isArray(input)||!input.length||input.length>expected.length+1)fail();let reference=null;
-  return input.map((event,index)=>{
+  return Array.from(input).map((event,index)=>{
     if(!event||Object.keys(event).length!==fields.length||fields.some(key=>!Object.hasOwn(event,key))||event.sequence!==index+1||typeof event.detail!=='string'||event.detail.length>8192||event.backupReference!==null&&!uuid(event.backupReference)||reference!==null&&event.backupReference!==reference)fail();
     if(['failed','cancelled'].includes(event.phase)){
       if(index!==input.length-1||index>=expected.length||event.pass!==0||event.region!==''||event.offset!==0||event.length!==0||!event.detail||event.backupReference!==null&&reference===null&&expected[index].phase!=='saved')fail();
@@ -23,12 +23,21 @@ function checkedEvents(input){
 }
 function checkedRecords(records,id){
   if(!Array.isArray(records)||records.length>325)fail();let identity=null;
-  const result=records.map((record,index)=>{
+  const result=Array.from(records).map((record,index)=>{
     if(!record||Object.keys(record).length!==6||record.format!=='CherryMacExtendedCaptureEvent'||record.version!==1||record.id!==id||record.revision!==index+1)fail();
     const current=checkedCaptureIdentity(record.identity);
     if(identity&&Object.keys(identity).some(key=>identity[key]!==current[key]))fail();identity=current;return record;
   });
   if(result.length)checkedEvents(result.map(record=>record.event));return result;
+}
+// File inspection only: validates an exported record array without opening DB,
+// sending HID reports or treating a historical identity as a live session.
+export function inspectExtendedCaptureRecords(input){
+  if(!Array.isArray(input)||!input.length||!uuid(input[0]?.id))fail();
+  const records=checkedRecords(structuredClone(input),input[0].id),last=records.at(-1);
+  return {records,id:last.id,identity:last.identity,lastPhase:last.event.phase,
+    acceptedReads:records.filter(record=>record.event.phase==='readAccepted').length,
+    backupReference:last.event.backupReference,detail:last.event.detail};
 }
 export async function saveExtendedCaptureEvent(id,identity,input){
   if(!uuid(id))fail();identity=checkedCaptureIdentity(identity);const event=structuredClone(input),db=await open();

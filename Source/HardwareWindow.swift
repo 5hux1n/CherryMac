@@ -404,6 +404,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("检查扩展备份文件…",#selector(inspectExtendedBackup)),8,321,260,32,in:device)
         place(button("读取并保存扩展备份",#selector(captureExtendedBackup)),290,321,260,32,in:device)
         place(label("读取按钮通过 USB 获取两遍扩展前缀并核对保存；文件检查可导出副本。显示未覆盖字节，不写入键盘。",12),8,364,850,45,in:device)
+        place(button("检查扩展捕获日志…",#selector(inspectExtendedCaptureJournal)),8,424,260,32,in:device)
+        place(label("查看已接受的读取数、中断阶段和备份编号；可导出日志供网页版检查。历史日志不会恢复配置。",12),8,468,850,45,in:device)
         let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
         place(discardResult,208,253,300,32,in:device)
         let settings=tabs.tabViewItems.last!.view!
