@@ -1915,6 +1915,67 @@ def inspect_basic_apply_refresh(pe):
             "limits": "Classifies these refresh inputs and helper destinations. The mode methods and indirect or nested calls are not an exhaustive transport audit; this does not prove that no other setting command exists. No program execution, device write or polling-rate acceptance."}
 
 
+def inspect_basic_refresh_mode_helpers(pe):
+    """Classify the actual target table's nested refresh methods by pinned bodies."""
+    bodies = {
+        0x504130: (0x5041D5, "040f1c987ab09f76637c52dfcb40761a5bc38e20f44e13bf79e6a09fba21f92c"),
+        0x508000: (0x5080AB, "e130e242fd57ec047a26ca3d37d4043c3071c4f753c60e48cfa603a40fb3c7bc"),
+        0x507E40: (0x507EA4, "95ad33f67c873be2727d3f8eb4375412502af164a167a727d6e806fb09d82cd4"),
+        0x5051E0: (0x5052A4, "c4a0cfb8788c669fa298949ac50622684aac4b0bbf2b223d4d8f3370035c6924"),
+        0x505650: (0x5056ED, "44677951daaea7c002d949759dbc2e9830f199cae5b593f741350bfbc9cfdba7"),
+        0x506190: (0x50623B, "31f8e1d5e4b05e5dd84a5b07bd3f70bc677bed00419493c3fb371be5b4642177"),
+        0x505900: (0x5059E4, "ad3cf1a9bcc56abac3609458362be825f37383ad4f46672206612f3ba0e4b01c"),
+        0x483DD0: (0x483DFD, "76c3eb638ea1373e6f79c2e834083f56321c255589401aea495208253dc116ee"),
+        0x519D70: (0x519DD1, "0a595140070a782056f274e01e6217871d24db4f9640858713d16a8d1da96968"),
+        0x6872A0: (0x6873FA, "08e8653de0c12b3ce71849640f88fc12cb0a4fb4910a518c1082b63790c75bea"),
+    }
+    for start, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError(f"Unexpected nested mode refresh body at {start:#x}")
+    virtuals = {0x34C: 0x504130, 0x3D0: 0x508000, 0x3C8: 0x507E40,
+                0x370: 0x5051E0, 0x37C: 0x505650, 0x3A4: 0x506190,
+                0x388: 0x505900, 0x3E4: 0x519D70}
+    for offset, target in virtuals.items():
+        if pe.pointer(0x77F604+offset) != target:
+            raise ValueError("Unexpected nested mode refresh virtual target")
+    checks = {
+        0x50413A: "c6804422000000", 0x504144: "c6818c4a000000",
+        0x504157: "e874fcf7ff", 0x50416A: "e861fcf7ff",
+        0x50417E: "e84dfcf7ff", 0x504192: "e839fcf7ff",
+        0x5041A5: "e826fcf7ff", 0x5041B9: "e812fcf7ff",
+        0x5041C9: "8b90e4030000", 0x5041CF: "ffd2",
+        0x483DF4: "c60200", 0x519D84: "e817d51600",
+        0x519D9A: "e801d51600", 0x519DB0: "e8ebd41600",
+        0x519DC5: "e8d6d41600", 0x6872A0: "8b4c240c",
+        0x6872A4: "0fb6442408", 0x6872AB: "8b7c2404",
+        0x6872DC: "f3aa", 0x6873AD: "8807",
+        0x505913: "e8d8eff2ff", 0x505922: "e8d988ffff",
+        0x505930: "e80be4f7ff", 0x50595F: "e81cddf7ff",
+        0x505974: "e877f3feff", 0x5059DA: "e891d5f3ff",
+    }
+    for address, raw in checks.items():
+        if pe.at(address, len(bytes.fromhex(raw))) != bytes.fromhex(raw):
+            raise ValueError(f"Unexpected nested mode refresh instruction at {address:#x}")
+    return {
+        "functionBodies": {hex(a): {"endExclusive": hex(b), "sha256": h}
+                           for a, (b, h) in bodies.items()},
+        "instructionChecks": len(checks),
+        "leafObjectUpdateMethods": [hex(virtuals[o]) for o in [0x3D0, 0x3C8, 0x370, 0x37C, 0x3A4]],
+        "leafScope": "Five pinned methods have no call instructions and only in-body branch targets; byte/table updates, not report submission.",
+        "clearMethod": {"entry": "0x504130", "zeroBytesHelper": "0x483dd0",
+                        "buffers": [{"offset": hex(o), "bytes": n} for o, n in
+                                    [(0x224C,126),(0x224C,126),(0x4A8D,23),(0x4AA4,23),(0x4ABB,23),(0x4AD2,23)]],
+                        "nestedVirtual": "+0x3e4 -> 0x519d70",
+                        "nestedFills": [{"offset": hex(o), "bytes":100,"value":v}
+                                        for o,v in [(0x874,0),(0x8D8,0),(0x93C,0),(0x9A0,1)]],
+                        "fillHelper": "0x6872a0: byte-repeat stores; returns destination; no transport calls"},
+        "remainingColorMethod": {"entry":"0x505900",
+                                 "nestedEntries":["0x4348f0","0x4fe200","0x483d40","0x483680","0x4f4cf0","0x442f70"],
+                                 "state":"requires further nested classification"},
+        "limits": "These bounded helper bodies narrow the refresh call graph. They do not classify all remaining color helpers, object callbacks, timers or other settings entries; no conclusion that the complete apply path has no hardware effects, or that polling is unsupported. No device access or writes.",
+    }
+
+
 def inspect_basic_apply_transport_chain(pe):
     """Pin the entire ordinary polling apply tail, not only its JSON store."""
     bodies = {
@@ -3322,7 +3383,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 76,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 77,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3365,6 +3426,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
+        "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "profileFileStorage": inspect_profile_file_storage(pe),
         "macroStepSaveSemantics": inspect_macro_step_save_semantics(pe),
         "macroStepFiles": inspect_macro_step_files(pe),
