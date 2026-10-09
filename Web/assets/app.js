@@ -1,3 +1,4 @@
+import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
 import {hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
@@ -12,6 +13,7 @@ import {runPageOperation} from './page-operation.js?v=0.6.0';
 const pageFailures=[];let pageLogTasks=Promise.resolve(),mediaSelectionRecord=null;
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
+const extendedBackupEditor=installExtendedBackupEditor(operation);
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let defaultInspection=null,selectedDefaultLightingFile=null;
@@ -28,6 +30,7 @@ function status(message,error=false){$('status').textContent=message;$('status')
 function safeProfile(s){try{return fromHardware(s);}catch(error){status(`配置已读取；${error.message} 键位和灯效仍可编辑。`);return {format:'CherryMacProfile',version:1,snapshot:clone(s),macros:[]};}}
 function counts(s,original){return {keys:keys.filter(k=>!equal(s.keymap.slice(k.slot*3,k.slot*3+3),original.keymap.slice(k.slot*3,k.slot*3+3))).length,colors:keys.filter(k=>{const slot=lightingColorSlot(profile,k.slot);return slot!=null&&!equal(s.colors?.slice(slot*3,slot*3+3),original.colors?.slice(slot*3,slot*3+3));}).length,params:!equal(s.parameters,original.parameters),macros:!equal(s.macroData,original.macroData)};}
 function render(){
+  extendedBackupEditor.render(busy);
   const s=profile.snapshot,base=baseline??demo,c=counts(s,base);
   let lightingTarget=s;if(baseline&&['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding))try{lightingTarget=reviewLightingDraft(profile,baseline).target;}catch{}
   if(lightingTarget!==s){c.colors=counts(lightingTarget,base).colors;c.params=!equal(lightingTarget.parameters,base.parameters);}

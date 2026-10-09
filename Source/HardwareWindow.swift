@@ -401,6 +401,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #endif
         place(label(scopeDescription,13),8,148,850,70,in:device)
         place(button("打开操作日志",#selector(openLogs)),8,253,180,32,in:device)
+        place(button("检查扩展备份文件…",#selector(inspectExtendedBackup)),8,321,260,32,in:device)
+        place(label("仅检查、保存与导出已捕获的原始数据，显示未覆盖字节；不会读取或修改键盘。",12),8,364,850,45,in:device)
         let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
         place(discardResult,208,253,300,32,in:device)
         let settings=tabs.tabViewItems.last!.view!

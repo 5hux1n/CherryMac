@@ -1,5 +1,5 @@
-import {databaseOpener} from './database.js?v=0.6.0';
-import {validateExtendedHardwareBackup} from './extended-hardware-backup.js';
+import {databaseOpener,strictWriteTransaction} from './database.js?v=0.6.0';
+import {validateExtendedHardwareBackup} from './extended-hardware-backup.js?v=0.6.0';
 
 // Separate raw backups, never silently upgraded from ordinary editor snapshots.
 // No database access until save/load, no HID calls or uploads.
@@ -16,7 +16,7 @@ export async function saveExtendedHardwareBackup(input){
   const snapshot=JSON.parse(text);validateExtendedHardwareBackup(snapshot);
   const id=crypto.randomUUID(),record={id,snapshot},database=await open();
   return new Promise((resolve,reject)=>{
-    const tx=database.transaction('backups','readwrite',{durability:'strict'}),store=tx.objectStore('backups');let failure=null;
+    const tx=strictWriteTransaction(database,'backups'),store=tx.objectStore('backups');let failure=null;
     const added=store.add(record);
     added.onsuccess=()=>{
       const read=store.get(id);
@@ -43,5 +43,14 @@ export async function loadExtendedHardwareBackup(id){
     tx.oncomplete=()=>resolve(snapshot);
     tx.onerror=()=>reject(failure??tx.error??new Error('扩展备份读取失败。'));
     tx.onabort=()=>reject(failure??tx.error??new Error('扩展备份读取中止。'));
+  });
+}
+
+export async function listExtendedHardwareBackupIDs(){
+  const database=await open();return new Promise((resolve,reject)=>{
+    const tx=database.transaction('backups','readonly');let ids,failure=null;
+    const request=tx.objectStore('backups').getAllKeys();
+    request.onsuccess=()=>{try{ids=request.result;ids.forEach(validateID);}catch(error){failure=error;tx.abort();}};
+    tx.oncomplete=()=>resolve(ids);tx.onerror=()=>reject(failure??tx.error??new Error('扩展备份列表读取失败。'));tx.onabort=()=>reject(failure??tx.error??new Error('扩展备份列表读取中止。'));
   });
 }
