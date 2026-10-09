@@ -68,3 +68,17 @@ export async function loadExtendedCaptureJournal(id){
     tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(failure??tx.error??new Error('扩展捕获日志读取失败。'));tx.onabort=()=>reject(failure??tx.error??new Error('扩展捕获日志读取中止。'));
   });
 }
+
+// Bounded key listing lets a reload recover earlier incomplete operations.
+// Loading/exporting still validates every event rather than trusting keys.
+export async function listExtendedCaptureJournalIDs(){
+  const db=await open();return new Promise((resolve,reject)=>{
+    const tx=db.transaction('events','readonly');let result,failure=null;
+    const request=tx.objectStore('events').getAllKeys(undefined,100_001);
+    request.onsuccess=()=>{try{
+      const keys=request.result;if(keys.length>100_000||keys.some(key=>!Array.isArray(key)||key.length!==2||!uuid(key[0])||!Number.isInteger(key[1])||key[1]<1||key[1]>325))fail();
+      result=[...new Set(keys.map(key=>key[0]))].sort();
+    }catch(error){failure=error;tx.abort();}};
+    tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(failure??tx.error??new Error('扩展日志列表读取失败。'));tx.onabort=()=>reject(failure??tx.error??new Error('扩展日志列表读取中止。'));
+  });
+}

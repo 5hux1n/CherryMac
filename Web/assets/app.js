@@ -1,3 +1,5 @@
+import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
+import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
 import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
 import {hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
@@ -13,7 +15,18 @@ import {runPageOperation} from './page-operation.js?v=0.6.0';
 const pageFailures=[];let pageLogTasks=Promise.resolve(),mediaSelectionRecord=null;
 import {HostTextBridge} from './text-bridge.js?v=0.6.0';
 const $=id=>document.getElementById(id),demo=demoSnapshot(),gate=new PageReleaseGate();
-const extendedBackupEditor=installExtendedBackupEditor(operation);
+const extendedBackupEditor=installExtendedBackupEditor(operation,{capture:async({id,cancelled,progress})=>{
+  requireThat(hid&&!hid.dead&&hid.device.opened,'请先连接 USB 键盘。');
+  requireThat(textBridge?.paired,'请先在文本页连接配套 Mac 联动服务，以核对 USB 版本。');
+  const session=hid,identity=await textBridge.usbIdentity();
+  requireThat(session===hid&&!session.dead,'USB 会话已经改变，请重新连接。');
+  return session.captureExtended({operationID:id,identity:async()=>{
+    const current=await textBridge.usbIdentity();
+    requireThat(Object.keys(identity).every(key=>identity[key]===current[key]),'USB 身份已改变，请重新连接并开始新的捕获。');return current;
+  },cancelled:()=>cancelled()||session!==hid,
+    persist:async event=>{await saveExtendedCaptureEvent(id,identity,event);if(event.phase==='readAccepted')progress(Math.ceil((event.sequence-1)/2));},
+    save:saveExtendedHardwareBackup,load:loadExtendedHardwareBackup});
+}});
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let defaultInspection=null,selectedDefaultLightingFile=null;
