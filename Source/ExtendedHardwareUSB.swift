@@ -2,7 +2,7 @@ import Foundation
 import IOKit.hid
 
 // Dedicated read-only USB session, separate from every configuration sender.
-// Development code only until the current revision's boundaries are confirmed.
+// Development adapter for the bounded 0102/0104 prefixes; no write sender.
 final class ExtendedHardwareUSB {
     struct OperationFailure:LocalizedError {
         let operationID:String

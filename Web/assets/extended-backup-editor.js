@@ -1,4 +1,4 @@
-import {validateExtendedHardwareBackup,extendedBackupCoverage} from './extended-hardware-backup.js?v=0.6.0';
+import {validateExtendedHardwareBackup,extendedBackupCoverage,extendedBackupBoundaryDescription} from './extended-hardware-backup.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup,listExtendedHardwareBackupIDs} from './extended-hardware-backup-store.js?v=0.6.0';
 import {download} from './storage.js?v=0.6.0';
 
@@ -12,7 +12,7 @@ export function installExtendedBackupEditor(operation){
   const show=value=>{
     validateExtendedHardwareBackup(value);selected=structuredClone(value);
     const names={parameters:'参数',keymap:'键位',colors:'颜色',macroData:'宏'};
-    $('extended-summary').textContent=extendedBackupCoverage(value).map(row=>`${names[row.region]}：${row.storedBytes}/${row.regionBytes} 字节，未捕获偏移 ${row.missingOffsets.join('、')}`).join('；')+'。边界来自旧官方 Pokémon 0104 静态分析，不代表当前固件身份；记录不进入编辑区或完整恢复／配对流程。';
+    $('extended-summary').textContent=extendedBackupCoverage(value).map(row=>`${names[row.region]}：${row.storedBytes}/${row.regionBytes} 字节，未捕获偏移 ${row.missingOffsets.join('、')}`).join('；')+'。'+extendedBackupBoundaryDescription(value)+'记录不进入编辑区或完整恢复／配对流程。';
   };
   const clear=()=>{selected=null;$('extended-summary').textContent='正在检查新记录；此前选择已清除。';};
   $('extended-inspect').onclick=()=>$('extended-file').click();

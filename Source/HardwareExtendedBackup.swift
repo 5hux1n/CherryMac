@@ -1,7 +1,34 @@
 import AppKit
 
-// File-only entry. No USB creation, profile adoption or restore authorization.
+// Separate file inspection and explicitly selected read-only capture.
+// Neither adopts a profile or authorizes restoration/configuration writes.
 extension HardwareWindowController {
+    @objc func captureExtendedBackup(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil else{return}
+        suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
+        message.stringValue="正在读取两遍扩展前缀并保存核对；不写入配置…"
+        // Wait behind the queued host-text shutdown before opening another
+        // USB session, then use the main run loop for the read-only adapter.
+        queue.async{[weak self] in DispatchQueue.main.async{[weak self] in
+            guard let self else{return}
+            defer{self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()}
+            let base=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac")
+            let store=ExtendedHardwareBackupStore(directory:base.appendingPathComponent("ExtendedHardwareBackups"))
+            let journal=ExtendedCaptureJournal(directory:base.appendingPathComponent("ExtendedCaptureJournal"))
+            do{
+                let usb=try ExtendedHardwareUSB()
+                let result=try usb.capture(store:store,journal:journal,cancelled:{self.window?.isVisible != true})
+                let file=store.directory.appendingPathComponent(result.receipt.backupReference+".json")
+                self.message.stringValue="扩展前缀已保存，两遍一致且本机读回核对通过；仍缺四个末字节，不是完整恢复备份。"
+                NSWorkspace.shared.activateFileViewerSelecting([file])
+            }catch{
+                self.message.stringValue="扩展只读捕获未完成："+error.localizedDescription
+                if let failure=error as? ExtendedHardwareUSB.OperationFailure{
+                    self.message.stringValue+="。日志编号："+failure.operationID
+                }
+            }
+        }}
+    }
     @objc func inspectExtendedBackup(){
         guard !busy else{return}
         let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/ExtendedHardwareBackups")
@@ -16,7 +43,7 @@ extension HardwareWindowController {
             let names=["parameters":"参数","keymap":"键位","colors":"颜色","macroData":"宏"]
             let coverage=try snapshot.coverage().map{"\(names[$0.region] ?? $0.region)：\($0.storedBytes)/\($0.regionBytes) 字节，未捕获偏移 \($0.missingOffsets.lowerBound)"}.joined(separator:"\n")
             while true{
-                let alert=NSAlert();alert.messageText="扩展原始备份";alert.informativeText=coverage+"\n\n边界依据旧官方 Pokémon 0104 静态分析，不能据此识别当前固件。缺失字节不补造；这里只处理已捕获文件，不改变编辑区，不执行完整恢复或配对。"
+                let alert=NSAlert();alert.messageText="扩展原始备份";alert.informativeText=coverage+"\n\n"+snapshot.boundaryDescription+"缺失字节不补造；这里只处理已捕获文件，不改变编辑区，不执行完整恢复或配对。"
                 for title in ["保存到本机备份库","导出副本…","返回"]{alert.addButton(withTitle:title)}
                 let choice=alert.runModal()
                 if choice == .alertFirstButtonReturn{

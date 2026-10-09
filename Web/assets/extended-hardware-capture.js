@@ -6,7 +6,7 @@ export {extendedCaptureRegions};
 // No default USB or persistence implementation. Identity comes from a live
 // adapter's descriptor/session, never a user-entered revision or imported file.
 export function checkedCaptureIdentity(value){
-  if(!value||Object.keys(value).length!==5||typeof value.sessionToken!=='string'||!value.sessionToken||new TextEncoder().encode(value.sessionToken).length>128||value.vendorID!==0x046a||value.productID!==0x01ce||value.usbRevision!==0x0104||value.transport!=='USB')throw new Error('扩展捕获仅有 Pokémon USB 0104 的静态边界依据；当前设备身份／固件范围未匹配。');
+  if(!value||Object.keys(value).length!==5||typeof value.sessionToken!=='string'||!value.sessionToken||new TextEncoder().encode(value.sessionToken).length>128||value.vendorID!==0x046a||value.productID!==0x01ce||![0x0102,0x0104].includes(value.usbRevision)||value.transport!=='USB')throw new Error('扩展捕获限 Pokémon USB 0102 实测或 0104 静态范围；当前设备身份未匹配。');
   return structuredClone(value);
 }
 export class ExtendedCaptureFailure extends Error{
@@ -43,6 +43,7 @@ export async function captureExtendedHardware({identity,cancelled,nowMillisecond
       data[region]=value;
     }
     const snapshot={format:'CherryMacExtendedHardware',version:1,vendorID:0x046a,productID:0x01ce,boundaryModel:'pokemon-0104-static',createdAtMilliseconds:nowMilliseconds(),...data};
+    if(selected.usbRevision===0x0102){snapshot.version=2;snapshot.boundaryModel='pokemon-0102-readback';snapshot.usbRevision=selected.usbRevision;}
     validateExtendedHardwareBackup(snapshot);return snapshot;
   };
   try{

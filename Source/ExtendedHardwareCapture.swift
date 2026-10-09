@@ -11,7 +11,7 @@ struct ExtendedHardwareCapture {
         let transport:String
         func validate()throws{
             guard !sessionToken.isEmpty,sessionToken.utf8.count<=128,vendorID==0x046a,productID==0x01ce,
-                  usbRevision==0x0104,transport=="USB" else{throw CaptureError(message:"扩展捕获仅有 Pokémon USB 0104 的静态边界依据；当前设备身份／固件范围未匹配。")}
+                  [0x0102,0x0104].contains(usbRevision),transport=="USB" else{throw CaptureError(message:"扩展捕获限 Pokémon USB 0102 实测或 0104 静态范围；当前设备身份未匹配。")}
         }
     }
     struct Region {
@@ -81,7 +81,8 @@ struct ExtendedHardwareCapture {
                 data[region.name]=value
             }
             let timestamp=nowMilliseconds();guard timestamp.isFinite,timestamp>=0 else{throw CaptureError(message:"扩展捕获时间无效。")}
-            let snapshot=ExtendedHardwareBackup(createdAtMilliseconds:timestamp,deviceInfo:data["deviceInfo"]!,parameters:data["parameters"]!,keymap:data["keymap"]!,colors:data["colors"]!,macroData:data["macroData"]!)
+            var snapshot=ExtendedHardwareBackup(createdAtMilliseconds:timestamp,deviceInfo:data["deviceInfo"]!,parameters:data["parameters"]!,keymap:data["keymap"]!,colors:data["colors"]!,macroData:data["macroData"]!)
+            if selected.usbRevision==0x0102{snapshot.version=2;snapshot.boundaryModel="pokemon-0102-readback";snapshot.usbRevision=selected.usbRevision}
             try snapshot.validate();return snapshot
         }
         do{
