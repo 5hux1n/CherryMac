@@ -936,7 +936,11 @@ enum WindowsProfile {
     // Offline candidate only. Neither this report nor read metadata grants IO.
     static func reviewDefaultConfiguration(_ data:Data,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->DefaultConfigurationReview {
         try baseline.validate();let colorSlots=try mapping.slots(for:baseline)
-        guard baseline.deviceInfo[6]==24,baseline.deviceInfo[5]==126,baseline.parameters[0]==0,let originalColors=baseline.colors,baseline.macroData != nil else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线。")}
+        // Current USB0102 reads info[5]=170; it is not a reliable logical-key
+        // count. Use the validated model47 banks and matching LED map instead.
+        guard baseline.deviceInfo[6]==24,baseline.parameters[0]==0,let originalColors=baseline.colors,baseline.macroData != nil,
+              defaults.count==126,colorSlots.count==defaults.count,
+              baseline.keymap.count==defaults.count*3,originalColors.count==defaults.count*3 else{throw HardwareError(message:"默认恢复核对需要本型号配置 0 的完整读取基线和 126 项映射。")}
         let template=try extractDefaultTemplate(data)
         let plan=try planOfficialLighting(template,baseline:baseline,lightingMapping:mapping,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)
         guard plan.stages.count==1 else{throw HardwareError(message:"默认恢复核对目前需要内置灯效默认模板，逐键模式模板尚未接入此流程。")}
@@ -1339,12 +1343,14 @@ enum WindowsProfile {
         var rawLightingMetadata:RawLightingMetadata? = nil
     }
     static func reviewDefaultLighting(_ data:Data? = nil,baseline:HardwareSnapshot,mapping:LightingMappingContext)throws->LightingDraftReview{
-        try baseline.validate();guard baseline.deviceInfo[5]==126,baseline.colors != nil,baseline.macroData != nil else{throw HardwareError(message:"默认灯效需要本型号完整配置和 126 个颜色位置。")}
+        try baseline.validate();let slots=try mapping.slots(for:baseline)
+        guard baseline.deviceInfo[6]==24,defaults.count==126,slots.count==defaults.count,
+              baseline.keymap.count==defaults.count*3,baseline.colors?.count==defaults.count*3,
+              baseline.macroData != nil else{throw HardwareError(message:"默认灯效需要本型号完整配置和 126 项映射。")}
         // Model 47 LightInfo is identical in official DefaultData0…4; bank 0 only.
         let parameters:(head:[UInt8],lightOpenFlag:UInt8)
         if let data{parameters=try prepareOfficialLightingParameters(extractDefaultTemplate(data),bank:0)}
         else{parameters=([0,23,4,2,0,1,0,255,0],0)}
-        let slots=try mapping.slots(for:baseline)
         let red:Set<Int>=[44,64,65,66,96,113,114,115];var colors=[UInt8](repeating:0,count:378)
         for (logical,slot) in slots.enumerated(){guard let slot else{continue};colors[slot*3]=254;colors[slot*3+1]=red.contains(logical) ? 0:254;colors[slot*3+2]=red.contains(logical) ? 0:254}
         var plan=assembleLightingPlan(head:parameters.head,lightOpenFlag:parameters.lightOpenFlag,colors:nil,bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true)

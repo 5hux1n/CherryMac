@@ -593,7 +593,9 @@ function defaultBankReports(command,data,preflight=false){
 // Compute an offline candidate and unresolved scopes, without authorizing IO.
 export function reviewDefaultConfiguration(text,baseline,mapping){
   validateSnapshot(baseline,true);const colorSlots=lightingMappingSlots(mapping,baseline);
-  requireThat(baseline.deviceInfo[6]===24&&baseline.deviceInfo[5]===126&&baseline.parameters[0]===0,'默认恢复核对需要本型号配置 0 的完整读取基线。');
+  // USB0102 info[5] is 170, not the model's logical position count. Use
+  // validated bank sizes and the matching LED map, preserving all IO gates.
+  requireThat(baseline.deviceInfo[6]===24&&baseline.parameters[0]===0&&WINDOWS_DEFAULTS.length===126&&colorSlots.length===WINDOWS_DEFAULTS.length&&baseline.keymap.length===WINDOWS_DEFAULTS.length*3&&baseline.colors.length===WINDOWS_DEFAULTS.length*3,'默认恢复核对需要本型号配置 0 的完整读取基线和 126 项映射。');
   const template=extractOfficialDefaultTemplate(text);
   const lightingPlan=planOfficialLighting(template,baseline,mapping,{bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true});
   requireThat(lightingPlan.stages.length===1,'默认恢复核对目前需要内置灯效默认模板，逐键模式模板尚未接入此流程。');
@@ -749,9 +751,10 @@ export async function executeDefaultTransaction(review,{recovery=null,source,ope
   assessDefaultTransactionRecord(record);await persist(clone(record));return record;
 }
 export function reviewDefaultLighting(text,baseline,mapping){
-  validateSnapshot(baseline,true);requireThat(baseline.deviceInfo[5]===126,'默认灯效需要本型号完整配置和 126 个颜色位置。');
+  validateSnapshot(baseline,true);const slots=lightingMappingSlots(mapping,baseline);
+  requireThat(baseline.deviceInfo[6]===24&&WINDOWS_DEFAULTS.length===126&&slots.length===WINDOWS_DEFAULTS.length&&baseline.keymap.length===WINDOWS_DEFAULTS.length*3&&baseline.colors.length===WINDOWS_DEFAULTS.length*3,'默认灯效需要本型号完整配置和 126 项映射。');
   // Official DefaultData0…4 agree for model 47; no profile selection needed at bank 0.
-  const parameters=text==null?{head:[0,23,4,2,0,1,0,255,0],lightOpenFlag:0}:prepareOfficialLightingParameters(extractOfficialDefaultTemplate(text),0),slots=lightingMappingSlots(mapping,baseline),red=new Set([44,64,65,66,96,113,114,115]),colors=Array(378).fill(0);
+  const parameters=text==null?{head:[0,23,4,2,0,1,0,255,0],lightOpenFlag:0}:prepareOfficialLightingParameters(extractOfficialDefaultTemplate(text),0),red=new Set([44,64,65,66,96,113,114,115]),colors=Array(378).fill(0);
   slots.forEach((slot,logical)=>{if(slot!=null)colors.splice(slot*3,3,254,red.has(logical)?0:254,red.has(logical)?0:254);});
   const options={bank:0,transportSelector:0,chunkCapacity:56,beginRequired:true},plan=assembleLightingPlan(parameters,null,options);
   plan.defaultColorData=colors;plan.stages.unshift({name:'defaultColors',beginRequired:true,beginCommand:1,writes:Array.from({length:Math.ceil(378/56)},(_,i)=>({command:0x0b,offset:i*56,flag:0,data:colors.slice(i*56,(i+1)*56)})),finishCommand:2,finishDelayMilliseconds:10});
