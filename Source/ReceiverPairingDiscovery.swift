@@ -27,13 +27,14 @@ final class ReceiverPairingDiscovery {
                       value.doubleValue.rounded()==value.doubleValue,value.doubleValue>=0,value.doubleValue<=65535 else{return nil}
                 return value.intValue
             }
-            guard let vendor = number(kIOHIDVendorIDKey), let product = number(kIOHIDProductIDKey),
-                  let page = number(kIOHIDPrimaryUsagePageKey), let usage = number(kIOHIDPrimaryUsageKey) else { continue }
+            guard let vendor = number(kIOHIDVendorIDKey), let product = number(kIOHIDProductIDKey) else { continue }
             var registryID: UInt64 = 0
             guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device), &registryID) == KERN_SUCCESS,
                   registryID != 0 else { continue }
+            // The macOS primary collection is the ordinary keyboard (01/06).
+            // Admission below proves the separate FF1C/92 report-4 collection.
             let candidate = ReceiverPairingCandidate(token: entries[registryID]?.candidate.token ?? UUID().uuidString,
-                vendorID: vendor, productID: product, usagePage: page, usage: usage)
+                vendorID: vendor, productID: product, usagePage: 0xff1c, usage: 0x92)
             guard candidate.role != nil,
                   let descriptor = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data,
                   ReceiverPairingReports.supportsConfiguration(descriptor) else { continue }

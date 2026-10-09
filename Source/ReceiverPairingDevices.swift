@@ -32,8 +32,7 @@ final class ReceiverPairingDevices {
         let created = IOHIDManagerCreate(kCFAllocatorDefault, 0)
         let matches = [0x01ce, 0x01cf].map { product in
             [kIOHIDVendorIDKey: 0x046a, kIOHIDProductIDKey: product,
-             kIOHIDTransportKey: "USB", kIOHIDPrimaryUsagePageKey: 0xff1c,
-             kIOHIDPrimaryUsageKey: 0x92] as [String: Any]
+             kIOHIDTransportKey: "USB"] as [String: Any]
         }
         IOHIDManagerSetDeviceMatchingMultiple(created, matches as CFArray)
         generation = UUID()

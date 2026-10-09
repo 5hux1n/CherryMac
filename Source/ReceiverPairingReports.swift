@@ -8,6 +8,7 @@ enum ReceiverPairingReports {
         var size = 0
         var count = 0
         var reportID = 0
+        var usagePage = 0
     }
     static func supportsConfiguration(_ descriptor: Data) -> Bool {
         guard !descriptor.isEmpty, descriptor.count <= 65_536 else { return false }
@@ -15,6 +16,8 @@ enum ReceiverPairingReports {
         var cursor = 0, depth = 0
         var globals = Globals(), stack: [Globals] = []
         var inputBits = 0, outputBits = 0
+        var localUsages: [(page:Int,usage:Int)] = []
+        var collections: [Bool] = []
         while cursor < bytes.count {
             let prefix = Int(bytes[cursor]); cursor += 1
             // No long-item semantics are needed by this model; do not guess.
@@ -29,6 +32,9 @@ enum ReceiverPairingReports {
             switch type {
             case 1:
                 switch tag {
+                case 0:
+                    guard length > 0, value <= 65_535 else { return false }
+                    globals.usagePage = value
                 case 7, 9:
                     guard length > 0, value <= 65_535 else { return false }
                     if tag == 7 { globals.size = value } else { globals.count = value }
@@ -41,20 +47,25 @@ enum ReceiverPairingReports {
                 case 11:
                     guard length == 0, let saved = stack.popLast() else { return false }
                     globals = saved
-                case 0...6: break
+                case 1...6: break
                 default: return false
                 }
             case 0:
                 switch tag {
                 case 10:
                     guard length == 1, depth < 64 else { return false }
+                    let usage = localUsages.first
+                    let configuration = depth == 0 && value == 1 && usage?.page == 0xff1c && usage?.usage == 0x92
+                    collections.append(configuration || (collections.last ?? false))
                     depth += 1
                 case 12:
                     guard length == 0, depth > 0 else { return false }
                     depth -= 1
+                    collections.removeLast()
                 case 8, 9, 11:
                     guard length > 0, depth > 0 else { return false }
                     if globals.reportID == 4 && tag != 11 {
+                        guard collections.last == true else { return false }
                         let bits = globals.size * globals.count
                         guard bits > 0, bits <= 504 else { return false }
                         if tag == 8 { inputBits += bits } else { outputBits += bits }
@@ -62,7 +73,17 @@ enum ReceiverPairingReports {
                     }
                 default: return false
                 }
-            case 2: break // Local usage metadata does not change report length.
+                // Local items apply to one Main item, including Collection.
+                localUsages.removeAll()
+            case 2:
+                if tag == 0 {
+                    guard length > 0, localUsages.count < 256 else { return false }
+                    localUsages.append((page:length == 4 ? value >> 16:globals.usagePage,
+                                        usage:length == 4 ? value & 65535:value))
+                } else if ![1,2,3,4,5,7,8,9].contains(tag) {
+                    // Delimiter sets/reserved local tags are outside this model.
+                    return false
+                }
             default: return false
             }
         }
