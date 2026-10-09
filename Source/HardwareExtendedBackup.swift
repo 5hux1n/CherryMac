@@ -24,7 +24,7 @@ extension HardwareWindowController {
                 guard choice == .alertFirstButtonReturn else{return}
                 let save=NSSavePanel();save.nameFieldStringValue="CherryMac-extended-capture-log.json"
                 guard save.runModal() == .OK,let output=save.url else{continue}
-                guard output.deletingLastPathComponent().resolvingSymlinksInPath()!=folder.resolvingSymlinksInPath() else{throw HardwareError(message:"请将导出副本放在原日志文件夹以外，保留原始事件。")}
+                guard output.deletingLastPathComponent().resolvingSymlinksInPath() != folder.resolvingSymlinksInPath() else{throw HardwareError(message:"请将导出副本放在原日志文件夹以外，保留原始事件。")}
                 let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
                 let data=try encoder.encode(records);guard data.count<=2_000_000 else{throw HardwareError(message:"导出日志超过 2 MB。")}
                 try data.write(to:output,options:.atomic)
