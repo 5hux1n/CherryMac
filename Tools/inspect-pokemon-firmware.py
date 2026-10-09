@@ -954,6 +954,50 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_control_report_read_sources(image):
+    """Pin control-style GET_REPORT alternatives; no feature probe or guesses."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Control report source evidence exceeds image bounds")
+        return image[offset:offset+size]
+    segment=(0x26808,0x268c2)
+    expected="4f5ea22eb01470ada66c324449d3bbe24bb86b660b581d78cae42875499ff138"
+    if hashlib.sha256(at(segment[0],segment[1]-segment[0])).hexdigest()!=expected:
+        raise ValueError("Control report read body differs")
+    literals={0x4cb68:0x26809,0x4cb74:0x26779,0x268c4:0x20009b0d,
+              0x268c8:0x20004b60,0x268cc:0x2000466c,0x268d0:0x20003328,
+              0x268d4:0x20004c3c,0x268d8:0x20004b74,
+              0x268dc:0x20004de8,0x268e0:0x20004aec}
+    for address,value in literals.items():
+        if struct.unpack("<I",at(address,4))[0]!=value:
+            raise ValueError("Control report read literal differs")
+    checks={0x2680a:"4c881e68230a022be7b2",0x26822:"082ffbd1",
+            0x26832:"0d79002df2d1",0x26864:"092f29d1",
+            0x26870:"1748bde8f840013a01f042bb",0x268bc:"6ff02200f8bd"}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Control report read branch differs")
+    return {"entry":"0x26808", "segmentSHA256":expected,
+            "callbackPointers":{"read":"0x4cb68 -> Thumb0x26809", "set":"0x4cb74 -> Thumb0x26779"},
+            "fields":"Request halfword at+2: high byte selects type, low byte selects reportID",
+            "outputType2":{"reportID":8,"result":"ReportID plus byte fromRAM0x20009b0d; other IDs return0 without this copy"},
+            "inputType1":{"gate":"Request byte4 must be0 for named copies",
+                "sources":[{"reportID":1,"RAM":"0x20004b60","bytes":20},
+                           {"reportID":2,"RAM":"0x20004c3c","bytes":7},
+                           {"reportID":7,"RAM":"0x20004b74","bytes":8},
+                           {"reportID":6,"RAM":"0x20004de8","bytes":1},
+                           {"reportID":3,"RAM":"0x20004aec","bytes":1}],
+                "destination":"Caller buffer+1, reportID atbyte0; no keymap-bank source in these named branches"},
+            "featureType3":{"reportID":9,"deviceGate":"Object pointer must equal value atRAM0x2000466c",
+                "readObjectRAM":"0x20003328","readSourceRAM":"0x2000335e",
+                "copy":"Writes reportID9 then calls0x27f00 with count-1; helper reads object+0x36",
+                "otherIDResult":-35,"distinctFromBLEObject":"BLE callback276FC instead supplies0x200033e0"},
+            "configurationTailSourceDiscovered":False,
+            "limits":"Fixed0104 named control-style function and registered pointer values only; full USB stack binding, host count limits, current0102 code and all input-cache producers remain unproved. No Feature report9 probe, new read command, hardware access or backup promotion."}
+
+
 def inspect_hid_callback_read_sources(image):
     """Pin named callback/cache sources; do not infer USB or live BLE capability."""
     def at(address,size):
@@ -1228,7 +1272,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 26,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 27,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1263,6 +1307,7 @@ def inspect(path):
             'statusRegionAliases': inspect_status_region_aliases(image),
             'nonreadingControlBranches': inspect_nonreading_control_branches(image),
             'hidCallbackReadSources': inspect_hid_callback_read_sources(image),
+            'controlReportReadSources': inspect_control_report_read_sources(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
