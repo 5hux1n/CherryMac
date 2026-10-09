@@ -20,3 +20,7 @@
 #confirm-text{max-height:85vh;overflow:auto}#text-confirm-summary{white-space:pre-line;overflow-wrap:anywhere}
 
 .text-editor{border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0}.text-editor textarea{box-sizing:border-box;width:100%;font:inherit;color:inherit;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:12px;resize:vertical}
+
+/* Keep connection controls separated, including when the row wraps. */
+.connection-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}
+@media(max-width:1150px){.connection-actions{justify-content:flex-start}}
