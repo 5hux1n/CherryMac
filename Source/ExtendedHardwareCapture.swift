@@ -38,20 +38,34 @@ struct ExtendedHardwareCapture {
         let completedReads:Int
     }
     struct CaptureError:LocalizedError{let message:String;var errorDescription:String?{message}}
+    struct Failure:LocalizedError {
+        let cause:Error
+        let journalFailure:Error?
+        let backupReference:String?
+        let completedReads:Int
+        let attemptedSequence:Int
+        var errorDescription:String?{
+            let reason=cause.localizedDescription
+            guard let journalFailure else{return reason}
+            return reason+"；捕获日志无法确认已持久保存，停止追加："+journalFailure.localizedDescription
+        }
+    }
 
     static func capture(identity:()throws->Identity,cancelled:()->Bool,nowMilliseconds:()->Double,
                         persist:(Event)throws->Void,exchange:([UInt8])throws->[UInt8],
                         save:(ExtendedHardwareBackup)throws->String,
                         load:(String)throws->ExtendedHardwareBackup)throws->Receipt{
         let selected=try identity();try selected.validate()
-        var sequence=0,completedReads=0,backupReference:String?
+        var sequence=0,completedReads=0,backupReference:String?,journalFailure:Error?
         func check()throws{
             guard !cancelled() else{throw CaptureError(message:"扩展捕获已取消；已有资料保留。")}
             let current=try identity();try current.validate()
             guard current==selected else{throw CaptureError(message:"扩展捕获 USB 会话已改变，停止读取。")}
         }
         func event(_ phase:String,_ pass:Int=0,_ region:String="",_ offset:Int=0,_ length:Int=0,_ detail:String="")throws{
-            sequence+=1;try persist(.init(sequence:sequence,phase:phase,pass:pass,region:region,offset:offset,length:length,backupReference:backupReference,detail:detail))
+            sequence+=1
+            do{try persist(.init(sequence:sequence,phase:phase,pass:pass,region:region,offset:offset,length:length,backupReference:backupReference,detail:detail))}
+            catch{journalFailure=error;throw error}
         }
         func capturePass(_ pass:Int)throws->ExtendedHardwareBackup{
             var data:[String:[UInt8]]=[:]
@@ -84,8 +98,14 @@ struct ExtendedHardwareCapture {
             return .init(identity:selected,snapshot:second,backupReference:reference,completedReads:completedReads)
         }catch{
             // A failed final identity/storage check does not delete saved data.
-            try event(cancelled() ? "cancelled":"failed",0,"",0,0,String(error.localizedDescription.prefix(1024)))
-            throw error
+            // A persistence error may occur after a file is committed. Do not
+            // guess its sequence or append another event to uncertain history.
+            if journalFailure==nil{
+                do{try event(cancelled() ? "cancelled":"failed",0,"",0,0,String(error.localizedDescription.prefix(1024)))}
+                catch{journalFailure=error}
+            }
+            throw Failure(cause:error,journalFailure:journalFailure,backupReference:backupReference,
+                          completedReads:completedReads,attemptedSequence:sequence)
         }
     }
 }

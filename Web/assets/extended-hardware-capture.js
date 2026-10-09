@@ -9,16 +9,25 @@ export function checkedCaptureIdentity(value){
   if(!value||Object.keys(value).length!==5||typeof value.sessionToken!=='string'||!value.sessionToken||new TextEncoder().encode(value.sessionToken).length>128||value.vendorID!==0x046a||value.productID!==0x01ce||value.usbRevision!==0x0104||value.transport!=='USB')throw new Error('扩展捕获仅有 Pokémon USB 0104 的静态边界依据；当前设备身份／固件范围未匹配。');
   return structuredClone(value);
 }
+export class ExtendedCaptureFailure extends Error{
+  constructor(cause,{journalStopped,journalFailure,backupReference,completedReads,attemptedSequence}){
+    const reason=String(cause?.message??cause);
+    super(reason+(journalStopped?'；捕获日志无法确认已持久保存，停止追加：'+String(journalFailure?.message??journalFailure):''),{cause});
+    this.name='ExtendedCaptureFailure';this.journalStopped=journalStopped;this.journalFailure=journalFailure;
+    this.backupReference=backupReference;this.completedReads=completedReads;this.attemptedSequence=attemptedSequence;
+  }
+}
 export async function captureExtendedHardware({identity,cancelled,nowMilliseconds,persist,exchange,save,load}){
   if(![identity,cancelled,nowMilliseconds,persist,exchange,save,load].every(fn=>typeof fn==='function'))throw new Error('扩展捕获缺少真实身份、取消、时钟、日志、报告交换或保存接口。');
-  const selected=checkedCaptureIdentity(await identity());let sequence=0,completedReads=0,backupReference=null;
+  const selected=checkedCaptureIdentity(await identity());let sequence=0,completedReads=0,backupReference=null,journalStopped=false,journalFailure=null;
   const check=async()=>{
     if(cancelled())throw new Error('扩展捕获已取消；已有资料保留。');
     const current=checkedCaptureIdentity(await identity());
     if(Object.keys(selected).some(key=>current[key]!==selected[key]))throw new Error('扩展捕获 USB 会话已改变，停止读取。');
   };
   const event=async(phase,pass=0,region='',offset=0,length=0,detail='')=>{
-    await persist({sequence:++sequence,phase,pass,region,offset,length,backupReference,detail});
+    try{await persist({sequence:++sequence,phase,pass,region,offset,length,backupReference,detail});}
+    catch(error){journalStopped=true;journalFailure=error;throw error;}
   };
   const capturePass=async pass=>{
     const data={};
@@ -45,5 +54,13 @@ export async function captureExtendedHardware({identity,cancelled,nowMillisecond
     backupReference=reference;await event('saved');const restored=await load(reference);validateExtendedHardwareBackup(restored);
     if(restored.createdAtMilliseconds!==second.createdAtMilliseconds||!sameExtendedCapturedData(restored,second))throw new Error('扩展备份本机读回不一致，保存结果不能用于后续流程。');
     await check();await event('complete');return {identity:selected,snapshot:second,backupReference:reference,completedReads};
-  }catch(error){await event(cancelled()?'cancelled':'failed',0,'',0,0,String(error?.message??error).slice(0,1024));throw error;}
+  }catch(error){
+    // A failed persistence call may have committed its event. Preserve the
+    // original cause/reference, stop appending and leave history for inspection.
+    if(!journalStopped){
+      try{await event(cancelled()?'cancelled':'failed',0,'',0,0,String(error?.message??error).slice(0,1024)||'扩展捕获失败。');}
+      catch(failure){journalStopped=true;journalFailure=failure;}
+    }
+    throw new ExtendedCaptureFailure(error,{journalStopped,journalFailure,backupReference,completedReads,attemptedSequence:sequence});
+  }
 }

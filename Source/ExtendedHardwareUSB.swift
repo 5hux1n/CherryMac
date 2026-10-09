@@ -4,6 +4,11 @@ import IOKit.hid
 // Dedicated read-only USB session, separate from every configuration sender.
 // Development code only until the current revision's boundaries are confirmed.
 final class ExtendedHardwareUSB {
+    struct OperationFailure:LocalizedError {
+        let operationID:String
+        let cause:Error
+        var errorDescription:String?{cause.localizedDescription}
+    }
     private let manager=IOHIDManagerCreate(kCFAllocatorDefault,0)
     private let buffer=UnsafeMutablePointer<UInt8>.allocate(capacity:64)
     private let runLoop=CFRunLoopGetMain()!
@@ -96,10 +101,12 @@ final class ExtendedHardwareUSB {
         guard !captureActive else{try fail("扩展捕获尚未结束，不能重复启动。")}
         captureActive=true;defer{captureActive=false}
         let bound=try identity(),operationID=UUID().uuidString.lowercased()
-        let receipt=try ExtendedHardwareCapture.capture(identity:{try self.identity()},cancelled:cancelled,
-            nowMilliseconds:{Date().timeIntervalSince1970*1000},
-            persist:{try journal.save(id:operationID,identity:bound,event:$0)},
-            exchange:{try self.exchange($0,cancelled:cancelled)},save:store.save,load:store.load)
-        return (operationID,receipt)
+        do{
+            let receipt=try ExtendedHardwareCapture.capture(identity:{try self.identity()},cancelled:cancelled,
+                nowMilliseconds:{Date().timeIntervalSince1970*1000},
+                persist:{try journal.save(id:operationID,identity:bound,event:$0)},
+                exchange:{try self.exchange($0,cancelled:cancelled)},save:store.save,load:store.load)
+            return (operationID,receipt)
+        }catch{throw OperationFailure(operationID:operationID,cause:error)}
     }
 }
