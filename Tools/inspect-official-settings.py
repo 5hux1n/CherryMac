@@ -2363,6 +2363,8 @@ def inspect_cached_device_status(pe):
         0x4FC517: "e8441efeff", 0x4FC5EB: "e81023feff", 0x4FC756: "e8a521feff",
         0x4DE3A5: "c64405bc04", 0x4DE3B0: "0fb75144", 0x4DE3B4: "83fa01",
         0x4DE3C1: "c6440dbc9d", 0x4DE3D0: "c64405bc1d", 0x4DE54A: "e831aeffff",
+        0x4DE429: "3b450c", 0x4DE445: "3b550c", 0x4DE47C: "884c05bc",
+        0x4DE497: "88540dbc", 0x4DE4AC: "88540dbc",
         0x4DE5E0: "e83b871a00",
         0x4325CA: "8b8070080000", 0x4BB3DF: "694d082c030000",
         0x4A6055: "e866c5f8ff", 0x4A605A: "05380a0000",
@@ -2381,6 +2383,11 @@ def inspect_cached_device_status(pe):
             "targetBranch": "0x4fc445 compares PID 0x01ce; matching branch enters 0x4fc502",
             "namedRead": "0x4fc517 -> 0x4de360 with a 56-byte output buffer",
             "namedReadRequest": "Report byte 0 is 4; command byte 3 is 0x9d when receiver word+0x44 equals 1, otherwise 0x1d. Exchanges via 0x4d9380 and copies returned payload starting at byte 8",
+            "namedReadPacketFields": {"reportBytes":64,"lengthByte":4,"offsetBytesLE":[5,6],
+                                      "flagByte":7,"flagValue":0,"lengthSource":"second stack argument, divided by communication byte+0x690 with final remainder",
+                                      "offsetSource":"bytes already read; no separate base-offset argument in this helper",
+                                      "namedTargetReadBytes":56,
+                                      "limits":"Pinned ordinary chunk layout, not proof the current device accepts 1D/9D or a live selector identity. No status packet sent."},
             "readSuccessCache": "0x4fc5c1 writes status word at byte 10 to 2 before caching at 0x4fc5eb",
             "readFailureCache": "0x4fc6c7 builds a 56-byte host record: magic 0x55aa, zero word at byte 2, metadata VID/PID at 4/6, words 1 at 8/10/12, 42 zero bytes at 14; caches at 0x4fc756",
             "namedConsumer": {"site":"0x4a6048..0x4a6085",
@@ -3439,7 +3446,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 79,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 80,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
