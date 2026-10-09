@@ -1337,6 +1337,25 @@ def inspect_external_property_binding(pe, dll_path=None):
     return result
 
 
+def inspect_lighting_sender_return_status(pe):
+    bodies={(0x5010D8,0x50118A):"aed6a2644304a148202506a953135dd8318490c506a1836cfdfcee0aeac272cd",
+            (0x501847,0x501949):"b22478e254f6ded81a3a1196344470c5cbce09f107d74d59ab585cfd2524d256",
+            (0x501D3D,0x501D54):"b185449809584433fd9a677603514ce10fa5f7a0265d369d8fe6630854709921"}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:raise ValueError("Lighting sender return path differs")
+    slot=0x6EBCF4;name=b"Sleep\0"
+    if pe.at(pe.base+pe.pointer(slot)+2,len(name))!=name:raise ValueError("Lighting sender wait import differs")
+    return {"parameterFallback":{"entry":"0x5010d8","sender":"0x500790",
+                                  "calls":["4dd640 bank*64 length9","4dd640 bank*64+21 length1","4dd640 bank*64+24 length1 value1","4da0e0 argument1"],
+                                  "return":"501173 loads EAX=1 after calls; this bounded path has no per-call status test"},
+            "mappedColorBranch":{"entry":"0x501847","sender":"0x501190","call":"4dcde0 result stored in local-24c; ordinary target PID01ce takes bank*512 branch rather than listed01da/01e6/01ef/014c bank*384 branch",
+                                 "finish":"4da0e0 argument1 then501d3d compares saved color-call result to1"},
+            "colorReturnTail":{"entry":"0x501d3d","resultNotOne":"Sleep(200)","allPaths":"501d51 xor EAX,EAX; no direct propagation of saved color-call result"},
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "productImplication":"Do not treat wrapper EAX or a completed official button handler as report acceptance, flash persistence or whole configuration success. Candidate flows retain packet validation and complete readback.",
+            "limits":"Bounded machine return paths only, not C++ signature semantics, full sender reachability, firmware write success, transport retries or old lights-off/USB failure root cause. No program execution or hardware access."}
+
+
 def inspect_lighting_normal_apply(pe):
     bodies={(0x48EA84,0x48EAAB):"dbb1f532032813d5562fa03d4c883201b73303f6e70db6908501bb9da29a05a8",
             (0x4B17E0,0x4B182F):"48ca5dc9b96ed87962ab222ff826f3204d4286ae40a7ee6491c23f8824e8d2e4",
@@ -3257,7 +3276,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 74,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 75,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3280,6 +3299,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
         "lightingOptionalControls": inspect_lighting_optional_controls(pe, skin),
         "lightingNormalApply": inspect_lighting_normal_apply(pe),
+        "lightingSenderReturnStatus": inspect_lighting_sender_return_status(pe),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
         "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
