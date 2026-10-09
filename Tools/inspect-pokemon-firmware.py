@@ -907,6 +907,51 @@ def inspect_factory_related_storage(image):
 
 
 
+def inspect_pairing_endpoint_commands(image):
+    """Separate keyboard-image effects from receiver Utility predicates."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):
+            raise ValueError("Pairing command evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x2f2b8,0x2f2be):"a9859aaae1615603ec45704596c7caa40c96644055da1047b05945b4201a4ae9",
+        (0x2f556,0x2f56a):"38f4380c2e7494a81bef308c44d815c9b41c52247cd70a06acac1c113c487ddf",
+    }
+    for (start,end),expected in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=expected:
+            raise ValueError("Endpoint-specific command body differs")
+    commands={0x20:0x2f2b8,0x21:0x2f516,0xa0:0x2f2b8,0xa1:0x2f2b8,0xaa:0x2f556}
+    for command,target in commands.items():
+        if 0x2f0f4+struct.unpack("<H",at(0x2f0f4+(command-3)*2,2))[0]*2!=target:
+            raise ValueError("Endpoint-specific command dispatch differs")
+    checks={0x2f2b8:"ff23f371",0x2f51a:"00200122087003201a70",
+            0x2f524:"fdf7baff",0x2f558:"2a7a1a70",0x2f560:"687aaa7a08701a70"}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Endpoint-specific command instruction differs")
+    literals={0x2f648:0x20009b08,0x2f64c:0x20009b03,0x2f650:0x20009ace}
+    for address,value in literals.items():
+        if struct.unpack("<I",at(address,4))[0]!=value:
+            raise ValueError("Keyboard AA destination literal differs")
+    defaults=[]
+    for name,rom,size in [("parameters",0x4f264,64),("keymap",0x4d738,512),("colors",0x4f2a4,512)]:
+        data=at(rom,size)
+        defaults.append({"region":name,"sourceROM":hex(rom),"bytes":size,
+                         "SHA256":hashlib.sha256(data).hexdigest(),"lastOffset":size-1,"lastByte":data[-1]})
+    return {"endpoint":"Keyboard image USB046a:01ce/descriptor0104 only; receiver firmware not supplied",
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "instructionChecks":len(checks),"dispatch":{hex(k):hex(v) for k,v in commands.items()},
+            "keyboardStart21":{"branch":"0x2f516", "eventBuilder":"0x2d49c", "mode":3,
+                "reuse":"factoryEventPath pins the complete branch, event byte8=1, byte10=1, reset consumer and all three ROM-to-RAM copies",
+                "configurationEffects":"Named consumer resets all64 parameter bytes, all512 key/color bytes and128 macro-header bytes; other event consumers handle secondary records"},
+            "rejectedOnKeyboard":["0x20","0xa0","0xa1"],
+            "keyboardAA":{"payloadOffsets":[8,9,10],"destinationRAM":["0x20009b08","0x20009b03","0x20009ace"],
+                          "effect":"Stores three incoming bytes; not the receiver Utility byte8-FF polling predicate"},
+            "resetROMDefaults":defaults,
+            "limits":"Uses fixed legacy keyboard image and already pinned factory-event paths, not live0102 firmware. No whole-program event-order proof, complete pairing persistence or receiver command meaning. ROM default tails cannot substitute for pre-operation backup tails; missing capture bytes remain unknown. No requests generated or sent."}
+
+
 def inspect_backup_boundaries(image):
     """Pin strict versus inclusive bounds; does not create a capture plan."""
     bodies = {
@@ -1050,7 +1095,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 22,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 23,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1081,6 +1126,7 @@ def inspect(path):
             'factoryRelatedStorage': inspect_factory_related_storage(image),
             'zeroLengthRecordSemantics': inspect_zero_length_record_semantics(image),
             'backupBoundaries': inspect_backup_boundaries(image),
+            'pairingEndpointCommands': inspect_pairing_endpoint_commands(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
