@@ -40,7 +40,7 @@ struct ExtendedHardwareCapture {
     struct CaptureError:LocalizedError{let message:String;var errorDescription:String?{message}}
 
     static func capture(identity:()throws->Identity,cancelled:()->Bool,nowMilliseconds:()->Double,
-                        persist:(Event)throws->Void,read:(UInt8,Int,Int)throws->[UInt8],
+                        persist:(Event)throws->Void,exchange:([UInt8])throws->[UInt8],
                         save:(ExtendedHardwareBackup)throws->String,
                         load:(String)throws->ExtendedHardwareBackup)throws->Receipt{
         let selected=try identity();try selected.validate()
@@ -60,7 +60,7 @@ struct ExtendedHardwareCapture {
                 for offset in stride(from:0,to:region.count,by:region.chunkCapacity){
                     let length=min(region.chunkCapacity,region.count-offset)
                     try check();try event("readPrepared",pass,region.name,offset,length);try check()
-                    let bytes=try read(region.command,offset,length)
+                    let bytes=try ExtendedHardwareReadFrames.read(command:region.command,offset:offset,length:length,exchange:exchange)
                     guard bytes.count==length else{throw CaptureError(message:"扩展捕获回复长度不一致。")}
                     try check();value+=bytes;completedReads+=1;try event("readAccepted",pass,region.name,offset,length)
                 }
