@@ -953,6 +953,55 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_hid_callback_read_sources(image):
+    """Pin named callback/cache sources; do not infer USB or live BLE capability."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Callback source evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x27638,0x276b6):"4e4de46f844a9ff1070b7d6c38dbc7cd6ec1377c319bb7737f4d2ce6e9a5390a",
+        (0x276fc,0x27712):"5913ddb5e8c5583ab11d9b74e90df11372febd0c7183bb6014c192c216a177ac",
+        (0x27f00,0x27f20):"70cceb129f8330a141373a788035ae5bb16140843998a547c736d33493e83899",
+        (0x36a8c,0x36afa):"9536feccd375aa0f50ae34fc41cb0d51143abdd7cf3c69f0569dc11b070ea6ab",
+        (0x27718,0x277c8):"366b0bde0c6ac5563090506e76ce95657335d9005325b9eea2b2fc5f6f2122ca",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("HID callback source body differs")
+    literals={0x276e8:0x276fd,0x276f0:0x27719,0x27714:0x200033e0,0x27804:0x200060ec}
+    for address,value in literals.items():
+        if struct.unpack("<I",at(address,4))[0]!=value:
+            raise ValueError("HID callback source literal differs")
+    checks={0x27650:"9c959f95",0x2768a:"184b",0x27690:"174da993",
+            0x276b0:"01a90ff0ebf9",0x36aa6:"41f61203",0x36aba:"42f64e21",
+            0x36b16:"42f64d2c",0x27750:"95b10378042b",0x27764:"07f096bc",
+            0x27778:"22792249bde8f84312f080bc",0x27f06:"04f1360112f0bbf8"}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("HID callback routing instruction differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "instructionChecks":len(checks),
+            "registration":{"site":"0x27638..0x276b6", "method":"0x36a8c",
+                "callback276FC":"Thumb literal0x276fd copied tostack+0x270 and+0x27c",
+                "callback27718":"Thumb literal0x27719 copied tostack+0x2a4",
+                "serviceUUID":"0x1812", "characteristicUUIDs":["0x2a4e","0x2a4d"],
+                "classification":"Bluetooth HID service identifiers; named registration is not proof of USB GET_REPORT routing",
+                "assignedNumbersSource":"https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf?v=1706572800142"},
+            "callback276FC":{"directionArgument":"r2","whenZero":"tail-call0x27f00 with object0x200033e0 and caller buffer/count",
+                "readSourceRAM":"0x20003416", "copy":"object+0x36 through0x3a084; count comes from request structure byte4",
+                "readSideEffect":"If object byte0x53 is3, set it to1 after copying",
+                "whenNonzero":"tail-call0x27f20; no new read candidate generated"},
+            "callback27718":{"directionArgument":"r2 preserved inr5",
+                "whenZero":"Copy caller count from cached reportRAM0x200060ec through0x3a084",
+                "whenNonzero":"Requires reportID4; handles commands23/24 locally, others tail-call0x2f094",
+                "prelude":"May allocate/publish events before checking direction; callback is not globally side-effect-free"},
+            "configurationTailSourceDiscovered":False,
+            "limits":"Fixed0104 code and named callback sources only. Full report-row binding, incoming USB/BLE dispatch, current0102 implementation, host permissions and wireless writes remain unproved. No report9/feature reads generated, no emulation, device access or configuration changes."}
+
+
 def inspect_nonreading_control_branches(image):
     """Keep adjacent allocation-failure code distinct from command27 flag writes."""
     def at(address,size):
@@ -1179,7 +1228,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 25,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 26,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1213,6 +1262,7 @@ def inspect(path):
             'pairingEndpointCommands': inspect_pairing_endpoint_commands(image),
             'statusRegionAliases': inspect_status_region_aliases(image),
             'nonreadingControlBranches': inspect_nonreading_control_branches(image),
+            'hidCallbackReadSources': inspect_hid_callback_read_sources(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
