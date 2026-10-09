@@ -41,7 +41,7 @@ import Foundation
     private let journal:ReceiverPairingJournal
     private let live:()throws->ReceiverPairingSelection
     private let selector:(ReceiverPairingFrames.Endpoint)throws->UInt16
-    private let exchange:(ReceiverPairingFrames.Endpoint,[UInt8])async throws->[UInt8]
+    private let exchange:(ReceiverPairingFrames.Plan,String,Int)async throws->[UInt8]
     private let backup:()async throws->String
     private let matches:(String)async throws->Bool
     private let rawLog:ReceiverPairingRawLog
@@ -55,7 +55,7 @@ import Foundation
     init(selection:ReceiverPairingSelection,id:String,journal:ReceiverPairingJournal,
          live:@escaping()throws->ReceiverPairingSelection,
          selector:@escaping(ReceiverPairingFrames.Endpoint)throws->UInt16,
-         exchange:@escaping(ReceiverPairingFrames.Endpoint,[UInt8])async throws->[UInt8],
+         exchange:@escaping(ReceiverPairingFrames.Plan,String,Int)async throws->[UInt8],
          backup:@escaping()async throws->String,matches:@escaping(String)async throws->Bool,
          shutdown:@escaping()throws->Void)throws{
         try selection.validate()
@@ -110,7 +110,7 @@ import Foundation
             plan=try ReceiverPairingFrames.plan(phase:phase,selector:phase == .polling ? nil:selector(endpoint))
             try await record("prepared");try checkIntent()
             guard let plan else{throw WireError(message:"配对报告没有生成。")}
-            let received=try await exchange(plan.endpoint,plan.request)
+            let received=try await exchange(plan,id,intent)
             receivedLength=received.count;reply=Array(received.prefix(64))
             try await record("received");try checkIntent()
             guard receivedLength==64 else{throw WireError(message:"配对传输回复长度不是64字节。") }
