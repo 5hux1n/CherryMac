@@ -952,6 +952,56 @@ def inspect_pairing_endpoint_commands(image):
             "limits":"Uses fixed legacy keyboard image and already pinned factory-event paths, not live0102 firmware. No whole-program event-order proof, complete pairing persistence or receiver command meaning. ROM default tails cannot substitute for pre-operation backup tails; missing capture bytes remain unknown. No requests generated or sent."}
 
 
+
+def inspect_nonreading_control_branches(image):
+    """Keep adjacent allocation-failure code distinct from command27 flag writes."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Control classification exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x2f56a,0x2f598):"c014257e66969c737fa905b707e30ca8b96aab9a4b44ec744cb716ff9ccbd58f",
+        (0x2f372,0x2f3a2):"280e6095c66ea36b3218bff509f0c09fa3487147487de503558aa05634b6055b",
+        (0x2f59c,0x2f5d8):"9ebf5356d43d65bbe06e6330966142b102477a417d0e6a5b2b53ad7983fe7d3a",
+        (0x34754,0x3477e):"dbd645d40769a9f1b974c917156620604321ec546391c7745e47a1def4204739",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Nonreading control body differs")
+    table=0x2f0f4
+    targets={0x27:0x2f572,0xb0:0x2f372}
+    for command,target in targets.items():
+        if table+2*struct.unpack("<H",at(table+2*(command-3),2))[0]!=target:
+            raise ValueError("Nonreading control dispatch differs")
+    literals={0x2f650:0x20009ace,0x2f658:0x20009ab7,
+              0x2f654:0x4c098,0x34780:0x4f900}
+    for address,value in literals.items():
+        if struct.unpack("<I",at(address,4))[0]!=value:
+            raise ValueError("Nonreading control literal differs")
+    strings={0x4c098:b"Event Manager OOM error\n\0",
+             0x4f900:b"Failed to reboot: spinning endlessly...\n\0"}
+    for address,value in strings.items():
+        if at(address,len(value))!=value:
+            raise ValueError("Failure-path message differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "command27":{"target":"0x2f572","payloadByte":8,
+                "zeroBranch":"0x2f574 CBZ targets0x2f58c, not adjacent0x2f57e",
+                "zeroEffect":"Store1 atRAM0x20009ab7",
+                "nonzeroEffect":"Store1 atRAM0x20009ace",
+                "return":"Both named paths branch to0x2f28a; neither selects a configuration source"},
+            "commandB0":{"target":"0x2f372","allocator":"0x4bcb4",
+                "failureBranches":["0x2f5bc","0x2f5ca"],
+                "effect":"Allocation failures print the OOM message and call0x34754; normal paths allocate and publish events, not configuration replies"},
+            "adjacentFailureCode":{"range":"0x2f57e..0x2f58c",
+                "effect":"Print OOM, pass request pointer to0x34754; adjacency does not identify its incoming control flow"},
+            "failureHandler":{"range":"0x34754..0x3477e",
+                "effect":"Raises BASEPRI to0x40, calls0x35dd0 then0x3a1f0, prints failed-reboot message, loops between0x34778 and0x3477c",
+                "nonreturningNamedBody":True},
+            "configurationReadCandidateCreated":False,
+            "limits":"Fixed packaged0104 image only. No whole-program caller inventory, current firmware equivalence, exact downstream reset behavior, blackout causation or execution. No commands generated or sent; missing keymap byte remains unknown."}
+
+
 def inspect_status_region_aliases(image):
     """Pin a bounded candidate calculation, not current device read support."""
     def at(address,size):
@@ -1129,7 +1179,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 24,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 25,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1162,6 +1212,7 @@ def inspect(path):
             'backupBoundaries': inspect_backup_boundaries(image),
             'pairingEndpointCommands': inspect_pairing_endpoint_commands(image),
             'statusRegionAliases': inspect_status_region_aliases(image),
+            'nonreadingControlBranches': inspect_nonreading_control_branches(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
