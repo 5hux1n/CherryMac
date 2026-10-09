@@ -952,6 +952,40 @@ def inspect_pairing_endpoint_commands(image):
             "limits":"Uses fixed legacy keyboard image and already pinned factory-event paths, not live0102 firmware. No whole-program event-order proof, complete pairing persistence or receiver command meaning. ROM default tails cannot substitute for pre-operation backup tails; missing capture bytes remain unknown. No requests generated or sent."}
 
 
+def inspect_status_region_aliases(image):
+    """Pin a bounded candidate calculation, not current device read support."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):raise ValueError("Status alias evidence exceeds image bounds")
+        return image[offset:offset+size]
+    segment=(0x2f4f4,0x2f4fe)
+    expected="0663ed314b801976291296ee4a2587fb459092a08ba27af671d72db5c9844073"
+    if hashlib.sha256(at(segment[0],segment[1]-segment[0])).hexdigest()!=expected:
+        raise ValueError("Status alias source branch differs")
+    checks={0x2f0a2:"ec782f79b5f80580",0x2f4f4:"4e4a3c4b02eb080928e7",
+            0x2f354:"3a464946a448",0x2f35a:"0af093fe"}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Status alias offset/copy instruction differs")
+    base=struct.unpack("<I",at(0x2f630,4))[0]
+    if base!=0x20000c98:raise ValueError("Status alias source literal differs")
+    candidates=[]
+    for name,ram,offset in [("parameters",0x20000cd8,63),("colors",0x20000d18,511),("macroData",0x200054ec,3071)]:
+        address=ram+offset;relative=address-base
+        if not 0<=relative<=65535:raise ValueError("Status alias candidate offset invalid")
+        candidates.append({"region":name,"regionOffset":offset,"RAMAddress":hex(address),"statusReadOffset":relative,"requestedBytes":1})
+    info=at(0x4f224,34)
+    return {"command":29,"branch":"0x2f4f4..0x2f4fe","segmentSHA256":expected,
+            "instructionChecks":len(checks),"sourceBaseRAM":hex(base),"sourceLiteral":"0x2f630",
+            "offsetEncoding":"Report bytes5..6 are loaded as unsigned halfword into r8; source becomes base+r8",
+            "copy":"Shared0x2f350 path uses request byte4 as count and0x3a084 to copy source into reply payload",
+            "branchBounds":"This named1D branch has no additional offset or offset+length guard; not a whole-entry or USB-stack bounds proof",
+            "tailReadCandidates":candidates,
+            "keymapTail":{"RAMAddress":"0x20000c97","relativeOffset":-1,"candidateCreated":False,"reason":"Below base; never reinterpret -1 as65535 or assume RAM mirroring"},
+            "deviceInfoROM":{"address":"0x4f224","bytes":34,"SHA256":hashlib.sha256(info).hexdigest()},
+            "limits":"Fixed0104 keyboard image only. Matching info bytes do not identify current firmware code. Three positive offsets are unexecuted read candidates, not captured tail data or proof of current1D support; no arbitrary RAM reader, missing key byte, wireless identity backup or write plan. No reports sent."}
+
+
 def inspect_backup_boundaries(image):
     """Pin strict versus inclusive bounds; does not create a capture plan."""
     bodies = {
@@ -1095,7 +1129,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 23,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 24,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1127,6 +1161,7 @@ def inspect(path):
             'zeroLengthRecordSemantics': inspect_zero_length_record_semantics(image),
             'backupBoundaries': inspect_backup_boundaries(image),
             'pairingEndpointCommands': inspect_pairing_endpoint_commands(image),
+            'statusRegionAliases': inspect_status_region_aliases(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
