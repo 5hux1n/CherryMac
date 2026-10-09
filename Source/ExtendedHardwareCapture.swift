@@ -3,7 +3,7 @@ import Foundation
 // Injectable read-only capture. The product must supply a real, bounded USB
 // adapter and durable progress storage; this file never opens a device.
 struct ExtendedHardwareCapture {
-    struct Identity: Equatable {
+    struct Identity: Codable, Equatable {
         let sessionToken:String
         let vendorID:Int
         let productID:Int
@@ -23,9 +23,15 @@ struct ExtendedHardwareCapture {
         .init(name:"keymap",command:8,count:511,chunkCapacity:56),
         .init(name:"colors",command:0x0a,count:511,chunkCapacity:56),
         .init(name:"macroData",command:0x14,count:3071,chunkCapacity:54)]
-    struct Event:Codable {
+    struct Event:Codable, Equatable {
         let sequence:Int;let phase:String;let pass:Int;let region:String
         let offset:Int;let length:Int;let backupReference:String?;let detail:String
+        private enum CodingKeys:String,CodingKey{case sequence,phase,pass,region,offset,length,backupReference,detail}
+        func encode(to encoder:Encoder)throws{
+            var c=encoder.container(keyedBy:CodingKeys.self)
+            try c.encode(sequence,forKey:.sequence);try c.encode(phase,forKey:.phase);try c.encode(pass,forKey:.pass);try c.encode(region,forKey:.region)
+            try c.encode(offset,forKey:.offset);try c.encode(length,forKey:.length);try c.encode(backupReference,forKey:.backupReference);try c.encode(detail,forKey:.detail)
+        }
     }
     struct Receipt {
         let identity:Identity;let snapshot:ExtendedHardwareBackup;let backupReference:String
@@ -78,7 +84,7 @@ struct ExtendedHardwareCapture {
             return .init(identity:selected,snapshot:second,backupReference:reference,completedReads:completedReads)
         }catch{
             // A failed final identity/storage check does not delete saved data.
-            try event(cancelled() ? "cancelled":"failed",0,"",0,0,error.localizedDescription)
+            try event(cancelled() ? "cancelled":"failed",0,"",0,0,String(error.localizedDescription.prefix(1024)))
             throw error
         }
     }
