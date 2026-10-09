@@ -1,10 +1,10 @@
 import Cocoa
 import IOKit.hid
 
-// Development-only USB probe. The only outgoing commands are 03/05/08/0A/14.
+// Development-only USB probe. The only outgoing commands are 03/05/07/08/0A/14.
 // No configuration sender, event injection, reset, pairing or automatic retry.
 struct ProbeError:LocalizedError {let message:String;var errorDescription:String?{message}}
-let queryBounds:[UInt8:Int]=[3:34,5:63,8:511,10:511,20:3071]
+let queryBounds:[UInt8:Int]=[3:34,5:64,7:512,8:512,10:512,20:3072]
 func packet(_ command:UInt8,_ offset:Int,_ count:Int)throws->[UInt8]{
     guard let limit=queryBounds[command],offset>=0,count>0,count<=(command==20 ? 54:56),offset+count<=limit else{throw ProbeError(message:"只读查询超出指定前缀或命令不允许。")}
     var b=[UInt8](repeating:0,count:64);b[0]=4;b[3]=command;b[4]=UInt8(count);b[5]=UInt8(offset&255);b[6]=UInt8(offset>>8)
@@ -52,19 +52,35 @@ final class ReadOnlyUSB {
 }
 let app=NSApplication.shared;app.setActivationPolicy(.prohibited)
 var receipt:[String:Any]=["format":"CherryMacReadOnlyProbe","version":1,"keyboardWritesPerformed":false,"queries":[[String:Any]]()]
-let output=CommandLine.arguments.count==2 ? URL(fileURLWithPath:CommandLine.arguments[1]):nil
+let output=[2,4].contains(CommandLine.arguments.count) ? URL(fileURLWithPath:CommandLine.arguments[1]):nil
 var outputAuthorized=false
 func save()throws{
     guard outputAuthorized,let output else{throw ProbeError(message:"需要唯一输出JSON路径。")}
     try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys]).write(to:output,options:.atomic)
 }
 do{
-    guard CommandLine.arguments.count==2,let output,!FileManager.default.fileExists(atPath:output.path) else{throw ProbeError(message:"需指定尚不存在的输出文件，原记录不能覆盖。")}
+    guard [2,4].contains(CommandLine.arguments.count),let output,!FileManager.default.fileExists(atPath:output.path) else{throw ProbeError(message:"需指定尚不存在的输出文件，原记录不能覆盖。")}
+    var queries:[(UInt8,Int,Int)]=[(5,56,7),(8,490,21),(10,490,21)]
+    if CommandLine.arguments.count==4{
+        guard CommandLine.arguments[2]=="--plan" else{throw ProbeError(message:"计划参数无效。")}
+        let handle=try FileHandle(forReadingFrom:URL(fileURLWithPath:CommandLine.arguments[3]));defer{try? handle.close()}
+        let data=try handle.read(upToCount:128_001) ?? Data()
+        guard data.count<=128_000,let rows=try JSONSerialization.jsonObject(with:data) as? [[String:Any]],!rows.isEmpty,rows.count<=200 else{throw ProbeError(message:"只读查询计划过大或格式无效。")}
+        func integer(_ value:Any?)throws->Int{
+            guard let n=value as? NSNumber,CFGetTypeID(n) != CFBooleanGetTypeID(),n.doubleValue.isFinite,n.doubleValue.rounded()==n.doubleValue,n.doubleValue>=0,n.doubleValue<=65535 else{throw ProbeError(message:"只读计划需要有限整数。")};return n.intValue
+        }
+        queries=try rows.map{row in
+            guard Set(row.keys)==Set(["command","offset","length"]) else{throw ProbeError(message:"只读查询计划含未知字段。")}
+            let command=try integer(row["command"]),offset=try integer(row["offset"]),length=try integer(row["length"])
+            guard command<=255 else{throw ProbeError(message:"只读查询命令无效。")};_ = try packet(UInt8(command),offset,length)
+            return (UInt8(command),offset,length)
+        }
+    }
     outputAuthorized=true
     let usb=try ReadOnlyUSB();receipt["identity"]=usb.identity;try save()
     // Selected edge reads only. This does not capture full regions or imply
     // the final byte is readable, complete recovery or pairing is supported.
-    for (command,offset,length) in [(UInt8(5),56,7),(UInt8(8),490,21),(UInt8(10),490,21)]{
+    for (command,offset,length) in queries{
         let request=try packet(command,offset,length);var rows=receipt["queries"] as! [[String:Any]]
         rows.append(["command":Int(command),"offset":offset,"length":length,"request":request,"status":"prepared"]);receipt["queries"]=rows;try save()
         var captured:[UInt8]?

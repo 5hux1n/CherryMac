@@ -19,7 +19,7 @@ env DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}" xcrun 
 python3 - "$TASK_PROBE_STAGED_APP" "$TASK_PROBE_SOURCE" <<'PY'
 import hashlib,plistlib,sys
 from pathlib import Path
-app=Path(sys.argv[1]);source=Path(sys.argv[2]);info={'CFBundleIdentifier':'local.cherrymac.read-only-probe','CFBundleExecutable':'CherryMacReadOnlyProbe','CFBundleName':'CherryMac Read Only Probe','CFBundleDisplayName':'CherryMac Read Only Probe','CFBundleShortVersionString':'0.1.0','CFBundleVersion':'1','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0','LSUIElement':True,'CherryMacProbeSourceSHA256':hashlib.sha256(source.read_bytes()).hexdigest()}
+app=Path(sys.argv[1]);source=Path(sys.argv[2]);info={'CFBundleIdentifier':'local.cherrymac.read-only-probe','CFBundleExecutable':'CherryMacReadOnlyProbe','CFBundleName':'CherryMac Read Only Probe','CFBundleDisplayName':'CherryMac Read Only Probe','CFBundleShortVersionString':'0.2.0','CFBundleVersion':'2','CFBundlePackageType':'APPL','LSMinimumSystemVersion':'13.0','LSUIElement':True,'CherryMacProbeSourceSHA256':hashlib.sha256(source.read_bytes()).hexdigest()}
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
 codesign --force --sign - "$TASK_PROBE_STAGED_APP"
