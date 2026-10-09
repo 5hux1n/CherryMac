@@ -532,6 +532,23 @@ export function importWindows(root,baseline,{deferHostText=false,lightingMapping
   if(root.CustomLightMode)p.lightingColorEncoding='officialRGB';
   if(!equal(p.macroBindings,old)||imported.size)p.snapshot=resolveMacros(p);validateProfile(p);return p;
 }
+// Explicit ColorPalette editing only. Never round-trip imported/stored RGB.
+export function hslColor(hue,saturation,lightness){
+  requireThat([hue,saturation,lightness].every(Number.isInteger)&&hue>=0&&hue<=360&&saturation>=0&&saturation<=200&&lightness>=0&&lightness<=200,'H 须为 0～360，S 和 L 须为 0～200 的整数。');
+  const f=Math.fround,h=f(hue/360),s=f(saturation/200),l=f(lightness/200),q=l<.5?f(l*f(1+s)):f(f(l+s)-f(l*s)),p=f(f(2*l)-q);
+  const channel=offset=>{let t=f(h+offset);if(t<0)t=f(t+1);if(t>1)t=f(t-1);let value;
+    if(s===0)value=l;else if(f(6*t)<1)value=f(p+f(f(f(q-p)*6)*t));else if(f(2*t)<1)value=q;else if(f(3*t)<2)value=f(p+f(f(f(q-p)*f(f(2/3)-t))*6));else value=p;
+    return Math.max(0,Math.min(255,Math.trunc(f(value*255))));};
+  return [channel(f(1/3)),channel(0),channel(f(-1/3))];
+}
+export function colorHSL(color){
+  requireThat(Array.isArray(color)&&color.length===3&&color.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'RGB 颜色无效。');
+  const f=Math.fround,[r,g,b]=color.map(v=>f(v/255)),hi=Math.max(r,g,b),lo=Math.min(r,g,b),delta=f(hi-lo),l=f(f(hi+lo)/2);
+  if(delta===0)return [0,0,Math.trunc(f(l*200))];
+  const s=l<.5?f(delta/f(hi+lo)):f(delta/f(f(2-hi)-lo));let h;
+  if(hi===r)h=f(f(f(g-b)/delta)+(g<b?6:0));else if(hi===g)h=f(f(f(b-r)/delta)+2);else h=f(f(f(r-g)/delta)+4);
+  h=f(h/6);return [Math.max(0,Math.min(360,Math.trunc(f(h*360)))),Math.max(0,Math.min(200,Math.trunc(f(s*200)))),Math.max(0,Math.min(200,Math.trunc(f(l*200))))];
+}
 export function rgb(hex){requireThat(/^#[\da-f]{6}$/i.test(hex),'请输入六位 HEX 色号。');return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
 export const hex=b=>'#'+b.map(x=>x.toString(16).padStart(2,'0')).join('');
 // Raw draft RGB only; read-back banks may already contain this scaling.

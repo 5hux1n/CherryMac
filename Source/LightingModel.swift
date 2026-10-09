@@ -21,6 +21,29 @@ struct LightRGB: Equatable {
         switch Int(h){case 0:values=[c,x,0];case 1:values=[x,c,0];case 2:values=[0,c,x];case 3:values=[0,x,c];case 4:values=[x,0,c];default:values=[c,0,x]}
         let b=values.map{UInt8(max(0,min(255,(($0+m)*255).rounded())))};return LightRGB(b[0],b[1],b[2])
     }
+    // Official ColorPalette uses H/360, S/200 and L/200, with RGB truncation.
+    // Only explicit HSL editing uses this conversion; imports keep exact RGB.
+    static func hsl(_ hue:Int,_ saturation:Int,_ lightness:Int)throws->LightRGB{
+        guard (0...360).contains(hue),(0...200).contains(saturation),(0...200).contains(lightness) else{throw HardwareError(message:"H 须为 0～360，S 和 L 须为 0～200 的整数。")}
+        let h=Float(hue)/360,s=Float(saturation)/200,l=Float(lightness)/200
+        let q=l<0.5 ? l*(1+s):l+s-l*s,p=2*l-q
+        func channel(_ offset:Float)->UInt8{
+            var t=h+offset;if t<0{t+=1};if t>1{t-=1}
+            let value:Float
+            if s==0{value=l}else if 6*t<1{value=p+(q-p)*6*t}else if 2*t<1{value=q}else if 3*t<2{value=p+(q-p)*(2/3-t)*6}else{value=p}
+            return UInt8(max(0,min(255,Int(value*255))))
+        }
+        return LightRGB(channel(1/3),channel(0),channel(-1/3))
+    }
+    var hslValues:[Int]{
+        let r=Float(red)/255,g=Float(green)/255,b=Float(blue)/255
+        let hi=max(r,g,b),lo=min(r,g,b),delta=hi-lo,l=(hi+lo)/2
+        if delta==0{return [0,0,Int(l*200)]}
+        let s=l<0.5 ? delta/(hi+lo):delta/(2-hi-lo)
+        var h:Float
+        if hi==r{h=(g-b)/delta+(g<b ? 6:0)}else if hi==g{h=(b-r)/delta+2}else{h=(r-g)/delta+4}
+        h/=6;return [max(0,min(360,Int(h*360))),max(0,min(200,Int(s*200))),max(0,min(200,Int(l*200)))]
+    }
     func withStrength(_ percent:Double)->LightRGB{
         let peak=Double(max(red,green,blue));let scale=max(0,min(100,percent))/100*255
         if peak==0 {let v=UInt8(scale.rounded());return LightRGB(v,v,v)}

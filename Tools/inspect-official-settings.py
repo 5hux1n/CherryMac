@@ -1337,6 +1337,29 @@ def inspect_external_property_binding(pe, dll_path=None):
     return result
 
 
+def inspect_lighting_color_palette(path):
+    data=Path(path).read_bytes();digest=hashlib.sha256(data).hexdigest()
+    if digest!="aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b":raise ValueError("ColorPalette DLL differs from analyzed version")
+    pe=PE32(data)
+    bodies={(0x110095B0,0x11009660):"1e0123df8803d8d7197fb05cc29f067be4c7ea3ec4656758e200f4fd82172164",
+            (0x1100A110,0x1100A210):"f82974288f21c40c6281b5c8d1ba60e6f5d137be0094d3c986803b97d0893051",
+            (0x11009D6C,0x11009D83):"932fa3b7459aa9b62c7fea392fc9a38ede0d64052651db33ac8ffdff0e1e5051"}
+    for (start,end),expected in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=expected:raise ValueError("ColorPalette body differs")
+    constants={0x1110DAF4:360.0,0x1110DAEC:200.0,0x1110DAF0:255.0}
+    for address,value in constants.items():
+        if struct.unpack("<f",pe.at(address,4))[0]!=value:raise ValueError("ColorPalette scale differs")
+    return {"dllSHA256":digest,"GetSelectColor":"0x110095b0","SetSelectColor":"0x1100a110",
+            "RGBToHSL":"0x11009c20","HSLToRGB":"0x11009680","hueHelper":"0x11009810",
+            "integerMembers":{"hue":"+0x71c","saturation":"+0x720","lightness":"+0x724"},
+            "ranges":{"hue":[0,360],"saturation":[0,200],"lightness":[0,200]},
+            "lightness":"(maximum normalized RGB + minimum normalized RGB) / 2; not HSV value",
+            "quantization":"SetSelectColor truncates H*360 and S/L*200; GetSelectColor truncates float RGB*255",
+            "endpointQuirk":"SetSelectColor nudges FF000000 to FF000001 and FFFFFFFF to FFFFFFFE; exact RGB imports must not silently round-trip through this palette",
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "limits":"Static host color controls only. No runtime equivalence, UI behavior, LED output, USB access or storage proof."}
+
+
 def inspect_settings_ui_control_actions(path):
     data = Path(path).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -3171,7 +3194,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 71,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 72,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3246,6 +3269,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         result["basicSettingsDialog"] = inspect_basic_settings_dialog(skin)
     if ui_dll is not None:
         result["settingsUIControlActions"] = inspect_settings_ui_control_actions(ui_dll)
+        result["lightingColorPaletteUI"] = inspect_lighting_color_palette(ui_dll)
     if macro_ui:
         if skin is None:
             raise ValueError("Macro UI audit requires --skin")

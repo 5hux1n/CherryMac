@@ -235,7 +235,8 @@ extension HardwareWindowController {
             place(label(["R","G","B"][index]),337+CGFloat(index)*110,57,20,23,in:colors)
             let field=lightRGB[index];field.tag=101+index;field.delegate=self;controls.append(field);place(field,360+CGFloat(index)*110,53,75,25,in:colors)
         }
-        let cards=button("色卡与收藏…",#selector(openLightingColorLibrary(_:)));cards.tag=1;controls.append(cards);place(cards,708,53,156,28,in:colors)
+        let hsl=button("HSL…",#selector(openLightingHSL(_:)));hsl.tag=1;controls.append(hsl);place(hsl,708,53,75,28,in:colors)
+        let cards=button("色卡…",#selector(openLightingColorLibrary(_:)));cards.tag=1;controls.append(cards);place(cards,789,53,75,28,in:colors)
         place(label("颜色强度",12),8,105,75,23,in:colors);lightStrength.target=self;lightStrength.action=#selector(lightStrengthChanged);controls.append(lightStrength);place(lightStrength,94,100,168,25,in:colors)
         place(lightStrengthLabel,275,105,51,23,in:colors)
         lightPattern.addItems(withTitles:CherryLighting.patterns);controls.append(lightPattern);place(lightPattern,337,99,188,28,in:colors)
@@ -330,6 +331,35 @@ extension HardwareWindowController {
         try data.write(to:url,options:.atomic)
         guard try Data(contentsOf:url)==data else{throw HardwareError(message:"颜色收藏文件保存核对失败。")}
         message.stringValue="已导出 20 个颜色收藏，可在网页版或另一台 Mac 导入。"
+    }
+    @objc func openLightingHSL(_ sender:NSButton){
+        guard !busy else{return}
+        let target=NSPopUpButton(frame:NSRect(x:0,y:114,width:330,height:28));target.addItems(withTitles:["内置单色","逐键／渐变起点","渐变终点"]);target.selectItem(at:sender.tag)
+        let fields=(0..<3).map{index -> NSTextField in
+            let field=NSTextField(frame:NSRect(x:190,y:CGFloat(78-index*32),width:100,height:24));return field
+        }
+        func load()throws{
+            let value:LightRGB
+            if target.indexOfSelectedItem==0{value=rgb(globalLightColor.color)}else if target.indexOfSelectedItem==1{value=try readLightColor()}else{value=rgb(endColor.color)}
+            for (field,value) in zip(fields,value.hslValues){field.stringValue=String(value)}
+        }
+        do{try load()}catch{message.stringValue=error.localizedDescription;return}
+        while true{
+            let panel=NSView(frame:NSRect(x:0,y:0,width:330,height:148));target.removeFromSuperview();panel.addSubview(target)
+            for (index,title) in ["色相 H（0～360）","饱和度 S（0～200）","明度 L（0～200）"].enumerated(){let label=NSTextField(labelWithString:title);label.frame=NSRect(x:0,y:CGFloat(78-index*32),width:180,height:24);panel.addSubview(label);fields[index].removeFromSuperview();panel.addSubview(fields[index])}
+            let alert=NSAlert();alert.messageText="HSL 调色";alert.informativeText="沿用官方调色范围。载入 RGB 会量化为整数 HSL；仅点击使用才更新颜色输入，随后再应用配色。";alert.accessoryView=panel
+            for title in ["使用 HSL 颜色","载入当前颜色","取消"]{alert.addButton(withTitle:title)}
+            let response=alert.runModal()
+            if response == .alertThirdButtonReturn{return}
+            do{
+                if response == .alertSecondButtonReturn{try load();continue}
+                let values=try fields.map{field -> Int in guard let value=Int(field.stringValue.trimmingCharacters(in:.whitespacesAndNewlines))else{throw HardwareError(message:"请输入整数 H、S、L。")};return value}
+                let value=try LightRGB.hsl(values[0],values[1],values[2]);let native=NSColor(srgbRed:CGFloat(value.red)/255,green:CGFloat(value.green)/255,blue:CGFloat(value.blue)/255,alpha:1)
+                let index=target.indexOfSelectedItem
+                if index==0{guard selectedLightingOptions()?.color==true else{throw HardwareError(message:"此模式不提供内置单色调整。")};globalLightColor.color=native}else if index==1{setLightColor(value)}else{endColor.color=native}
+                message.stringValue="已选择 \(value.hex)，只更新颜色输入，尚未应用或写入。";return
+            }catch{let errorAlert=NSAlert();errorAlert.messageText="无法使用 HSL 颜色";errorAlert.informativeText=error.localizedDescription;errorAlert.runModal()}
+        }
     }
     @objc func openLightingColorLibrary(_ sender:NSButton){
         guard !busy else{return}
