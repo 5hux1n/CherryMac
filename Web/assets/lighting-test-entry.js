@@ -1,5 +1,5 @@
 import {CherryHID,PageReleaseGate,supportsDevice} from './hid.js?v=0.6.0';
-import {clone,equal,requireThat,assessLightingRestoreAttempt} from './model.js?v=0.6.0';
+import {clone,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt} from './model.js?v=0.6.0';
 import {LightingCandidateAuthorization} from './safety.js?v=0.6.0';
 import {selectLightingDevice,recordLightingOperation,lightingAcceptanceInput,lightingRecoveryForFreshRead,LightingPowerCycle} from './lighting-test-plan.js?v=0.6.0';
 import {saveRawLightingMetadata,lightingResultChannelName,reviewLightingEditorResult,takeLightingHandoff,saveBackup,download} from './storage.js?v=0.6.0';
@@ -22,7 +22,18 @@ const deviceTokens=new WeakMap();
 function token(device){if(!deviceTokens.has(device))deviceTokens.set(device,crypto.randomUUID());return deviceTokens.get(device);}
 const same=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(k=>equal(a[k],b[k]));
 function status(text,error=false){$('lighting-state').textContent=text;$('lighting-state').classList.toggle('error',error);}
+function recoveryDetails(){
+  if(!latestRecord)return '尚无恢复记录；备份和恢复记录保存完成后才进入发送。';
+  try{
+    const assessment=latestRecord.format==='CherryMacLightingRestoreAttempt'?assessLightingRestoreAttempt(latestRecord):assessLightingRecoveryRecord(latestRecord);
+    const state=({alreadyMatched:'记录起始配置与原始备份一致',readbackMatched:'记录读回符合本轮目标',readbackMismatch:'记录读回与目标不同',incomplete:'记录尚未完成',failed:'记录中的操作未通过'})[assessment.status]??assessment.status;
+    const advice=({available:'记录内的变化属于已识别范围，恢复前仍需重新读取。',unchanged:'记录中的配置与原始备份一致。',unavailable:'记录缺少完整读回，重连读取后才能判断恢复范围。',unrecognized:'记录有范围外变化，请保留资料，不要继续覆盖。'})[assessment.recoveryStatus]??'请保留原始记录并重新核对。';
+    const trace=assessment.traceReview;
+    return `恢复记录：${state}；已核对回复 ${trace.acceptedReports}/${trace.expectedReports}。${advice} 记录中的读回不代表现在的键盘状态。${busy?'':'操作中断后：重新选择并读取键盘 → 重新核对并恢复原始数据。可下载独立恢复记录后换会话载入。'}`;
+  }catch(error){return `恢复记录无法核对：${error.message}。请下载并保留原始资料。`;}
+}
 function render(){
+  $('lighting-recovery-state').textContent=recoveryDetails();
   const online=hid&&!hid.dead;
   for(const id of ['lighting-resume','lighting-file','lighting-connect','lighting-close','lighting-write','lighting-restore','lighting-power-off','lighting-retention','lighting-download','lighting-download-record','lighting-return'])$(id).disabled=busy;
   $('lighting-return').disabled=busy||!returnChannel||!editorRecord||!online;

@@ -544,7 +544,9 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     let state=NSTextField(wrappingLabelWithString:"尚未选择文件。不会自动连接或写入。")
     let summary=NSTextField(wrappingLabelWithString:"载入灯效写入核对文件，或之前保存的写入／恢复记录。")
     var buttons:[NSButton]=[];var running=false;var log:HardwareOperationLog?
-    var review:WindowsProfile.LightingDraftReview?;var recoveryData:Data?
+    var review:WindowsProfile.LightingDraftReview?;var recoveryData:Data?{didSet{updateRecoveryDetails()}}
+    let recoveryState=NSTextField(wrappingLabelWithString:"")
+    var recoveryDetails="尚无恢复记录；备份和恢复记录保存完成后才进入发送。"
     struct EditorResult{
         enum Kind{case write,restore}
         let kind:Kind;let current:HardwareSnapshot;let review:WindowsProfile.LightingDraftReview?
@@ -556,9 +558,9 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     var powerEvents:[[String:Any]]=[];var monitorFailure:String?
     init(queue:DispatchQueue,prepared:Data?=nil){
         self.queue=queue
-        let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:810,height:550),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:810,height:650),styleMask:[.titled,.closable],backing:.buffered,defer:false)
         panel.title="CherryMac · 灯效独立验收";super.init(window:panel);panel.delegate=self
-        let root=FlippedView(frame:NSRect(x:0,y:0,width:810,height:550));panel.contentView=root
+        let root=FlippedView(frame:NSRect(x:0,y:0,width:810,height:650));panel.contentView=root
         func text(_ value:String,_ y:CGFloat,_ h:CGFloat){let field=NSTextField(wrappingLabelWithString:value);field.frame=NSRect(x:22,y:y,width:766,height:h);root.addSubview(field)}
         text("研究入口 · 尚未完成真机验收。普通预览版仍不开放灯效写入。",18,35)
         text("1. 载入核对计划或恢复记录",58,25)
@@ -572,12 +574,29 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         for i in titles.indices{let b=NSButton(title:titles[i],target:self,action:actions[i]);b.bezelStyle = .rounded;b.frame=frames[i];root.addSubview(b);buttons.append(b)}
         let resume=NSButton(title:"载入最近恢复记录",target:self,action:#selector(loadLatestRecovery));resume.bezelStyle = .rounded;resume.frame=NSRect(x:402,y:58,width:194,height:30);root.addSubview(resume);buttons.append(resume)
         state.frame=NSRect(x:22,y:488,width:766,height:48);root.addSubview(state)
+        recoveryState.frame=NSRect(x:22,y:544,width:766,height:88);root.addSubview(recoveryState)
         focusObserver=NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:panel,queue:.main){[weak self] _ in if self?.running==true{self?.log?.requestCancellation()}}
         refresh=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true){[weak self] _ in self?.render()}
         if let prepared{loadData(prepared,source:"编辑区计划")};render()
     }
     required init?(coder:NSCoder){fatalError()}
+    func updateRecoveryDetails(){
+        guard let data=recoveryData else{recoveryDetails="尚无恢复记录；备份和恢复记录保存完成后才进入发送。";return}
+        do{
+            let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
+            let status:String,recovery:String,trace:WindowsProfile.OfficialLightingPlan.TraceReview
+            if root?["format"] as? String=="CherryMacLightingRestoreAttempt"{
+                let value=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt.self,from:data),review=try value.assess();status=review.status;recovery=review.recoveryStatus;trace=review.traceReview
+            }else{
+                let value=try JSONDecoder().decode(WindowsProfile.OfficialLightingPlan.RecoveryRecord.self,from:data),review=try value.assess();status=review.status;recovery=review.recoveryStatus;trace=review.traceReview
+            }
+            let label=["alreadyMatched":"记录起始配置与原始备份一致","readbackMatched":"记录读回符合本轮目标","readbackMismatch":"记录读回与目标不同","incomplete":"记录尚未完成","failed":"记录中的操作未通过"][status] ?? status
+            let advice=["available":"记录内的变化属于已识别范围，恢复前仍需重新读取。","unchanged":"记录中的配置与原始备份一致。","unavailable":"记录缺少完整读回，重连读取后才能判断恢复范围。","unrecognized":"记录有范围外变化，请保留资料，不要继续覆盖。"][recovery] ?? "请保留原始记录并重新核对。"
+            recoveryDetails="恢复记录：\(label)；已核对回复 \(trace.acceptedReports)/\(trace.expectedReports)。\n\(advice) 记录中的读回不代表现在的键盘状态。"
+        }catch{recoveryDetails="恢复记录无法核对："+error.localizedDescription+" 请保留原始文件。"}
+    }
     func render(){
+        recoveryState.stringValue=recoveryDetails+(recoveryData != nil && !running ? "\n操作中断后：重接 USB → 读取 USB 配置 → 恢复原始数据。原始记录在“打开本轮资料”中保留。":"")
         buttons.forEach{$0.isEnabled = !running};buttons[4].isEnabled=running
         buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
         buttons[3].isEnabled = !running && recoveryData != nil && registryID != nil && readback != nil
