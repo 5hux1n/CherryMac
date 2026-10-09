@@ -1,3 +1,4 @@
+import {checkedReceiverPairingSelection,sameReceiverPairingSelection} from './receiver-pairing-selection.js';
 import {ReceiverPairingTransaction} from './receiver-pairing-transaction.js';
 
 // Adapters own finite I/O deadlines, pinned endpoints, real backup storage,
@@ -10,24 +11,29 @@ export class ReceiverPairingExecutor {
     for(const name of ['currentSelection','saveCompleteBackup','performCommand','queryPaired','configurationMatchesBackup','persist','close'])
       if(typeof io?.[name]!=='function')throw new Error('配对通信适配器尚未完整接入。');
     this.#running=true;
-    let transaction,journalError=null,cleanupError=null;
+    let transaction,journalError=null,cleanupError=null,journalStopped=false,savedBackupReference=null;
     try{
-      const initial=io.currentSelection();
+      const initial=checkedReceiverPairingSelection(io.currentSelection());
       transaction=new ReceiverPairingTransaction(initial);
-      const keyboard=initial.keyboard.token,receiver=initial.receiver.token;
+      const persist=async()=>{
+        try{await io.persist(transaction.snapshot);}
+        catch(error){journalStopped=true;journalError=error?.message??String(error);throw error;}
+      };
       const check=()=>{
         if(signal?.aborted)throw new DOMException('配对已取消。','AbortError');
         const current=io.currentSelection();
-        if(current.keyboard.token!==keyboard||current.receiver.token!==receiver)throw new Error('设备选择已变化，停止配对。');
+        if(!sameReceiverPairingSelection(current,initial))throw new Error('设备选择已变化，停止配对。');
       };
       try{
-        check();await io.persist(transaction.snapshot);check();
+        check();await persist();check();
         const reference=await io.saveCompleteBackup({signal});
-        transaction.backupSaved(reference);await io.persist(transaction.snapshot);
+        if(typeof reference!=='string'||!reference.trim()||reference.length>4096)throw new Error('配对备份编号无效。');
+        savedBackupReference=reference;check();
+        transaction.backupSaved(reference);await persist();
         while(!transaction.terminal){
           check();const phase=transaction.snapshot.phase;
           const operation=transaction.beginOperation(io.currentSelection());
-          await io.persist(transaction.snapshot);check();
+          await persist();check();
           switch(phase){
             case 'keyboardStart':case 'receiverPrepare':case 'receiverStart':
               await io.performCommand(phase,{signal});check();transaction.commandAccepted(operation);break;
@@ -39,20 +45,20 @@ export class ReceiverPairingExecutor {
             }
             default:throw new Error('配对阶段无效。');
           }
-          await io.persist(transaction.snapshot);
+          await persist();
           if(phase==='keyboardStart')await delay(10,signal);
           if(phase==='polling'&&transaction.snapshot.phase==='polling')await delay(2000,signal);
         }
       }catch(error){
         if(signal?.aborted||error?.name==='AbortError')transaction.cancel();else transaction.fail(error?.message??String(error));
-        try{await io.persist(transaction.snapshot);}catch(error){journalError=error?.message??String(error);}
+        if(!journalStopped)try{await persist();}catch(error){journalError=error?.message??String(error);}
         if(transaction.snapshot.phase==='completed')journalError??=error?.message??String(error);
       }
     }finally{
       try{await io.close();}catch(error){cleanupError=error?.message??String(error);}
       this.#running=false;
     }
-    return {transaction:transaction.snapshot,journalError,cleanupError,succeeded:transaction.snapshot.phase==='completed'&&journalError===null&&cleanupError===null};
+    return {transaction:transaction.snapshot,savedBackupReference,journalError,cleanupError,succeeded:transaction.snapshot.phase==='completed'&&journalError===null&&cleanupError===null};
   }
 }
 function delay(milliseconds,signal){

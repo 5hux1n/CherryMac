@@ -29,3 +29,20 @@ export function resolveReceiverPairingSelection(candidates,{keyboardToken=null,r
   };
   return {keyboard:choose('keyboard',keyboardToken),receiver:choose('receiver',receiverToken)};
 }
+
+export function checkedReceiverPairingSelection(input){
+  const invalid=()=>{throw new Error('配对设备身份不完整或无效。');};
+  if(!input||Object.keys(input).length!==2||!Object.hasOwn(input,'keyboard')||!Object.hasOwn(input,'receiver'))invalid();
+  const candidate=value=>{
+    const keys=['token','vendorID','productID','usagePage','usage'];
+    if(!value||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key))||typeof value.token!=='string'||!value.token||new TextEncoder().encode(value.token).length>128||keys.slice(1).some(key=>!Number.isInteger(value[key])||value[key]<0||value[key]>65535))invalid();
+    return Object.freeze(Object.fromEntries(keys.map(key=>[key,value[key]])));
+  };
+  const keyboard=candidate(input.keyboard),receiver=candidate(input.receiver);
+  if(receiverPairingRole(keyboard)!=='keyboard'||receiverPairingRole(receiver)!=='receiver'||keyboard.token===receiver.token)invalid();
+  return Object.freeze({keyboard,receiver});
+}
+export function sameReceiverPairingSelection(left,right){
+  left=checkedReceiverPairingSelection(left);right=checkedReceiverPairingSelection(right);
+  return ['keyboard','receiver'].every(role=>Object.keys(left[role]).every(key=>left[role][key]===right[role][key]));
+}

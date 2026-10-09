@@ -4,7 +4,7 @@ import Foundation
 // A candidate is an interface supplied by a future discovery adapter, not proof
 // of an existing wireless bond. Tokens must identify current interface objects.
 // This module neither discovers devices nor authorizes or sends reports.
-struct ReceiverPairingCandidate: Equatable {
+struct ReceiverPairingCandidate: Codable, Equatable {
     let token: String
     let vendorID: Int
     let productID: Int
@@ -23,7 +23,7 @@ struct ReceiverPairingCandidate: Equatable {
 
 enum ReceiverPairingRole { case keyboard, receiver }
 
-struct ReceiverPairingSelection {
+struct ReceiverPairingSelection: Codable, Equatable {
     let keyboard: ReceiverPairingCandidate
     let receiver: ReceiverPairingCandidate
 
@@ -35,6 +35,13 @@ struct ReceiverPairingSelection {
         case ambiguousReceiver = "发现多个接收器接口，请明确选择要配对的接收器。"
         case staleSelection = "所选设备已不在当前候选列表中，请重新选择。"
         var errorDescription: String? { rawValue }
+    }
+
+    func validate() throws {
+        guard keyboard.role == .keyboard,receiver.role == .receiver,
+              !keyboard.token.isEmpty,!receiver.token.isEmpty,
+              keyboard.token.utf8.count<=128,receiver.token.utf8.count<=128,
+              keyboard.token != receiver.token else{throw SelectionError.invalidIdentity}
     }
 
     static func resolve(_ candidates: [ReceiverPairingCandidate],

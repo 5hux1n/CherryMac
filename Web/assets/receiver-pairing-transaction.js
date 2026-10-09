@@ -1,25 +1,25 @@
-import {receiverPairingRole} from './receiver-pairing-selection.js';
+import {checkedReceiverPairingSelection,sameReceiverPairingSelection} from './receiver-pairing-selection.js';
 // Pure stage controller. Caller owns saved backup, validated replies, liveness,
 // request logging and complete post-pair configuration comparison. No HID calls.
 export class ReceiverPairingTransaction {
-  #keyboard;#receiver;#phase='backup';#backup=null;#pending=false;
+  #selection;#phase='backup';#backup=null;#pending=false;
   #operation=null;#pollCount=0;#changed=false;#recovery=false;#events=[];
   constructor(selection){
-    if(!selection?.keyboard?.token||!selection?.receiver?.token||selection.keyboard.token===selection.receiver.token||receiverPairingRole(selection.keyboard)!=='keyboard'||receiverPairingRole(selection.receiver)!=='receiver')throw new Error('配对设备选择无效。');
-    this.#keyboard=selection.keyboard.token;this.#receiver=selection.receiver.token;
+    this.#selection=checkedReceiverPairingSelection(selection);
     this.#record('created','等待完整备份保存。');
   }
-  get snapshot(){return {phase:this.#phase,backupReference:this.#backup,pending:this.#pending,operationID:this.#operation,pollCount:this.#pollCount,mayHaveChanged:this.#changed,recoveryRequired:this.#recovery,events:this.#events.map(event=>({...event}))};}
+  get snapshot(){return {selection:structuredClone(this.#selection),phase:this.#phase,backupReference:this.#backup,pending:this.#pending,operationID:this.#operation,pollCount:this.#pollCount,mayHaveChanged:this.#changed,recoveryRequired:this.#recovery,events:this.#events.map(event=>({...event}))};}
   get terminal(){return ['completed','failed','cancelled'].includes(this.#phase);}
   #require(condition){if(!condition)throw new Error('配对流程状态已改变，请重新开始；已有备份仍需保留。');}
   #record(action,detail){this.#events.push({sequence:this.#events.length+1,phase:this.#phase,action,detail});}
   backupSaved(reference){
-    this.#require(this.#phase==='backup'&&typeof reference==='string'&&reference.trim().length>0);
+    this.#require(this.#phase==='backup'&&typeof reference==='string'&&reference.trim().length>0&&reference.length<=4096);
     this.#backup=reference;this.#record('backupSaved',reference);this.#phase='keyboardStart';
   }
   beginOperation(current){
     this.#require(!this.terminal&&!this.#pending&&this.#phase!=='backup'&&this.#backup!==null);
-    if(current?.keyboard?.token!==this.#keyboard||current?.receiver?.token!==this.#receiver){this.fail('设备选择已变化，停止配对。');this.#require(false);}
+    let matched=false;try{matched=sameReceiverPairingSelection(current,this.#selection);}catch{}
+    if(!matched){this.fail('设备选择已变化，停止配对。');this.#require(false);}
     if(this.#phase==='polling'){this.#require(this.#pollCount<5);this.#pollCount++;}
     if(['keyboardStart','receiverPrepare','receiverStart'].includes(this.#phase))this.#changed=true;
     this.#pending=true;this.#operation=this.#events.length+1;

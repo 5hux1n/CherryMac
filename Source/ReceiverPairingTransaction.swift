@@ -17,8 +17,9 @@ struct ReceiverPairingTransaction {
     struct InvalidTransition: LocalizedError {
         let errorDescription: String? = "配对流程状态已改变，请重新开始；已有备份仍需保留。"
     }
-    let keyboardToken: String
-    let receiverToken: String
+    let selection: ReceiverPairingSelection
+    var keyboardToken:String{selection.keyboard.token}
+    var receiverToken:String{selection.receiver.token}
     private(set) var phase: Phase = .backup
     private(set) var backupReference: String?
     private(set) var pending = false
@@ -30,18 +31,14 @@ struct ReceiverPairingTransaction {
     var terminal: Bool { [.completed, .failed, .cancelled].contains(phase) }
 
     init(selection: ReceiverPairingSelection) throws {
-        guard selection.keyboard.role == .keyboard, selection.receiver.role == .receiver,
-              !selection.keyboard.token.isEmpty, !selection.receiver.token.isEmpty,
-              selection.keyboard.token != selection.receiver.token else { throw InvalidTransition() }
-        keyboardToken = selection.keyboard.token
-        receiverToken = selection.receiver.token
+        try selection.validate();self.selection=selection
         record("created", "等待完整备份保存。")
     }
     private mutating func record(_ action: String, _ detail: String) {
         events.append(Event(sequence: events.count + 1, phase: phase, action: action, detail: detail))
     }
     mutating func backupSaved(reference: String) throws {
-        guard phase == .backup, !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw InvalidTransition() }
+        guard phase == .backup, !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,reference.utf16.count<=4096 else { throw InvalidTransition() }
         backupReference = reference
         record("backupSaved", reference)
         phase = .keyboardStart
@@ -50,7 +47,7 @@ struct ReceiverPairingTransaction {
     // selection/liveness check. Mark uncertainty before I/O, including timeouts.
     mutating func beginOperation(current: ReceiverPairingSelection) throws -> Int {
         guard !terminal, !pending, phase != .backup, backupReference != nil else { throw InvalidTransition() }
-        guard current.keyboard.token == keyboardToken, current.receiver.token == receiverToken else {
+        guard current == selection else {
             fail("设备选择已变化，停止配对。")
             throw InvalidTransition()
         }

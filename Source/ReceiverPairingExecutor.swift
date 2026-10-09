@@ -18,6 +18,7 @@ protocol ReceiverPairingExecutorIO {
 final class ReceiverPairingExecutor {
     struct Result {
         let transaction: ReceiverPairingTransaction
+        let savedBackupReference:String?
         let journalError: String?
         let cleanupError: String?
         var succeeded: Bool { transaction.phase == .completed && journalError == nil && cleanupError == nil }
@@ -31,27 +32,36 @@ final class ReceiverPairingExecutor {
         var transaction: ReceiverPairingTransaction
         do { transaction = try ReceiverPairingTransaction(selection: io.currentSelection()) }
         catch { try? io.close(); throw error }
-        let keyboard = transaction.keyboardToken, receiver = transaction.receiverToken
+        let selected = transaction.selection
         func check() throws {
             try Task.checkCancellation()
             let current = try io.currentSelection()
-            guard current.keyboard.token == keyboard, current.receiver.token == receiver else {
+            guard current == selected else {
                 throw ReceiverPairingTransaction.InvalidTransition()
             }
         }
-        var journalError: String?, cleanupError: String?
+        var journalError: String?, cleanupError: String?,savedBackupReference:String?
+        var journalStopped=false
+        func persist() async throws {
+            do{try await io.persist(transaction)}
+            catch{journalStopped=true;journalError=error.localizedDescription;throw error}
+        }
         do {
             try check()
-            try await io.persist(transaction)
+            try await persist()
             try check()
             let reference = try await io.saveCompleteBackup()
+            guard !reference.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,reference.utf16.count<=4096 else{
+                throw ReceiverPairingTransaction.InvalidTransition()
+            }
+            savedBackupReference=reference;try check()
             try transaction.backupSaved(reference: reference)
-            try await io.persist(transaction)
+            try await persist()
             while !transaction.terminal {
                 try check()
                 let phase = transaction.phase
                 let operation = try transaction.beginOperation(current: io.currentSelection())
-                try await io.persist(transaction) // Durable intent before any command.
+                try await persist() // Durable intent before any command.
                 try check() // Selection/cancellation may change while journal saves.
                 switch phase {
                 case .keyboardStart, .receiverPrepare, .receiverStart:
@@ -68,7 +78,7 @@ final class ReceiverPairingExecutor {
                     try transaction.configurationChecked(operation: operation, unchanged: matches)
                 default: throw ReceiverPairingTransaction.InvalidTransition()
                 }
-                try await io.persist(transaction)
+                try await persist()
                 if phase == .keyboardStart { try await Task.sleep(nanoseconds: 10_000_000) }
                 if phase == .polling && transaction.phase == .polling {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
@@ -77,13 +87,14 @@ final class ReceiverPairingExecutor {
         } catch {
             if error is CancellationError { transaction.cancel() }
             else { transaction.fail(error.localizedDescription) }
-            do { try await io.persist(transaction) }
-            catch { journalError = error.localizedDescription }
-            // If the final completion journal failed, retrying does not erase
-            // that failure: callers must not report a fully recorded success.
+            if !journalStopped{
+                do { try await persist() }
+                catch { journalError = error.localizedDescription }
+            }
+            // A failed final checkpoint cannot be reported as a recorded success.
             if transaction.phase == .completed { journalError = journalError ?? error.localizedDescription }
         }
         do { try io.close() } catch { cleanupError = error.localizedDescription }
-        return Result(transaction: transaction, journalError: journalError, cleanupError: cleanupError)
+        return Result(transaction: transaction,savedBackupReference:savedBackupReference,journalError: journalError, cleanupError: cleanupError)
     }
 }

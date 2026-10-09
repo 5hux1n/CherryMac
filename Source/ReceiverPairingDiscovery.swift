@@ -22,7 +22,10 @@ final class ReceiverPairingDiscovery {
             guard let transport = IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String,
                   transport == "USB" else { continue }
             func number(_ key: String) -> Int? {
-                (IOHIDDeviceGetProperty(device, key as CFString) as? NSNumber)?.intValue
+                guard let value=IOHIDDeviceGetProperty(device,key as CFString) as? NSNumber,
+                      CFGetTypeID(value) != CFBooleanGetTypeID(),value.doubleValue.isFinite,
+                      value.doubleValue.rounded()==value.doubleValue,value.doubleValue>=0,value.doubleValue<=65535 else{return nil}
+                return value.intValue
             }
             guard let vendor = number(kIOHIDVendorIDKey), let product = number(kIOHIDProductIDKey),
                   let page = number(kIOHIDPrimaryUsagePageKey), let usage = number(kIOHIDPrimaryUsageKey) else { continue }
