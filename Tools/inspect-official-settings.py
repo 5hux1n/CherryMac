@@ -1337,6 +1337,30 @@ def inspect_external_property_binding(pe, dll_path=None):
     return result
 
 
+def inspect_lighting_normal_apply(pe):
+    bodies={(0x48EA84,0x48EAAB):"dbb1f532032813d5562fa03d4c883201b73303f6e70db6908501bb9da29a05a8",
+            (0x4B17E0,0x4B182F):"48ca5dc9b96ed87962ab222ff826f3204d4286ae40a7ee6491c23f8824e8d2e4",
+            (0x48B073,0x48B098):"b1614b2fe99ea92b8d7de72050149da3751bf18479c3466fd58e865ebba4a3df",
+            (0x4B1930,0x4B19FD):"56a5c5c2469425c13ae83b0ab3174553f76f7c6b466b9a7589c6f7fecd269e73"}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(pe.at(start,end-start)).hexdigest()!=digest:raise ValueError("Normal lighting apply code differs")
+    raw="light_butt_prosave".encode("utf-16le")+b"\0\0"
+    if pe.at(0x74DB90,len(raw))!=raw:raise ValueError("Normal lighting apply name differs")
+    for slot,name in {0x6EBED8:"SetTimer",0x6EBE9C:"KillTimer",0x6EB194:"?CompareNoCase@CDuiString@DuiLib@@QBEHPB_W@Z"}.items():
+        if pe.at(pe.base+pe.pointer(slot)+2,len(name)+1)!=(name+"\0").encode():raise ValueError("Normal lighting apply import differs")
+    if pe.class_name(0x77F604)!=".?AVCEevisionKeyboardDevice@@" or pe.pointer(0x77F604+0x2BC)!=0x500790 or pe.pointer(0x77F604+0x2C4)!=0x501190:raise ValueError("Target normal lighting methods differ")
+    return {"button":"light_butt_prosave","dispatch":"48ea84 compares sender name; equal calls4b17e0 with0",
+            "schedule":"4b17e0 argument0 schedules HWND+4 timer0409 at10ms; nonzero instead schedules040a",
+            "timerCleanup":"48b073 KillTimer0409 then calls4b1930; whole message/jump-table reachability not established by this snippet",
+            "normalHandler":{"entry":"0x4b1930","parameterCall":"virtual+2bc -> target500790 occurs first, with profile getter42b4b0 and arguments0,1,globals7cd080/7cd07c",
+                             "customCondition":"GetLightInfo4ec730 first byte (official SelectItem) ==21",
+                             "colorCall":"Only the explicit==21 branch calls virtual+2c4 -> target501190 after parameters",
+                             "order":"parameters then customColors; default-light reset has separately proved colors then parameters"},
+            "productReview":"Source/WindowsProfile.swift candidate plans and Web/assets/model.js assembleLightingPlan retain parameters before customColors; default reset remains a separate path",
+            "codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "limits":"Direct named button/scheduling/handler sites and declared target vtable only. Return status, full message dispatch, callbacks, sender internals, current firmware, preservation and physical persistence remain separate. No sends or authorization expansion."}
+
+
 def inspect_lighting_optional_controls(pe, skin=None):
     # Bound host UI guards; a hidden XML node alone is not a capability rule.
     bodies={(0x442480,0x4424A5):"aea561ea71e1cbd7b45f9246af3f90ac390a5e71affc9b8a97969766a8783216",
@@ -3233,7 +3257,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 73,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 74,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3255,6 +3279,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "defaultModeVisibility": inspect_default_mode_visibility(pe),
         "defaultModeOptions": inspect_default_mode_options(pe, defaults_dir),
         "lightingOptionalControls": inspect_lighting_optional_controls(pe, skin),
+        "lightingNormalApply": inspect_lighting_normal_apply(pe),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
         "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
