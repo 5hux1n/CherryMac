@@ -3,6 +3,26 @@ import Cocoa
 import IOKit.hid
 import CryptoKit
 
+// Research only: each nonzero relative axis callback remains one event.
+// Never split, merge or reorder movement to fit the expected macro.
+struct MacroMovementHIDObservation {
+    static func matches(_ element:IOHIDElement)->Bool{
+        IOHIDElementGetUsagePage(element)==1 && [UInt32(0x30),0x31].contains(IOHIDElementGetUsage(element))
+    }
+    static func event(_ element:IOHIDElement,value:Int,at now:Int,started:Int)throws->MacroExecutionEvidence.Observation? {
+        let minimum=IOHIDElementGetLogicalMin(element),maximum=IOHIDElementGetLogicalMax(element)
+        guard matches(element),IOHIDElementGetReportID(element)==2,IOHIDElementIsRelative(element),
+              minimum>=(-32768),minimum<=0,maximum>=0,maximum<=32767,
+              (minimum...maximum).contains(value),now>=started else{
+            throw HardwareError(message:"位移回调的描述、数值或时间不符，不能核对通过。")
+        }
+        if value==0{return nil}
+        guard (-256...255).contains(value) else{throw HardwareError(message:"位移回调超出单步骤范围；不拆分或补造事件。")}
+        let step=try KeyboardMacro.Step.movement(axis:IOHIDElementGetUsage(element)==0x30 ? .mouseX:.mouseY,value:value,delayMilliseconds:0)
+        return .init(usage:step.usage,pressed:step.pressed,milliseconds:now,kind:step.kind)
+    }
+}
+
 private final class MacroObserverView:NSView {
     override var acceptsFirstResponder:Bool{true}
     override func keyDown(with event:NSEvent){}
@@ -162,17 +182,10 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func receiveMovement(_ element:IOHIDElement,value:Int,at now:Int)throws->Bool {
         guard phase=="observing",!diagnosticOnly,observesMovement else{return false}
         let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element)
-        guard page==1,[UInt32(0x30),0x31].contains(usage) else{return false}
-        let minimum=IOHIDElementGetLogicalMin(element),maximum=IOHIDElementGetLogicalMax(element)
-        guard IOHIDElementGetReportID(element)==2,IOHIDElementIsRelative(element),minimum>=(-32768),minimum<=0,
-              maximum>=0,maximum<=32767,(minimum...maximum).contains(value),now>=startedMilliseconds else{
-            throw HardwareError(message:"位移回调的描述、数值或时间不符，不能核对通过。")
+        guard MacroMovementHIDObservation.matches(element) else{return false}
+        if let event=try MacroMovementHIDObservation.event(element,value:value,at:now,started:startedMilliseconds){
+            try recordObservedEvent(event,page:page,usage:usage,value:value,at:now)
         }
-        if value==0{return true}
-        guard (-256...255).contains(value) else{throw HardwareError(message:"位移回调超出单步骤范围；不拆分或补造事件。")}
-        let step=try KeyboardMacro.Step.movement(axis:usage==0x30 ? .mouseX:.mouseY,value:value,delayMilliseconds:0)
-        try recordObservedEvent(.init(usage:step.usage,pressed:step.pressed,milliseconds:now,kind:step.kind),
-            page:page,usage:usage,value:value,at:now)
         return true
     }
     func receiveMouseValue(device:IOHIDDevice,reportID:UInt32,page:UInt32,usage:UInt32,value:Int,at now:Int){

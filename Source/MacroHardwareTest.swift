@@ -47,7 +47,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     static let playback=MacroPlayback(count:2)
     static let testMacro=KeyboardMacro(name:"CherryMac 实体测试 AB",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:80),.init(usage:5,pressed:true,delayMilliseconds:80),.init(usage:5,pressed:false,delayMilliseconds:80)])
     enum Scenario:String,CaseIterable {
-        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",maximumCount="ab-255",modifier="modifier",extended="keyboard-300"
+        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",maximumCount="ab-255",modifier="modifier",extended="keyboard-300",movement="mouse-xy"
         case mouseLeft="mouse-left",mouseRight="mouse-right",mouse="mouse",mouseBack="mouse-back",mouseForward="mouse-forward"
         case held="held",toggle="toggle"
         var isMouse:Bool{[Self.mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward].contains(self)}
@@ -69,6 +69,15 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             case .extended:return KeyboardMacro(name:"CherryMac 300步容量测试",steps:(0..<150).flatMap{_ in [
                 KeyboardMacro.Step(usage:4,pressed:true,delayMilliseconds:20),
                 KeyboardMacro.Step(usage:4,pressed:false,delayMilliseconds:20)]})
+            case .movement:return KeyboardMacro(name:"CherryMac XY位移测试",steps:[
+                .init(usage:1,pressed:false,delayMilliseconds:100,kind:.mouseX),
+                .init(usage:1,pressed:true,delayMilliseconds:100,kind:.mouseX),
+                .init(usage:1,pressed:false,delayMilliseconds:100,kind:.mouseY),
+                .init(usage:1,pressed:true,delayMilliseconds:100,kind:.mouseY),
+                .init(usage:255,pressed:false,delayMilliseconds:100,kind:.mouseX),
+                .init(usage:0,pressed:true,delayMilliseconds:100,kind:.mouseX),
+                .init(usage:255,pressed:false,delayMilliseconds:100,kind:.mouseY),
+                .init(usage:0,pressed:true,delayMilliseconds:100,kind:.mouseY)])
             case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return KeyboardMacro(name:"CherryMac \(mouseName)测试",steps:[
                 .init(usage:mouseCode,pressed:true,delayMilliseconds:0,kind:.mouse),
                 .init(usage:mouseCode,pressed:false,delayMilliseconds:80,kind:.mouse)])
@@ -82,6 +91,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             case .maximumCount:return "AB 255 次（次数上限）"
             case .modifier:return "Shift+A 一次（全部释放）"
             case .extended:return "300 步键盘宏（150 次 A，单次触发）"
+            case .movement:return "X／Y 正负位移（含 +255／-256）"
             case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return "\(mouseName)一次（按下并释放）"
             case .held:return "AB 按住持续、松开停止"
             case .toggle:return "AB 开关、再次按键停止"
@@ -91,6 +101,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             if self == .held{return "按住计算器键约两秒，看到至少两轮 AB 后松开；再用鼠标点击「已停止，核对输出」。"}
             if self == .toggle{return "按一下并松开计算器键启动，约两秒后再次按一下并松开停止；再点击「已停止，核对输出」。"}
             if isMouse{return "先把鼠标指针移到窗口空白处，避开按钮和输入框，再按下并完全松开计算器键一次；预期 \(label)，共两个鼠标按钮事件。不要用实际鼠标代替键盘触发。"}
+            if self == .movement{return "把指针移到屏幕中央，开始观察后不要移动实际鼠标；按一次计算器键并松开。预期X、Y依次各+1/-1，再各+255/-256，共8个非零轴回调；不以屏幕像素距离核对。"}
             if self == .extended{return "只按下并松开计算器键一次，等待300个按下／松开事件及静默核对。每步设定等待20ms，总等待量约6秒，不代表实际固件时序已验证。"}
             if self == .maximumCount{return "只按下并松开计算器键一次，等候255轮AB、共1020个事件。设定等待总量约61秒；不要重复触发，完成后按提示恢复。"}
             return "请按下并完全松开计算器键一次；预期 \(label)，共 \(macro.steps.count*playback.count) 个按下／松开事件。"
@@ -384,8 +395,14 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             do{let device=try soleDevice();guard CFEqual(IOHIDElementGetDevice(element),device) else{throw HardwareError(message:"宏验收收到其他 USB 连接的输出。")}}
             catch{fail(error.localizedDescription,.observerDisconnected);return}
         }
-        do{let event=try adapter.receive(page:page,usage:usage,value:v,milliseconds:at);guard phase == .observing,let event else{return}
-            guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")};raw.append(["page":page,"usage":usage,"value":v,"milliseconds":at]);pendingLogSave=true;try execution?.observe(event)
+        do{
+            let isMovement=scenario == .movement && phase == .observing && MacroMovementHIDObservation.matches(element)
+            let event=try isMovement ? MacroMovementHIDObservation.event(element,value:v,at:at,started:executionStart):adapter.receive(page:page,usage:usage,value:v,milliseconds:at)
+            guard phase == .observing,let event else{return}
+            guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")}
+            var row:[String:Any]=["page":page,"usage":usage,"value":v,"milliseconds":at]
+            if isMovement{row["reportID"]=IOHIDElementGetReportID(element);row["relative"]=IOHIDElementIsRelative(element);row["logicalMinimum"]=IOHIDElementGetLogicalMin(element);row["logicalMaximum"]=IOHIDElementGetLogicalMax(element)}
+            raw.append(row);pendingLogSave=true;try execution?.observe(event)
         }catch{if phase == .observing || phase == .observeReady{fail(error.localizedDescription,.reportRejected)}}
     }
     func windowShouldClose(_ sender:NSWindow)->Bool{
