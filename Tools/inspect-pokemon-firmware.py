@@ -961,6 +961,42 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_mouse_usb_peripheral_submission(image):
+    """Pin the endpoint callback result handed to USBD EasyDMA registers."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("USB peripheral evidence exceeds image bounds")
+        return image[offset:offset + size]
+    start, end = 0x48228, 0x48448
+    digest = "c7ff437763d0dc583d84602c172c517ecc35464ce4767d51e08c4b57dd594213"
+    if hashlib.sha256(at(start, end - start)).hexdigest() != digest:
+        raise ValueError("USB peripheral consumer differs")
+    literals = {0x4844c: 0x40027000, 0x4846c: 0x20008940}
+    for address, value in literals.items():
+        if struct.unpack('<I', at(address, 4))[0] != value:
+            raise ValueError("USB peripheral/state literal differs")
+    checks = {0x48260: "dff808b2", 0x48270: "5bf80730", 0x48274: "d9f80410",
+              0x4827a: "9847", 0x48294: "0799", 0x482b0: "069b",
+              0x48422: "05eb8502", 0x48432: "c2f80036", 0x48438: "c2f80416",
+              0x48350: "2b44", 0x4836a: "1960"}
+    for address, encoded in checks.items():
+        if at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("USB peripheral handoff instruction differs")
+    return {"codeSHA256": {f"{start:#x}..{end:#x}": digest},
+            "endpointState": {"base": "0x20008940", "callback": "state[endpoint]+0", "descriptor": "state[endpoint]+4",
+                              "result": "0x4827a invokes saved handler with result at stack+0x18; pointer/count then loaded from stack+0x18/+0x1c"},
+            "ordinaryINSubmission": {"gate": "endpoint index in low16 pending-bit group and endpoint bit3 clear; prior callback/state gates also apply",
+                                     "base": "0x40027000", "strideBytes": 20,
+                                     "pointerRegister": "EPIN[n].PTR at base+0x600+20*n", "countRegister": "EPIN[n].MAXCNT at base+0x604+20*n",
+                                     "operation": "0x48422 computes20*n; 0x48432 and0x48438 store callback pointer/count directly; 0x4836a triggers base+4+4*n",
+                                     "payloadTransformation": "None on this pinned direct-RAM callback-to-register path"},
+            "registerReference": "https://raw.githubusercontent.com/NordicSemiconductor/nrfx/v2.0.0/mdk/nrf52840.h",
+            "relation": "Extends mouseUSBTransferDescriptor through the final ordinary endpoint register handoff, conditional on the saved RAM callback and active branch",
+            "limits": "Fixed0104 static conditional code only. EasyDMA memory lifetime, intervening callbacks, completion, actual host packets and current0102 firmware behavior are not proved. No new macro support, wire compensation, firmware execution, simulation or hardware access."}
+
+
 def inspect_mouse_usb_transfer_descriptor(image):
     """Pin the lower transfer descriptor and conditional RAM buffer handoff."""
     def at(address, size):
@@ -1532,7 +1568,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 33,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 34,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1574,6 +1610,7 @@ def inspect(path):
             'mouseCacheEventConversion': inspect_mouse_cache_event_conversion(image),
             'mouseUSBSubmission': inspect_mouse_usb_submission(image),
             'mouseUSBTransferDescriptor': inspect_mouse_usb_transfer_descriptor(image),
+            'mouseUSBPeripheralSubmission': inspect_mouse_usb_peripheral_submission(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
