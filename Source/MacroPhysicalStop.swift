@@ -1,6 +1,9 @@
 #if CHERRY_MACRO_TEST || CHERRY_MACRO_PRODUCT
 import Cocoa
 import IOKit.hid
+#if CHERRY_MACRO_TEST
+import CryptoKit
+#endif
 
 private final class MacroStopPanelView:NSView {
     override func draw(_ dirtyRect:NSRect){NSColor.windowBackgroundColor.setFill();bounds.fill();super.draw(dirtyRect)}
@@ -30,6 +33,13 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
     // Research-only until the final real Report2 acceptance. Public builds
     // retain their existing rejection of unverified movement output.
     var observationRegistryID:UInt64?
+    var pendingLogSave=false,lastLogSaveMilliseconds:Int?
+    var requestLogSHA256:String?
+    func flushPendingLog(at now:Int)throws {
+        guard pendingLogSave else{return}
+        if let previous=lastLogSaveMilliseconds,now-previous<250{return}
+        try save()
+    }
     func requireObservationSession(_ callbackDevice:IOHIDDevice?=nil)throws {
         let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
         guard devices.count==1,let device=devices.first,let observationRegistryID else{
@@ -59,7 +69,7 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
             "activityKind":"relativeAxis","reportID":reportID,
             "logicalMinimum":minimum,"logicalMaximum":maximum,"relative":true])
         lastActivity=now
-        try save();tick()
+        pendingLogSave=true;tick()
         return true
     }
     #endif
@@ -74,14 +84,30 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         #if CHERRY_MACRO_TEST
         value["version"]=2
         value["axisActivityScope"]="Descriptor-declared relative Report2 X/Y/wheel callbacks count as activity; no movement execution or internal stop assessment"
+        value["logSavePolicy"]="Coalesced callback records; ticks attempt saves at >=250ms intervals. Acknowledgement intent and terminal results save immediately. Abrupt termination may lose unflushed records."
         if let observationRegistryID{value["registryID"]=String(observationRegistryID)}
         #endif
         value["scope"]="explicit user stop acknowledgement plus USB-filtered observed quiet/release; no firmware stop command or power-off proof"
         value["quietMilliseconds"]=quietMilliseconds;value["lastActivityMilliseconds"]=lastActivity;value["events"]=rows
         if let locationID{value["locationID"]=locationID}
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        #if CHERRY_MACRO_TEST
+        if requestLogSHA256==nil{
+            let file=directory.appendingPathComponent("request.json")
+            guard !FileManager.default.fileExists(atPath:file.path) else{throw HardwareError(message:"停止请求文件已存在，不能覆盖未绑定记录。")}
+            let data=try encoder.encode(request)
+            try data.write(to:file,options:.atomic)
+            guard try Data(contentsOf:file)==data else{throw HardwareError(message:"停止请求保存后读回不一致。")}
+            requestLogSHA256=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+        }
+        value["requestSHA256"]=requestLogSHA256
+        #else
         try encoder.encode(request).write(to:directory.appendingPathComponent("request.json"),options:.atomic)
+        #endif
         try JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("stop.json"),options:.atomic)
+        #if CHERRY_MACRO_TEST
+        pendingLogSave=false;lastLogSaveMilliseconds=milliseconds()
+        #endif
     }
     func finish(_ result:Result<Void,Error>){
         guard !finished else{return};finished=true;timer?.invalidate();accept.isEnabled=false
@@ -100,7 +126,11 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
             guard let event=try adapter.receive(page:page,usage:usage,value:value,milliseconds:now) else{return}
             guard rows.count<65536 else{throw HardwareError(message:"停止观察记录容量已满。")}
             rows.append(["page":page,"usage":usage,"value":value,"milliseconds":now,"pressed":event.pressed]);lastActivity=max(lastActivity,now)
+            #if CHERRY_MACRO_TEST
+            pendingLogSave=true;tick()
+            #else
             try save();tick()
+            #endif
         }catch{fail(error.localizedDescription)}
     }
     func tick(){
@@ -109,9 +139,13 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         if opened{
             do{try requireObservationSession()}catch{fail(error.localizedDescription);return}
         }
+        do{try flushPendingLog(at:milliseconds())}catch{fail("停止观察日志保存失败："+error.localizedDescription);return}
         #endif
         let remaining=max(0,quietMilliseconds-(milliseconds()-lastActivity))
         accept.isEnabled=opened && !pendingAcknowledgement && adapter.allReleased && remaining==0 && window?.isKeyWindow==true
+        #if CHERRY_MACRO_TEST
+        if pendingLogSave{accept.isEnabled=false}
+        #endif
         status.stringValue=adapter.allReleased ? "请先按键盘的方式停止所有持续宏。\n停止输出后还需观察 \(String(format:"%.1f",Double(remaining)/1000)) 秒，再用鼠标确认。":"仍检测到这把键盘输出的按键／鼠标按钮按住。请停止宏并完全松开。"
     }
     @objc func acknowledge(){
@@ -121,6 +155,10 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         guard !pendingAcknowledgement else{return}
         pendingAcknowledgement=true;accept.isEnabled=false
         let count=rows.count,activity=lastActivity,clicked=milliseconds()
+        #if CHERRY_MACRO_TEST
+        metadata["pendingUserConfirmationMilliseconds"]=clicked
+        do{try save()}catch{fail("停止确认意图保存失败："+error.localizedDescription);return}
+        #endif
         // Drain callbacks after the click. A click generated by this keyboard's
         // mouse macro must not act as the user's confirmation of its own stop.
         DispatchQueue.main.asyncAfter(deadline:.now()+0.25){[weak self] in
