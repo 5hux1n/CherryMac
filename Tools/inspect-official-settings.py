@@ -1591,6 +1591,50 @@ def inspect_settings_ui_control_actions(path):
             "limits": "Current option direct notify is bypassed, but peer virtual dispatch, slider text virtual dispatch and invalidation are not exhaustively classified. No assertion that all callbacks lack hardware effects or that firmware polling settings are unsupported."}
 
 
+
+def inspect_polling_option_selection(pe, skin):
+    """Pin the actual child selection callback separately from firmware sends."""
+    bodies = {
+        (0x425570, 0x425909): "c60cdfb3878910b5c7ea50182634bbe2b7df41c16e4a8c13cea0327aa970faf9",
+        (0x429dd0, 0x429e1e): "b5cb6e288b34580c54863a0d2934bdc5257c0cc8aeddfc299ba8ea3e569a456a",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end - start)).hexdigest() != digest:
+            raise ValueError("Polling option selection body differs")
+    if pe.class_name(0x77813c) != ".?AVCBasicSetWnd@@" or pe.pointer(0x77813c + 0x8c) != 0x425570:
+        raise ValueError("Polling selection child virtual differs")
+    checks = {0x4256af: "6810b97200", 0x4256d0: "89886c0a0000",
+              0x4256d6: "6a01", 0x4256de: "e8ed460000", 0x4256e3: "e9e3010000",
+              0x429dd9: "68309f7200", 0x429de4: "ff157cb16e00",
+              0x429e10: "8b8224010000", 0x429e16: "ffd0"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Polling selection instruction differs")
+    for address, name in [(0x72b910, "polling_rate_option_"), (0x729f30, "butt_prosave")]:
+        encoded = (name + "\0").encode('utf-16-le')
+        if pe.at(address, len(encoded)) != encoded:
+            raise ValueError("Polling selection control name differs")
+    resource = None
+    if skin:
+        path = Path(skin) / 'KbBasicSetWnd.xml'
+        raw = path.read_bytes()
+        cleaned = re.sub(r'<!--.*?-->', '', raw.decode('utf-8'), flags=re.S)
+        buttons = [tag for tag in re.findall(r'<Button\b[^>]*>', cleaned) if 'name="butt_prosave"' in tag]
+        if len(buttons) != 1 or 'enabled="false"' not in buttons[0] or 'text="key_set_apply_text"' not in buttons[0]:
+            raise ValueError("Polling apply-button resource differs")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(), "tag": "Button", "name": "butt_prosave", "initialEnabled": False}
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a, b), h in bodies.items()},
+            "childVirtual": {"table": "0x77813c", "offset": "0x8c", "method": "0x425570"},
+            "pollingBranch": {"controlPrefix": "polling_rate_option_", "parsedIndexSource": "stack local from0x480a20",
+                              "store": "child+0xa6c at0x4256d0", "helper": "0x4256de ->0x429dd0 with argument1",
+                              "next": "0x4256e3 jumps directly to string cleanup at0x4258cb"},
+            "helper": {"control": "butt_prosave", "findControlImport": "0x6eb17c", "virtualOffset": "0x124",
+                       "argument": "Boolean enable from helper argument; polling passes1", "role": "Enable the Apply button"},
+            "resource": resource, "hardwareWriteAuthorized": False,
+            "relation": "Selected index feeds the existing0x429840 getter and ordinary apply path; button action is separately classified by the fixed DuiLib Button SetEnabled audit",
+            "limits": "Fixed child polling-option branch only. It stores host selection and enables Apply; no separate hardware send is present in this branch. Other callbacks, dynamic widget replacement and alternative whole-program polling transports remain unproved. Not firmware readback or persistence."}
+
+
 def inspect_settings_child_polling_message(pe):
     if pe.class_name(0x77813C) != ".?AVCBasicSetWnd@@" or pe.pointer(0x77813C + 0x80) != 0x426A70:
         raise ValueError("Unexpected basic settings child message dispatch")
@@ -3547,7 +3591,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 83,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 84,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3578,6 +3622,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
+        "pollingOptionSelection": inspect_polling_option_selection(pe, skin),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
