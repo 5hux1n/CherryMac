@@ -39,6 +39,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var activeRegistryID:UInt64?,recoveryRebinds:[[String:Any]]=[]
     var executionArtifactHashes:[String:String]=[:]
     var frozenExecutionAssessmentMilliseconds:Int?
+    var pendingLogSave=false,lastLogSaveMilliseconds:Int?
     var interruptions:[MacroExecutionEvidence.Interruption]=[]
     var writeAttempted=false
     var transitions:[[String:Any]]=[]
@@ -176,7 +177,14 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
         session["executionArtifacts"]=executionArtifactHashes
         session["saveScope"]="Derived files first, session last; per-file atomic replacement, not a multi-file transaction or power-loss guarantee"
+        session["savePolicy"]="Input callbacks mark dirty; timer attempts coalesced saves after 250ms; stage, stop and terminal saves are immediate. Forced termination can lose pending input."
         try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
+        pendingLogSave=false;lastLogSaveMilliseconds=milliseconds()
+    }
+    func flushPendingLog(at now:Int)throws{
+        guard pendingLogSave else{return}
+        if let lastLogSaveMilliseconds,now-lastLogSaveMilliseconds<250{return}
+        try persist()
     }
     func fail(_ message:String,_ interruption:MacroExecutionEvidence.Interruption = .cancelled){
         if phase == .observing{freezeExecutionAssessment()}
@@ -259,7 +267,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         guard assessment.completedCycles>=2,assessment.held.isEmpty,assessment.status != "failed" else{throw HardwareError(message:"需先观察至少两轮完整输出，并释放宏按键。")}
         try self.execution?.requestStop(milliseconds:now,source:.userAcknowledged)
         stopMarker = .init(milliseconds:now,source:.userAcknowledged);stopButton.isEnabled=false
-        status.stringValue="已记录停止确认，继续观察释放及静默；检测到新的按下会使测试失败。";try persist()
+        try persist();status.stringValue="已记录停止确认，继续观察释放及静默；检测到新的按下会使测试失败。"
     }
     @objc func confirmStopped(){
         guard !busy,let event=NSApp.currentEvent,event.type == .leftMouseUp,event.modifierFlags.intersection([.control,.option,.command,.shift]).isEmpty else{return}
@@ -285,7 +293,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             if execution.source == .hid{
                 do{_ = try soleDevice()}catch{fail(error.localizedDescription,.observerDisconnected);return}
             }
-            do{let assessed=milliseconds();let result=try execution.assessment(milliseconds:assessed);stopButton.isEnabled=scenario.playback.mode != .count && stopMarker==nil && result.completedCycles>=2 && result.held.isEmpty && adapter.allReleased && result.status != "failed";try persist()
+            do{let assessed=milliseconds();let result=try execution.assessment(milliseconds:assessed);stopButton.isEnabled=scenario.playback.mode != .count && stopMarker==nil && result.completedCycles>=2 && result.held.isEmpty && adapter.allReleased && result.status != "failed"
                 if result.status=="failed"{fail(result.failure ?? "宏执行检查失败。",.reportRejected);return}
                 if result.passed{
                     freezeExecutionAssessment(at:assessed)
@@ -295,6 +303,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
                         else{action.title="恢复原配置";try set(.restoreReady,"实体输出和释放检查通过。本轮未选择断电测试；保持 USB 连接，点击恢复原配置。")}
                     }
                 }else if milliseconds()-executionStart>300_000{fail("观察超时，请停止宏并恢复原配置。");return}
+                else{try flushPendingLog(at:assessed)}
             }catch{fail(error.localizedDescription,.loggingFailed)}
         }
     }
@@ -340,7 +349,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             catch{fail(error.localizedDescription,.observerDisconnected);return}
         }
         do{let event=try adapter.receive(page:page,usage:usage,value:v,milliseconds:at);guard phase == .observing,let event else{return}
-            guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")};raw.append(["page":page,"usage":usage,"value":v,"milliseconds":at]);try execution?.observe(event);try persist()
+            guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")};raw.append(["page":page,"usage":usage,"value":v,"milliseconds":at]);pendingLogSave=true;try execution?.observe(event)
         }catch{if phase == .observing || phase == .observeReady{fail(error.localizedDescription,.reportRejected)}}
     }
     func windowShouldClose(_ sender:NSWindow)->Bool{
