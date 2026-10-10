@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode saved v2 macro-observer mouse bytes using the saved HID descriptor.
+"""Decode saved v2/v3 macro-observer mouse bytes using the saved HID descriptor.
 
 No device access, writes, injected input or firmware-layout compensation.
 """
@@ -59,14 +59,58 @@ def decode(payload, report):
     return result
 
 
+
+def compare_values(session, reports, registry):
+    # v2 rawValues is a filtered event projection, not an input-value ledger.
+    if session['version'] == 2:
+        require('rawMouseValues' not in session, 'v2 session unexpectedly includes a v3 value ledger')
+        return {'available': False, 'reason': 'v2 lacks complete report2 value callbacks', 'values': []}
+    values = session.get('rawMouseValues')
+    require(type(values) is list and len(values) <= 65536, 'Mouse value ledger exceeds bounds')
+    by_time = {}
+    for report in reports:
+        by_time.setdefault(report['milliseconds'], []).append(report)
+    output = []
+    for row in values:
+        require(type(row) is dict and set(row) == {'reportID', 'page', 'usage', 'value', 'milliseconds', 'registryID'} and
+                type(row['reportID']) is int and row['reportID'] == 2 and
+                number(row['page'], 65535) and number(row['usage'], 65535) and type(row['value']) is int and
+                -9223372036854775808 <= row['value'] <= 9223372036854775807 and
+                number(row['milliseconds'], 9007199254740991) and row['registryID'] == registry,
+                'Mouse value source/time/fields invalid')
+        matches = by_time.get(row['milliseconds'], [])
+        declared = None
+        if not matches:
+            state = 'no-raw-report-in-time-bucket'
+        elif len(matches) != 1:
+            state = 'ambiguous-time-bucket'
+        elif matches[0]['error'] is not None:
+            state = 'raw-report-not-decodable'
+        else:
+            fields = [f for f in matches[0]['fields'] if f['usagePage'] == row['page'] and f['usage'] == row['usage']]
+            if len(fields) != 1:
+                state = 'field-unavailable-or-ambiguous'
+            else:
+                declared = fields[0]['value']
+                state = 'same-value' if declared == row['value'] else 'different-value'
+        output.append({'milliseconds': row['milliseconds'], 'page': row['page'], 'usage': row['usage'],
+                       'callbackValue': row['value'], 'descriptorDecodedValue': declared, 'status': state})
+    counts = {}
+    for row in output:
+        counts[row['status']] = counts.get(row['status'], 0) + 1
+    return {'available': True, 'valueCount': len(output), 'counts': counts, 'values': output,
+            'joinMethod': 'Exactly one saved raw report in the same millisecond and one matching descriptor usage',
+            'limits': 'Millisecond buckets are not packet IDs. Same/different values indicate historical correlation only; absent, ambiguous or filtered callbacks are not inferred. Does not change macro execution assessment.'}
+
+
 def inspect(session):
     require(type(session) is dict and session.get('format') == 'CherryMacMacroObservationSession' and
-            type(session.get('version')) is int and session['version'] == 2, 'Need a v2 native observation session')
+            type(session.get('version')) is int and session['version'] in (2, 3), 'Need a v2 or v3 native observation session')
     rows = session.get('rawMouseReports')
     require(type(rows) is list and len(rows) <= 4096 and type(session.get('descriptorAvailable')) is bool,
             'Raw mouse evidence structure invalid')
     registry = session.get('registryID')
-    if rows:
+    if rows or session.get('rawMouseValues'):
         require(type(registry) is str and registry.isascii() and registry.isdecimal() and
                 registry == str(int(registry)) and 0 < int(registry) <= 18446744073709551615, 'USB registry identity invalid')
     descriptor = None
@@ -116,13 +160,13 @@ def inspect(session):
                 except ValueError as error:
                     item['error'] = str(error)
         output.append(item)
-    return {'format': 'CherryMacMouseObservationReview', 'version': 1, 'historicalOnly': True,
+    return {'format': 'CherryMacMouseObservationReview', 'version': 2, 'historicalOnly': True,
             'descriptorAvailable': descriptor is not None,
             'descriptorSHA256': hashlib.sha256(descriptor).hexdigest() if descriptor is not None else None,
             'registryID': registry, 'reportLayout': report, 'reportCount': len(rows),
             'reportsDecoded': sum(r['error'] is None for r in output),
             'reportsOutsideDeclaredRange': sum(any(not f['inDeclaredRange'] for f in r['fields']) for r in output),
-            'reports': output,
+            'reports': output, 'valueCorrelation': compare_values(session, output, registry),
             'hardwareExecutionPassed': False, 'powerCycleVerified': False,
             'limits': 'Saved descriptor interpretation only; not proof that firmware emitted intended movement, a macro passed, or a live keyboard is unchanged. No alternate firmware field order is substituted.'}
 
@@ -133,8 +177,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         with args.session.open('rb') as handle:
-            raw = handle.read(4000001)
-        require(len(raw) <= 4000000, 'Observation session exceeds bounds')
+            raw = handle.read(64000001)
+        require(len(raw) <= 64000000, 'Observation session exceeds bounds')
         def invalid_constant(value):
             raise ValueError('Nonfinite JSON value')
         session = json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)

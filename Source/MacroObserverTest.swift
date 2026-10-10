@@ -31,6 +31,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     var stopMarker:MacroExecutionLog.Stop?,interruptions:[MacroExecutionEvidence.Interruption]=[]
     var rawValues:[[String:Any]]=[]
     var rawMouseReports:[[String:Any]]=[]
+    var rawMouseValues:[[String:Any]]=[]
     var registryID:UInt64?,reportDescriptor:Data?
     var terminalError:String?
     init(directory:URL?=nil){
@@ -42,7 +43,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encode<T:Encodable>(_ value:T)throws->Data{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];return try encoder.encode(value)}
     func persist(at now:Int)throws {
-        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":2,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawMouseReports":rawMouseReports,"rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil]
+        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":3,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawValuesScope":"Filtered macro-event projection; not all HID callbacks","rawMouseReports":rawMouseReports,"rawMouseValues":rawMouseValues,"rawMouseValueScope":"All reportID2 value callbacks before macro-event filtering; timestamp buckets do not identify individual packets","rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil]
         if let locationID{metadata["locationID"]=locationID}
         if let registryID{metadata["registryID"]=String(registryID)}
         if let reportDescriptor{
@@ -91,6 +92,21 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             try evidence?.observe(event);lastMilliseconds=max(lastMilliseconds,now)
             do{try persist(at:now)}catch{invalidate(.loggingFailed,"日志保存失败，观察中止：\(error.localizedDescription)")}
         }catch{invalidate(.reportRejected,error.localizedDescription)}
+    }
+    func receiveMouseValue(device:IOHIDDevice,reportID:UInt32,page:UInt32,usage:UInt32,value:Int,at now:Int){
+        guard phase=="observing",source == .hid,reportID==2 else{return}
+        var currentID:UInt64=0
+        guard let registryID,IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&currentID)==KERN_SUCCESS,
+              currentID==registryID else{invalidate(.observerDisconnected,"鼠标解码值的USB会话变化，观察中止。");return}
+        guard rawMouseValues.count<65536,page<=65535,usage<=65535,now>=startedMilliseconds else{
+            invalidate(.loggingFailed,"鼠标解码值超过记录范围，观察中止。");return
+        }
+        rawMouseValues.append(["reportID":2,"page":page,"usage":usage,"value":value,
+            "milliseconds":now,"registryID":String(registryID)])
+        // Record zero movement, wheel and unchanged buttons too; these values
+        // must not be mistaken for the filtered macro-event projection.
+        do{try persist(at:max(now,lastMilliseconds))}
+        catch{invalidate(.loggingFailed,"鼠标解码值保存失败："+error.localizedDescription)}
     }
     func receiveMouseReport(result:IOReturn,bytes:[UInt8],at now:Int){
         guard phase=="observing",source == .hid else{return}
@@ -158,7 +174,11 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue()
             guard result==0 else{owner.invalidate(.reportRejected,"HID 观察回调失败。");return}
             let element=IOHIDValueGetElement(value)
-            owner.receive(page:IOHIDElementGetUsagePage(element),usage:IOHIDElementGetUsage(element),value:IOHIDValueGetIntegerValue(value),at:Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000))
+            let now=Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000)
+            let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element),integer=IOHIDValueGetIntegerValue(value)
+            owner.receiveMouseValue(device:IOHIDElementGetDevice(element),reportID:IOHIDElementGetReportID(element),page:page,usage:usage,value:integer,at:now)
+            guard owner.phase != "failed" else{return}
+            owner.receive(page:page,usage:usage,value:integer,at:now)
         },Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterInputReportWithTimeStampCallback(manager,{context,result,_,type,id,bytes,count,stamp in
             guard let context,type==kIOHIDReportTypeInput,id==2 else{return}
