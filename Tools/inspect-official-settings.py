@@ -2296,6 +2296,56 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_mainpage_message_map(pe):
+    """Pin real static initialization rather than treating unbacked data as an empty map."""
+    bodies = {
+        (0x4148f0, 0x414b81): "8d86570c73eb875755665bdc3076692c0e71a3dca611793a818e2612d443792b",
+        (0x487290, 0x48729a): "86f06249d0b8667ede532641af74efaa2083c7fcc9414fdfadbd62b46f2f1113",
+        (0x4872a0, 0x4872b0): "aea530f3774eb167c1e6a2fa3702295b013224f4d261cd5ff1ac6787c1cc13f1",
+        (0x4cb74d, 0x4cb761): "d4513e242d2918245d39e8b868d4bdb57a986d467ad34caec467b8913a05a69c",
+        (0x4181e0, 0x4181ed): "8a964d1d7ff7ce1a3c60997027339b1b12723566ff413f0bb34cb92f56441d3a",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Mainpage map initialization or callback differs")
+    if pe.pointer(0x77eaac) != 0x4872a0 or struct.unpack("<2I", pe.at(0x77eac4, 8)) != (0x487290, 0x842988):
+        raise ValueError("Mainpage message-map getter or header differs")
+    rows = [
+        ("click", 0x75a018, 0x414917, 0x842988, 0x414940, 0x842a90, 0x4cb752, 4),
+        ("selectchanged", 0x75a028, 0x414991, 0x842aa8, 0x4149b7, 0x842bb0, 0x4cb75c, 12),
+        ("itemclick", 0x75a048, 0x414a06, 0x842bc8, 0x414a2c, 0x842cd0, 0x4cb74d, 16),
+        ("dbclick", 0x75a060, 0x414a7b, 0x842ce8, 0x414aa1, 0x842df0, 0x4cb757, 8),
+    ]
+    entries = []
+    for name, string, push, entry, signature_store, signature_destination, thunk, slot in rows:
+        encoded = (name+"\0").encode("utf-16-le")
+        if pe.at(string, len(encoded)) != encoded or pe.at(push, 5) != b"\x68"+struct.pack("<I", string):
+            raise ValueError("Mainpage message-map event name differs")
+        if pe.at(signature_store, 10) != b"\xc7\x05"+struct.pack("<II", signature_destination, 2):
+            raise ValueError("Mainpage message-map signature differs")
+        if pe.at(thunk, 5) != bytes([0x8b, 0x01, 0xff, 0x60, slot]) or pe.pointer(0x77eaac+slot) != 0x4181e0:
+            raise ValueError("Mainpage map callback thunk or fixed-class virtual differs")
+        entries.append({"type": name, "entry": hex(entry), "signature": 2, "thunk": hex(thunk),
+                        "virtualSlot": hex(slot), "fixedClassTarget": "0x4181e0 empty ret4 leaf"})
+    if pe.at(0x414b15, 10) != bytes.fromhex("c705102f840000000000"):
+        raise ValueError("Mainpage message-map terminator differs")
+    imported = "?messageMap@CNotifyPump@DuiLib@@1UDUI_MSGMAP@2@B"
+    if pe.at(pe.base+pe.pointer(0x6eb484)+2, len(imported)+1) != (imported+"\0").encode("ascii"):
+        raise ValueError("Mainpage parent message-map import differs")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "map": "0x77eac4", "entriesStart": "0x842988", "entryBytes": 0x120,
+            "initializer": "0x4148f0", "entries": entries,
+            "terminator": {"entry": "0x842e08", "signature": 0},
+            "hasOwnNamedTabselectEntry": False,
+            "parent": {"getter": "0x487290", "source": "Imported CNotifyPump.messageMap data via0x6eb484"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed initializer, header and fixed-class empty callback leaves only. Not a runtime "
+                      "snapshot or proof that map entries/tables are never changed. Parent map, name routing, "
+                      "other listeners/control delegates and runtime class overrides remain separate; no "
+                      "own tabselect entry is not global absence of a handler or a persistence result."}
+
+
 def inspect_virtual_window_name_sources(pe, path):
     """Pin parent name inheritance and one concrete host receiver registration."""
     data = Path(path).read_bytes()
@@ -4259,7 +4309,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 95,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 96,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4316,6 +4366,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "mainWindowNotifyBoundary": inspect_main_window_notify_boundary(pe),
         "windowBaseNotifyRouting": inspect_window_base_notify_routing(pe, ui_dll, skin) if ui_dll else None,
         "virtualWindowNameSources": inspect_virtual_window_name_sources(pe, ui_dll) if ui_dll else None,
+        "mainpageMessageMap": inspect_mainpage_message_map(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
