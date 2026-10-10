@@ -123,6 +123,27 @@ def inspect_context(session, folder, artifacts):
             'Focused browser coordinates cannot be declared device displacement')
     require(session.get('diagnosticOnly') == diagnostic_only, 'Diagnostic flag differs from expected macro')
     ending = session.get('diagnosticEnd')
+    manual_trigger_enabled = session.get('manualDiagnosticTriggerEnabled', False)
+    require(type(manual_trigger_enabled) is bool, 'Manual diagnostic trigger marker invalid')
+    trigger = session.get('diagnosticTrigger')
+    if trigger is not None:
+        require(manual_trigger_enabled and diagnostic_only and context['started'] and type(trigger) is dict and
+                set(trigger) == {'milliseconds', 'source', 'physicalTriggerVerified'} and
+                mouse.number(trigger['milliseconds'], 9007199254740991) and
+                trigger['milliseconds'] >= context['startedMilliseconds'] and trigger['source'] == 'userAcknowledged' and
+                trigger['physicalTriggerVerified'] is False, 'Manual trigger claims invalid or verified physical evidence')
+    if manual_trigger_enabled and diagnostic_only:
+        expects_no_output = all(step.get('kind') in ('mouseX', 'mouseY') and step['usage'] == 0 and
+                               not step['pressed'] for step in macro['steps'])
+        require(type(session.get('diagnosticExpectsNoOutput')) is bool and
+                session['diagnosticExpectsNoOutput'] == expects_no_output and
+                type(session.get('diagnosticUnexpectedOutput')) is bool, 'Diagnostic output flags invalid')
+        projection, values = session.get('rawValues'), session.get('rawMouseValues')
+        require(type(projection) is list and type(values) is list, 'Diagnostic value rows missing')
+        unexpected = expects_no_output and (bool(projection) or any(
+            row['value'] != 0 and (row['page'] == 9 or row['page'] == 1 and row['usage'] in (0x30, 0x31, 0x38))
+            for row in values))
+        require(session['diagnosticUnexpectedOutput'] == unexpected, 'Diagnostic output flag contradicts recorded values')
     if ending is not None:
         require(diagnostic_only and context['started'] and type(ending) is dict and
                 set(ending) == {'milliseconds', 'source', 'physicalTriggerVerified', 'quietIntervalVerified'} and
@@ -132,6 +153,9 @@ def inspect_context(session, folder, artifacts):
                 'Diagnostic ending invalid or claims unsupported verification')
     if session['phase'] == 'diagnosticComplete':
         require(ending is not None, 'Completed contextual diagnostic lacks its ending marker')
+        if manual_trigger_enabled:
+            require(trigger is not None and ending['milliseconds']-trigger['milliseconds'] >= 1000,
+                    'Completed manual diagnostic lacks its one-second post-declaration observation interval')
     for field in ('rawValues', 'rawMouseReports', 'rawMouseValues'):
         rows = session.get(field, [])
         require(type(rows) is list and len(rows) <= 65536, 'Contextual observation rows invalid')
@@ -145,6 +169,8 @@ def inspect_context(session, folder, artifacts):
             'slot': 102, 'eventCount': len(macro['steps']), 'containsMovement': movement,
             'movementObservationEnabled': movement_enabled,
             'playback': mode, 'source': context['source'], 'started': context['started'],
+            'manualDiagnosticTriggerEnabled': manual_trigger_enabled, 'declaredTrigger': trigger,
+            'recordedUnexpectedOutput': session.get('diagnosticUnexpectedOutput'),
             'diagnosticEnd': ending, 'physicalTriggerVerified': False, 'hardwareExecutionPassed': False}
 
 
