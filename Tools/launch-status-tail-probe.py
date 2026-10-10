@@ -5,6 +5,8 @@ No HID code. Runs only when explicitly invoked; collection never relaunches.
 The protected staging directory remains available after interruption.
 """
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -48,6 +50,29 @@ def exclusive(path, raw):
     except BaseException:
         # Preserve an incomplete file as evidence; never overwrite on retry.
         raise
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    require(regular(path, len(raw)) == raw, '保存日志后的读回内容不一致。')
+
+
+def save_identical(path, raw):
+    try:
+        exclusive(path, raw)
+        return True
+    except FileExistsError:
+        require(regular(path, len(raw)) == raw, '已有记录内容不同，保留原文件，不覆盖。')
+        return False
+
+
+def analyzer():
+    path = Path(__file__).resolve().with_name('inspect-status-tail-receipt.py')
+    spec = importlib.util.spec_from_file_location('cherrymac_status_tail_review', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def collect(ticket_path):
@@ -67,13 +92,25 @@ def collect(ticket_path):
     if not source.exists():
         return {'status': 'awaiting-receipt', 'ticket': str(ticket_path), 'relaunchPerformed': False}
     raw = regular(source, 128000)
-    receipt = json.loads(raw)
+    review = analyzer()
+    receipt = json.loads(raw, object_pairs_hook=review.unique_object, parse_constant=review.invalid_constant)
     require(type(receipt) is dict and receipt.get('format') == 'CherryMacReadOnlyProbe', '输出不是只读工具日志。')
     if receipt.get('status') not in ('complete', 'failed'):
         return {'status': 'receipt-not-terminal', 'ticket': str(ticket_path), 'relaunchPerformed': False}
     target = ticket_path.parent / ('status-tail-' + ticket['operationID'] + '.json')
-    exclusive(target, raw)
-    return {'status': receipt['status'], 'receipt': str(target), 'queries': len(receipt.get('queries', [])),
+    # Preserve the raw terminal receipt even when strict diagnosis rejects it.
+    copied = save_identical(target, raw)
+    diagnosis_path = ticket_path.parent / ('status-tail-review-' + ticket['operationID'] + '.json')
+    try:
+        diagnosis = review.inspect(receipt)
+        diagnosis['receiptSHA256'] = hashlib.sha256(raw).hexdigest()
+    except (ValueError, TypeError, KeyError) as error:
+        diagnosis = {'format': 'CherryMacStatusTailReceiptReviewFailure', 'version': 1,
+                     'receiptSHA256': hashlib.sha256(raw).hexdigest(), 'error': str(error),
+                     'completeBackupCreated': False, 'authorizesRestoreOrPairing': False}
+    save_identical(diagnosis_path, (json.dumps(diagnosis, ensure_ascii=False, indent=2) + '\n').encode())
+    return {'status': receipt['status'], 'receipt': str(target), 'review': str(diagnosis_path),
+            'rawFileCreated': copied, 'diagnosisAccepted': diagnosis['format'] == 'CherryMacStatusTailReceiptReview',
             'error': receipt.get('error'), 'relaunchPerformed': False}
 
 
