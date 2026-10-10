@@ -21,6 +21,63 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def parameter_write_coverage(frames):
+    """Summarize observed command-06 bytes, not accepted/current parameters."""
+    rows = {}
+    rejected = collections.Counter()
+    candidates = 0
+    for frame in frames:
+        if frame['source'] == 'interrupt-in-completion' or frame['commandByte'] != 6:
+            continue
+        candidates += 1
+        count, offset = frame['countByte'], frame['offsetWord']
+        # A capture can contain malformed traffic. Retain its raw frame but
+        # do not give it the same coverage label as a checksummed parameter
+        # request. This is a shape filter, not a firmware acceptance check.
+        if not frame['checksumMatchesFullSum']:
+            rejected['checksum-mismatch'] += 1
+            continue
+        if not 1 <= count <= 56:
+            rejected['empty-or-count-exceeds-payload'] += 1
+            continue
+        if offset + count > 64:
+            rejected['outside-64-byte-parameter-candidate'] += 1
+            continue
+        report = bytes.fromhex(frame['reportHex'])
+        for position, value in enumerate(report[8:8+count], offset):
+            row = rows.setdefault(position, {
+                'offset': position, 'submissionCount': 0, 'valueCounts': collections.Counter(),
+                'firstPacket': frame['packet'], 'lastPacket': frame['packet'],
+                'usbCompletionObservedCount': 0, 'usbCompletionStatusZeroCount': 0,
+            })
+            row['submissionCount'] += 1
+            row['valueCounts'][value] += 1
+            row['lastPacket'] = frame['packet']
+            completion = frame.get('usbCompletion')
+            if completion is not None:
+                row['usbCompletionObservedCount'] += 1
+                if completion['usbStatus'] == 0:
+                    row['usbCompletionStatusZeroCount'] += 1
+    output = []
+    for position in sorted(rows):
+        row = rows[position]
+        row['observedValues'] = [{'value': value, 'submissions': count}
+                                 for value, count in sorted(row.pop('valueCounts').items())]
+        output.append(row)
+    return {
+        'commandByte': 6, 'candidateSubmissions': candidates,
+        'excludedSubmissions': dict(sorted(rejected.items())), 'byteCoverage': output,
+        'offset53Observed': 53 in rows, 'offset54Observed': 54 in rows,
+        'configurationWriteAccepted': False, 'authorizesReplay': False,
+        'limits': 'Observed checksum-valid command-06 submission coverage only. '
+                  'Byte values are a histogram, not final/current configuration. '
+                  'Offsets53/54 are investigation targets, not identified fields for this device. '
+                  'No command86 decoding, protocol reply pairing, firmware-bound acceptance '
+                  'or inference that absent bytes were never sent through other traffic. '
+                  'USB completion counts do not establish keyboard acceptance or persistence.',
+    }
+
+
 def inspect(path, bus, device):
     require(1 <= bus <= 65535 and 1 <= device <= 127, "需要明确的 USB bus 和设备地址。")
     # Reject FIFOs/devices after opening without waiting for a writer.
@@ -210,11 +267,12 @@ def inspect(path, bus, device):
         final = os.fstat(handle.fileno())
         require((initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns), "分析期间抓包文件发生变化。")
-    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 4,
+    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 5,
             "captureSHA256": digest.hexdigest(), "bus": bus, "deviceAddress": device,
             "packets": packets, "selectedDevicePackets": selected, "report4Frames": frames,
             "commandCounts": dict(sorted(counts.items())), "issues": issues,
             "usbCompletionCounts": dict(sorted(completion_counts.items())),
+            "parameterWriteCoverage": parameter_write_coverage(frames),
             "opaqueTrafficGroups": list(opaque_groups.values()),
             "opaqueTrafficPackets": sum(group['packets'] for group in opaque_groups.values()),
             "outReportsWithoutAssociatedCompletion": sum(f.get('usbCompletionAssociation') is not None and
