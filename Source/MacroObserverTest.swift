@@ -34,6 +34,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     var rawMouseValues:[[String:Any]]=[]
     var registryID:UInt64?,reportDescriptor:Data?
     var terminalError:String?
+    var pendingLogSave=false,lastLogSaveMilliseconds:Int?
     init(directory:URL?=nil){
         if let directory{self.directory=directory}
         else if let i=CommandLine.arguments.firstIndex(of:"--test-dir"),CommandLine.arguments.count>i+1{self.directory=URL(fileURLWithPath:CommandLine.arguments[i+1])}
@@ -43,7 +44,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encode<T:Encodable>(_ value:T)throws->Data{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];return try encoder.encode(value)}
     func persist(at now:Int)throws {
-        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":3,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawValuesScope":"Filtered macro-event projection; not all HID callbacks","rawMouseReports":rawMouseReports,"rawMouseValues":rawMouseValues,"rawMouseValueScope":"All reportID2 value callbacks before macro-event filtering; timestamp buckets do not identify individual packets","rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil]
+        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":3,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawValuesScope":"Filtered macro-event projection; not all HID callbacks","rawMouseReports":rawMouseReports,"rawMouseValues":rawMouseValues,"rawMouseValueScope":"All reportID2 value callbacks before macro-event filtering; timestamp buckets do not identify individual packets","rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil,"logSavePolicy":"Coalesce callback records in memory; timer attempts saves at >=250ms intervals; explicit stop/end/failure saves immediately. Abrupt process termination can lose unflushed records."]
         if let locationID{metadata["locationID"]=locationID}
         if let registryID{metadata["registryID"]=String(registryID)}
         if let reportDescriptor{
@@ -51,15 +52,26 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             metadata["reportDescriptorSHA256"]=SHA256.hash(data:reportDescriptor).map{String(format:"%02x",$0)}.joined()
         }
         if let terminalError{metadata["error"]=terminalError}
-        try JSONSerialization.data(withJSONObject:metadata,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
         if let baseline,!FileManager.default.fileExists(atPath:directory.appendingPathComponent("baseline.json").path){try HardwareProfile(snapshot:baseline).encoded().write(to:directory.appendingPathComponent("baseline.json"),options:.atomic)}
         if let evidence,let macro,let playback {
             let log=MacroExecutionLog(format:"CherryMacMacroExecution",version:1,macro:macro,playback:playback,source:source,startedMilliseconds:startedMilliseconds,
                 events:evidence.observations,stop:stopMarker,assessedMilliseconds:max(now,lastMilliseconds),interruptions:interruptions)
             let data=try encode(log);try data.write(to:directory.appendingPathComponent("execution.json"),options:.atomic)
             let report=MacroExecutionReport(inputSHA256:SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined(),assessment:try evidence.assessment(milliseconds:max(now,lastMilliseconds)))
-            try encode(report).write(to:directory.appendingPathComponent("assessment.json"),options:.atomic)
+            let assessmentData=try encode(report)
+            try assessmentData.write(to:directory.appendingPathComponent("assessment.json"),options:.atomic)
+            metadata["executionSHA256"]=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+            metadata["assessmentSHA256"]=SHA256.hash(data:assessmentData).map{String(format:"%02x",$0)}.joined()
         }
+        // Session is the last saved file and names the exact derived artifacts.
+        // This is not a multi-file atomic transaction or a power-loss guarantee.
+        try JSONSerialization.data(withJSONObject:metadata,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
+        pendingLogSave=false;lastLogSaveMilliseconds=now
+    }
+    func flushObservationLog(at now:Int)throws {
+        guard pendingLogSave else{return}
+        if let previous=lastLogSaveMilliseconds,now-previous<250{return}
+        try persist(at:now)
     }
     func save(){do{try persist(at:milliseconds())}catch{terminalError=error.localizedDescription;evidence?.invalidate(.loggingFailed);phase="failed";timer?.invalidate();status.stringValue="日志保存失败，测试中止。请停止正在执行的宏。"}}
     func invalidate(_ reason:MacroExecutionEvidence.Interruption,_ message:String){
@@ -90,7 +102,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             guard rawValues.count<65536 else{invalidate(.loggingFailed,"记录容量已满，观察中止。");return}
             rawValues.append(["page":page,"usage":usage,"value":value,"milliseconds":now])
             try evidence?.observe(event);lastMilliseconds=max(lastMilliseconds,now)
-            do{try persist(at:now)}catch{invalidate(.loggingFailed,"日志保存失败，观察中止：\(error.localizedDescription)")}
+            pendingLogSave=true
         }catch{invalidate(.reportRejected,error.localizedDescription)}
     }
     func receiveMouseValue(device:IOHIDDevice,reportID:UInt32,page:UInt32,usage:UInt32,value:Int,at now:Int){
@@ -105,8 +117,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             "milliseconds":now,"registryID":String(registryID)])
         // Record zero movement, wheel and unchanged buttons too; these values
         // must not be mistaken for the filtered macro-event projection.
-        do{try persist(at:max(now,lastMilliseconds))}
-        catch{invalidate(.loggingFailed,"鼠标解码值保存失败："+error.localizedDescription)}
+        pendingLogSave=true
     }
     func receiveMouseReport(result:IOReturn,bytes:[UInt8],at now:Int){
         guard phase=="observing",source == .hid else{return}
@@ -123,23 +134,29 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         guard result==0,!bytes.isEmpty else{invalidate(.reportRejected,"鼠标原始报告回调失败或长度无效。");return}
         // Raw bytes supplement diagnosis only; never manufacture macro events
         // or replace the existing decoded-value assessment with these bytes.
-        do{try persist(at:max(now,lastMilliseconds))}
-        catch{invalidate(.loggingFailed,"鼠标原始报告保存失败："+error.localizedDescription)}
+        pendingLogSave=true
     }
     func markStop(at now:Int,source:MacroExecutionEvidence.StopSource)throws {
         guard phase=="observing",let evidence,try evidence.assessment(milliseconds:max(now,lastMilliseconds)).completedCycles>=2 else{throw HardwareError(message:"先观察至少两轮完整宏输出，再停止并确认。")}
         try self.evidence?.requestStop(milliseconds:now,source:source);stopMarker = .init(milliseconds:now,source:source);lastMilliseconds=max(lastMilliseconds,now)
-        stopButton.isEnabled=false;try persist(at:now)
+        stopButton.isEnabled=false;pendingLogSave=true
+        do{try persist(at:now)}catch{invalidate(.loggingFailed,"停止确认日志保存失败："+error.localizedDescription);throw error}
     }
     func poll(at now:Int){
         guard phase=="observing",let evidence else{return}
         do{
             let result=try evidence.assessment(milliseconds:max(now,lastMilliseconds))
             stopButton.isEnabled=playback?.mode != .count && result.completedCycles>=2 && stopMarker==nil
-            if result.passed{phase="complete";timer?.invalidate();status.stringValue="观察检查通过：\(result.completedCycles) 轮，按键全部释放。";detail.stringValue="仅本次输出观察通过；写入、时序和断电需要分别核对。日志：\(directory.path)";stopButton.isEnabled=false}
+            if result.passed{
+                phase="complete";timer?.invalidate();stopButton.isEnabled=false;pendingLogSave=true
+                do{try persist(at:now)}catch{invalidate(.loggingFailed,"最终观察日志保存失败："+error.localizedDescription);return}
+                status.stringValue="观察检查通过：\(result.completedCycles) 轮，按键全部释放。"
+                detail.stringValue="仅本次输出观察通过；写入、时序和断电需要分别核对。日志：\(directory.path)"
+                return
+            }
             else if result.status=="failed"{invalidate(.reportRejected,"宏输出检查未通过：\(result.failure ?? "unknown")");return}
             else if now-startedMilliseconds>300_000{invalidate(.cancelled,"观察超过五分钟，测试中止。请先停止宏。");return}
-            try persist(at:now)
+            do{try flushObservationLog(at:now)}catch{invalidate(.loggingFailed,"观察日志保存失败："+error.localizedDescription)}
         }catch{invalidate(.reportRejected,error.localizedDescription)}
     }
     @objc func start(){
