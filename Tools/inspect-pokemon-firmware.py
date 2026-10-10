@@ -554,6 +554,51 @@ def inspect_parameter_write_side_effects(image):
                      'closed by this audit. No candidate reports generated, execution or hardware access.'}
 
 
+def inspect_parameter_write_common_tail(image):
+    """Resolve the local flag clear and a known OOM caller, not live causation."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):raise ValueError("Parameter common tail exceeds image")
+        return image[offset:offset+size]
+    bodies={(0x2f28a,0x2f2a6):'457f551ea07b082959a7f52adcf1e73666554684c4e7d70134704dbe341fd841',
+            (0x2f300,0x2f338):'81964e12a5184ea185ee24bf56feb1bf8fa1f5417387c9b232eea55ad1a17571',
+            (0x2f57e,0x2f58c):'6e487ca873a0f22e440708ec9d81c6834d4e28f1082c76b1759e99bb67442aa8'}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Parameter common-tail body differs")
+    literals={0x2f2d4:0x20009b23,0x2f2e8:0x20009b22,0x2f2ec:0x20009b2c,
+              0x2f5dc:0x52718,0x52718:0x4f4e4,0x2f5e0:0x2000716c,0x2f654:0x4c098}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Parameter common-tail literal differs")
+    if at(0x4f4e4,len(b'keyboard_event\0'))!=b'keyboard_event\0':
+        raise ValueError("Common-tail event type differs")
+    known_failure=inspect_nonreading_control_branches(image)
+    return {'codeSHA256':{f'{a:#x}..{b:#x}':h for (a,b),h in bodies.items()},
+            'entry':'0x2f28a; direct fallthrough from command06 side effects',
+            'firstGate':{'address':'0x20009b22','nonzero':'0x2f350 shared reply-copy path',
+                         'zero':'continue at0x2f292'},
+            'localClear':{'address':'0x20009b23','when':'first gate zero and this flag nonzero',
+                          'storedValue':0,'site':'0x2f298',
+                          'notPersistenceEvidence':True},
+            'eventGate':{'address':'0x20009b2c','value':2,'entry':'0x2f300',
+                         'otherValues':'return at0x2f2a2'},
+            'eventAllocation':{'allocator':'0x4bcb4','arguments':[4,148],
+                               'typeName':'keyboard_event','typePointer':'0x52718',
+                               'source':'bytes1..63 from0x2000716c',
+                               'destination':'63 halfwords at event+8..event+132',
+                               'eventByte137':4,'publish':'tail-call0x3737c',
+                               'failureBranch':'0x2f30c ->0x2f57e'},
+            'allocationFailure':{'message':'Event Manager OOM error',
+                                 'handler':'0x34754','handlerAudit':known_failure['failureHandler'],
+                                 'normalReturnProved':False},
+            'hardwareReady':False,
+            'limits':'Fixed0104 local common tail only. State-byte meanings, event recipients, '
+                     'current0102 identity, actual allocation exhaustion and blackout causation '
+                     'remain unknown. Clearing a flag and publishing an event do not prove '
+                     'successful persistent writes. No execution, simulated inputs or hardware access.'}
+
+
 def inspect_parameter_consumers(image):
     """Locate declared base loads and pin two actual consumers; no emulation."""
     def at(address, size):
@@ -1663,7 +1708,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 36,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 37,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1684,6 +1729,7 @@ def inspect(path):
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
             'parameterWriteSideEffects': inspect_parameter_write_side_effects(image),
+            'parameterWriteCommonTail': inspect_parameter_write_common_tail(image),
             'lightFlagCallback': inspect_light_flag_callback(image),
             'customLightingOutput': inspect_custom_lighting_output(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
