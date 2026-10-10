@@ -2294,6 +2294,63 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_window_base_notify_routing(pe, path, skin):
+    """Resolve base notify routing without inventing runtime virtual-window names."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Base-notify DuiLib image differs")
+    dll = PE32(data)
+    bodies = {
+        (0x1104bcb0, 0x1104bccc): "093b012fdf51da00936b01e4127cabeb0be5d2bae7a5c8130a9d62a95b17c259",
+        (0x11050d00, 0x11050dc1): "e84e9d6b9618373ea8d42a3f3c36ffc2941baaef593aac66cd5d608cf5eb4475",
+        (0x11050c10, 0x11050cfd): "7b7f199b723e39cd5b91484a7b546269f3f1de31792dae897777f80473e91e4a",
+        (0x1104f530, 0x1104f565): "f21c86381271b6462859e5e0baebefe70866dbabdce72987113cfd6246daccd6",
+        (0x1104f0f0, 0x1104f100): "8857d15e5bce580adb0e5dc96d1aba616e10aa72982c77604b0d7b40d9671936",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(dll.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Base-notify routing body differs")
+    checks = {0x1104bcbe: "83e910", 0x1104bcc1: "e83a500000",
+              0x11050d0c: "81c184000000", 0x11050d12: "e819e8ffff",
+              0x11050d1c: "0f858d000000", 0x11050d6f: "e83ef10800",
+              0x11050d9c: "e86ffeffff", 0x11050db6: "e855feffff",
+              0x11050c31: "ffd0", 0x11050c53: "e8c8fdffff",
+              0x11050cb2: "837dec01", 0x11050cb8: "837dec02",
+              0x11050cda: "ff55d8", 0x11050ced: "ff55d8"}
+    for address, encoded in checks.items():
+        if dll.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Base-notify routing instruction differs")
+    if hashlib.sha256(pe.at(0x487e20, 0x10)).hexdigest() != "069ca583816efc5acfc530cab325410e1dce114d08ebb827e8d5766690affc50":
+        raise ValueError("Main-window message-map getter differs")
+    if pe.pointer(0x77e998) != 0x487e20 or pe.at(0x487e98, 7) != bytes.fromhex("c7411098e97700"):
+        raise ValueError("Main-window message-map interface differs")
+    resource = None
+    if skin:
+        raw = (Path(skin)/"XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml").read_bytes()
+        tree = ET.fromstring(raw.lstrip())
+        attrs = [node.attrib["virtualwnd"] for node in tree.iter() if "virtualwnd" in node.attrib]
+        if attrs:
+            raise ValueError("Target resource virtualwnd attributes differ")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(), "explicitVirtualwndAttributes": attrs}
+    return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "baseForward": "WindowImplBase.Notify0x1104bcb0 adjusts interface by-0x10 then0x11050d00",
+            "selector": "Notification string at+0x84; helper0x1104f530 checks first UTF16 code unit for zero",
+            "namedRouting": "Nonempty name searches pump+4 map; matched receiver dispatches0x11050c10; true stops search",
+            "fallback": "Empty name or unhandled receivers dispatch the current pump0x11050c10",
+            "messageDispatch": {"tableGetter": "receiver virtual+0", "parentMaps": "follow map parent getter",
+                                "findEntry": "0x11050a20", "signature1": "member callback with wParam/lParam",
+                                "signature2": "member callback with original notification",
+                                "adjustment": "entry member-function this displacement"},
+            "mainWindowOwnMap": {"interfaceRootOffset": 0x10, "getter": "0x487e20", "map": "0x77eaa0"},
+            "resource": resource, "hardwareWriteAuthorized": False,
+            "limits": "Fixed routing mechanics and target XML only. No explicit virtualwnd attribute does "
+                      "not prove the runtime string is empty: inheritance, setters and manager behavior remain. "
+                      "Registered receivers, dynamic message entries and their callbacks require separate analysis; "
+                      "this is not a HID sender or proof that tabselect is globally unhandled."}
+
+
 def inspect_main_window_notify_boundary(pe):
     """Pin registration and the derived window listener, preserving base forwarding."""
     start, end = 0x48b4b0, 0x48b8b6
@@ -4145,7 +4202,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 93,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 94,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4200,6 +4257,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightInfoFallbackInitialization": inspect_light_info_fallback_initialization(pe),
         "tabNotifyDispatch": inspect_tab_notify_dispatch(ui_dll) if ui_dll else None,
         "mainWindowNotifyBoundary": inspect_main_window_notify_boundary(pe),
+        "windowBaseNotifyRouting": inspect_window_base_notify_routing(pe, ui_dll, skin) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
