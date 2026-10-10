@@ -12,8 +12,12 @@ python3 Tools/inspect-windows-usb-capture.py /私有目录/official.pcap --bus 1
 
 目前支持经典 pcap 2.4／USBPcap LINKTYPE 249，大小上限 256 MB。若文件是 pcapng，可以在 Wireshark 中离线另存为 pcap，不需要重新捕获。文件格式依据 [USBPcap 原厂格式说明](https://desowin.org/usbpcap/captureformat.html) 与 [原厂头文件](https://github.com/desowin/usbpcap/blob/master/USBPcapDriver/include/USBPcap.h)。所选设备的截断报告或长度不符会中止；文件解析失败不会输出部分成功结果。
 
-工具区分 interrupt OUT 提交、interrupt IN 完成，以及完整 HID SET_REPORT 的控制 SETUP 数据。63 字节或其他非完整控制数据保留 SETUP 与原始片段／摘要，不补造 Report ID 或填补截断包。不匹配的控制完成、旧版分阶段 DATA、Feature 报告和其他流量暂不解码，也不把它们当作“没有配置指令”。同一个 IRP 的 USB 完成不是键盘协议回复，当前版本不自动关联请求与回复，更不把完成状态当写入验收。
+工具区分 interrupt OUT 提交、interrupt IN 完成，以及完整 HID SET_REPORT 的控制 SETUP 数据。63 字节或其他非完整控制数据保留 SETUP 与原始片段／摘要，不补造 Report ID 或填补截断包。不匹配的控制完成、旧版分阶段 DATA、Feature 报告和其他流量暂不解码，也不把它们当作“没有配置指令”。
+
+版本2增加OUT提交与USB完成的有限关联：同一所选bus／地址内，以IRP指针及endpoint、URB function、transfer类型相符核对；interrupt OUT完成或控制STATUS／COMPLETE可关联到先前完整Report4。重复活跃IRP、元数据不符和未观察到完成分别记录，不按时间邻近猜配；不解析的OUT提交也占用对应IRP，避免误配另一次传输。每个已提取报告保存完成包号、捕获时间和USB状态；不把未观察到完成解释为写入失败，抓包可能只覆盖部分过程。同一个IRP的USB完成只是主机控制器传输结果，不是键盘协议回复，工具仍不自动关联键盘请求与回复或判定写入验收。
 
 只计数其他设备的包，不输出其 payload。指定地址本身不能证明 VID/PID；拔插后地址可能变化，不能跨地址拼接成同一会话。原始抓包和分析 JSON 含本机通信／配置，应留在私有 work 目录，不提交 GitHub。工具不调用 USB、抓包软件、驱动或硬件接口，也没有重放功能。
 
 2026-10-10：首版代码和语法检查完成。工作区没有可用于本工具的真实 Windows 抓包，尚未执行真实文件解析或行为测试；不生成合成抓包测试。本工具不编入公开 App／PHP，公开版本保持 0.96.0。后置验收获得真实官方通信后，再核对设置写入、未知命令、异常回复及读回／断电表现，不据该工具的存在宣布协议或成品完成。
+
+2026-10-10：版本2完成上述USB传输关联代码与语法／差异检查，依据原厂格式的IRP指针、完成状态、info及控制stage定义；不运行解析器或制造样本。没有新增真实抓包证据，设备设置发送接口仍未闭合，公开两端保持0.96.0。

@@ -51,6 +51,19 @@ def inspect(path, bus, device):
         frames = []
         issues = []
         counts = collections.Counter()
+        pending_out = {}
+        completion_counts = collections.Counter()
+
+        def register_out(irp, record):
+            active = pending_out.setdefault(irp, [])
+            if active:
+                record['usbCompletionAssociation'] = 'ambiguous-active-IRP'
+                for old in active:
+                    old['usbCompletionAssociation'] = 'ambiguous-active-IRP'
+            # Two entries already prove ambiguity; retain no unbounded list
+            # of repeated submissions for the same pointer.
+            if len(active) < 2:
+                active.append(record)
         while handle.tell() < initial.st_size:
             packets += 1
             require(packets <= 1_000_000, "抓包超过一百万包，请先离线筛选。")
@@ -103,7 +116,45 @@ def inspect(path, bus, device):
                                            "issue": "SET_REPORT 不是可直接解码的64字节Report4；保留原始片段，不填补Report ID或数据。"})
                 # Completed control data is left opaque without its SETUP
                 # correlation. Do not mistake its leading byte for report ID.
+            is_out_completion = info == 1 and ((transfer == 1 and not endpoint & 0x80) or
+                                               (transfer == 2 and stage in (2, 3)))
+            if is_out_completion:
+                pending = pending_out.get(irp)
+                if pending is None:
+                    completion_counts['without-decoded-out-submission'] += 1
+                elif len(pending) != 1:
+                    # An IRP pointer may be reused. Multiple active submissions
+                    # cannot be assigned to a single completion by proximity.
+                    for old in pending:
+                        old['usbCompletionAssociation'] = 'ambiguous-active-IRP'
+                    del pending_out[irp]
+                    completion_counts['ambiguous-active-IRP'] += 1
+                else:
+                    old = pending[0]
+                    expected_transfer = 2 if old['source'] == 'control-set-output-report' else 1
+                    if endpoint != old['endpoint'] or function != old['urbFunction'] or transfer != expected_transfer:
+                        old['usbCompletionAssociation'] = 'metadata-mismatch-observed'
+                        del pending_out[irp]
+                        completion_counts['metadata-mismatch-observed'] += 1
+                    else:
+                        if old.get('decodedReport4', True):
+                            old['usbCompletion'] = {'packet': packets, 'timestampSeconds': sec,
+                                'timestampFraction': subsecond, 'timestampResolution': resolution,
+                                'usbStatus': status, 'controlStage': stage,
+                                'classification': 'host-controller completion only; not a keyboard acknowledgement'}
+                            old['usbCompletionAssociation'] = 'matched-IRP-and-transfer-metadata'
+                            completion_counts['matched'] += 1
+                        else:
+                            completion_counts['without-decoded-out-submission'] += 1
+                        del pending_out[irp]
             if source is None or len(payload) != 64 or payload[0] != 4:
+                # Track opaque submissions too, so another transfer reusing
+                # an active IRP cannot complete a decoded Report-4 by mistake.
+                if info == 0 and ((transfer == 1 and not endpoint & 0x80) or
+                                  (transfer == 2 and stage == 0)):
+                    register_out(irp, {'decodedReport4': False, 'endpoint': endpoint,
+                        'urbFunction': function, 'source': 'control-set-output-report' if transfer == 2
+                        else 'interrupt-out-submission'})
                 continue
             require(len(frames) < 100_000 and len(issues) <= 10_000, "所选通信超过分析上限。")
             counts[f"{source}:0x{payload[3]:02x}"] += 1
@@ -117,24 +168,30 @@ def inspect(path, bus, device):
                      "statusByte": payload[7], "reportHex": payload.hex(),
                      "checksumWord": int.from_bytes(payload[1:3], "little")}
             if source != "interrupt-in-completion":
+                frame['usbCompletion'] = None
+                frame['usbCompletionAssociation'] = 'completion-not-observed'
                 frame["sumBytes3Through63"] = sum(payload[3:64])
                 frame["checksumMatchesFullSum"] = frame["checksumWord"] == sum(payload[3:64])
                 if payload[3] == 6 and 1 <= payload[4] <= 56:
                     frame["parameterWriteCandidate"] = {
                         "offset": frame["offsetWord"], "dataHex": payload[8:8+payload[4]].hex(),
                         "classification": "matches existing command-06 shape only; not identity/acceptance proof"}
+                register_out(irp, frame)
             frames.append(frame)
         final = os.fstat(handle.fileno())
         require((initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns), "分析期间抓包文件发生变化。")
-    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 1,
+    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 2,
             "captureSHA256": digest.hexdigest(), "bus": bus, "deviceAddress": device,
             "packets": packets, "selectedDevicePackets": selected, "report4Frames": frames,
             "commandCounts": dict(sorted(counts.items())), "issues": issues,
+            "usbCompletionCounts": dict(sorted(completion_counts.items())),
+            "outReportsWithoutAssociatedCompletion": sum(f.get('usbCompletionAssociation') is not None and
+                                                          f.get('usbCompletion') is None for f in frames),
             "targetIdentityVerified": False, "configurationWriteAccepted": False,
             "powerCycleVerified": False, "authorizesReplay": False,
             "limits": "Offline observed bytes only. USB completion is not a keyboard acknowledgement. "
-                      "No request/reply pairing, VID/PID identity, reconnect address continuity, "
+                      "No keyboard-protocol request/reply pairing, VID/PID identity, reconnect address continuity, "
                       "old split-control DATA, Feature reports or persistence inference. "
                       "Other selected-device traffic is counted but not decoded."}
 
