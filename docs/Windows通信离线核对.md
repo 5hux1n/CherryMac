@@ -37,3 +37,16 @@ powershell.exe -NoProfile -File .\collect-windows-evidence.ps1
 脚本不修改执行策略；系统策略拦截时保留提示，先单独处理，不自动绕过。也可通过-Files和-OutputParent指定文件与已有输出目录。仅接收最多16份JSON（每份<=16MB）或pcap／pcapng（每份<=256MB），拒绝目录和链接。已有写入方共享的文件拒绝读取，不收集正在抓包／导出的文件；复制失败保留已有资料，未生成完整collection.json者不当完整结果。脚本不启动抓包或官方软件，不写键盘，不上传，不自动压缩或推送任何资料。现在不用执行；用户已明确Windows资料在最后统一测试时准备。
 
 采用带BOM的UTF-8脚本源兼容Windows PowerShell5.1读取中文。当前Mac没有PowerShell解析器，仅完成源码审查和差异检查；未执行脚本或进行Windows运行／语法验收，实际文件选择、PnP读取及复制仍待最后Windows环境验证。此助手不编入App／PHP，公开两端0.96.0保持。
+
+## 整理目录的离线检查器
+
+[inspect-windows-evidence.py](../Tools/inspect-windows-evidence.py)接收助手生成的目录，核对collection.json格式、操作范围声明、1～16份按次序命名的文件及实际长度／SHA-256。普通文件以非阻塞、O_NOFOLLOW方式打开，读取时检查大小和时间元数据；分析末尾再核对清单摘要。只使用sample-N.json／pcap／pcapng，不接受清单中的任意路径。此项是各文件在读取时的内容关联，不是整个目录同时冻结或收集程序身份认证。
+
+```sh
+python3 Tools/inspect-windows-evidence.py /私有目录/CherryMac-Windows-evidence-...
+python3 Tools/inspect-windows-evidence.py /私有目录/CherryMac-Windows-evidence-... --capture-file sample-2.pcap --bus 1 --device 7
+```
+
+第二种调用复用现有USBPcap分析器，并核对分析输入摘要仍与清单相符。bus／device仍须来自该份抓包；不从PnP条目自动猜测。pcapng需离线转换为经典pcap后重新收集，不能将格式转换后的文件假装原清单文件。JSON仅校验原始文件摘要，此工具不验证官方型号／内容，也不生成写入计划或恢复授权。任一分析失败不输出部分成功结果，全部文件保持只读；结果应留在私有work目录。
+
+2026-10-10：目录检查器完成源码审查、Python语法和差异检查；尚无真实Windows收集目录，未运行目录／抓包检查或生成模拟样本。Windows资料收集与实体测试仍后置，公开两端0.96.0保持，整体目标未完成。
