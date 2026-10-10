@@ -2295,6 +2295,63 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_virtual_window_name_sources(pe, path):
+    """Pin parent name inheritance and one concrete host receiver registration."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Virtual-name DuiLib image differs")
+    dll = PE32(data)
+    dll_bodies = {
+        (0x11057ee0, 0x11058024): "a5cb2bcac19a7ff2ca11ec4b38027ba091f1f0dcb61748fd1a01749e6e99e9dd",
+        (0x1105b5f0, 0x1105b619): "92316bd0ae3baa5e844410e918bb45eace4c2ed6f2c03dfd023d89311e1e3d5d",
+        (0x1106a440, 0x1106a459): "17b8a75b5275aae34241649d428a70e728db689c82cf3a96a4cf721e9501c005",
+    }
+    for (start, end), digest in dll_bodies.items():
+        if hashlib.sha256(dll.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Virtual-name source body differs")
+    dll_checks = {0x11057f33: "83c14c", 0x11057f40: "7517",
+                  0x11057f67: "8b5024", 0x11057f88: "e853ffffff",
+                  0x1105b5fe: "83c14c", 0x1105b606: "6a01",
+                  0x1105b60e: "e82dee0000", 0x1106a44d: "888877020000"}
+    for address, encoded in dll_checks.items():
+        if dll.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Virtual-name inheritance or enable store differs")
+    exe_bodies = {
+        (0x488258, 0x48829e): "2bd59a3b4c36d3b31ca361b6781ba79bbd28cd038fdfc34e53f5a252a0e8cae9",
+        (0x487dd0, 0x487e00): "193ae24a7943eb44c78052506012cc0a6c3cfb08d4a5a8fc4cf0e1da6396eb57",
+        (0x487e00, 0x487e20): "acdfc907ccf624411501b4b05da86c2b04224def8523fd42114c29f6f69af4c5",
+    }
+    for (start, end), digest in exe_bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Virtual receiver host registration differs")
+    if pe.class_name(0x77eaac) != ".?AVCMainPage@@":
+        raise ValueError("Virtual receiver host class differs")
+    name = "mainpage"
+    if pe.at(0x75a178, len((name+"\0").encode("utf-16-le"))) != (name+"\0").encode("utf-16-le"):
+        raise ValueError("Virtual receiver registration name differs")
+    imported = "?AddVirtualWnd@CNotifyPump@DuiLib@@QAE_NVCDuiString@2@PAV12@@Z"
+    if pe.at(pe.base+pe.pointer(0x6eb468)+2, len(imported)+1) != (imported+"\0").encode("ascii"):
+        raise ValueError("Virtual receiver registration import differs")
+    return {"dllSHA256": expected,
+            "dllCodeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in dll_bodies.items()},
+            "executableCodeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in exe_bodies.items()},
+            "getter": {"method": "0x11057ee0", "ownName": "control+0x4c",
+                       "emptyOwnName": "Virtual+0x24 obtains parent; recursively calls same getter",
+                       "noParent": "Returns empty string"},
+            "setter": {"method": "0x1105b5f0", "store": "control+0x4c string",
+                       "enable": "manager UsedVirtualWnd(true) ->0x1106a440 stores byte+0x277"},
+            "hostRegistration": {"call": "0x488298 AddVirtualWnd", "name": name,
+                                 "receiver": "root+0x1238 CMainPage", "pump": "root+0x10",
+                                 "receiverManagerSetter": "0x487e00 receives root+0x34"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed getter/setter and this concrete host registration only. Parent inheritance "
+                      "means absent XML attributes cannot prove an empty runtime name. Registration does "
+                      "not prove that the target keyboard/tab uses mainpage or that manager naming is enabled "
+                      "at that time; runtime tree construction, other setters and receiver handlers remain."}
+
+
 def inspect_window_base_notify_routing(pe, path, skin):
     """Resolve base notify routing without inventing runtime virtual-window names."""
     data = Path(path).read_bytes()
@@ -4202,7 +4259,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 94,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 95,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4258,6 +4315,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "tabNotifyDispatch": inspect_tab_notify_dispatch(ui_dll) if ui_dll else None,
         "mainWindowNotifyBoundary": inspect_main_window_notify_boundary(pe),
         "windowBaseNotifyRouting": inspect_window_base_notify_routing(pe, ui_dll, skin) if ui_dll else None,
+        "virtualWindowNameSources": inspect_virtual_window_name_sources(pe, ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
