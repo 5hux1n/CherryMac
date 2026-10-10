@@ -54,6 +54,7 @@ def inspect(path, bus, device):
         counts = collections.Counter()
         pending_out = {}
         completion_counts = collections.Counter()
+        opaque_groups = {}
 
         def register_out(irp, record):
             if irp == 0:
@@ -122,7 +123,7 @@ def inspect(path, bus, device):
                 # Completed control data is left opaque without its SETUP
                 # correlation. Do not mistake its leading byte for report ID.
             is_out_completion = info == 1 and ((transfer == 1 and not endpoint & 0x80) or
-                                               (transfer == 2 and stage in (2, 3)))
+                                               (transfer == 2 and not endpoint & 0x80 and stage in (2, 3)))
             if is_out_completion:
                 pending = pending_out.get(irp)
                 if pending is None:
@@ -156,10 +157,33 @@ def inspect(path, bus, device):
                 # Track opaque submissions too, so another transfer reusing
                 # an active IRP cannot complete a decoded Report-4 by mistake.
                 if info == 0 and ((transfer == 1 and not endpoint & 0x80) or
-                                  (transfer == 2 and stage == 0)):
+                                  (transfer == 2 and stage == 0 and setup is not None and
+                                   not setup['requestType'] & 0x80)):
                     register_out(irp, {'decodedReport4': False, 'endpoint': endpoint,
                         'urbFunction': function, 'source': 'control-set-output-report' if transfer == 2
                         else 'interrupt-out-submission'})
+                # A first-byte value here is not called a report ID. Setup,
+                # unknown HID payloads and empty completions remain opaque.
+                setup_key = tuple(setup.get(k) for k in ('requestType', 'request', 'value', 'interface', 'length')) if setup else None
+                key = (transfer, endpoint, function, info, stage, len(packet[size:]),
+                       packet[size] if len(packet) > size else None, setup_key)
+                group = opaque_groups.get(key)
+                if group is None:
+                    require(len(opaque_groups) < 10_000, "未解码通信分类超过分析上限。")
+                    body = packet[size:]
+                    group = {'transferType': transfer, 'endpoint': endpoint, 'urbFunction': function,
+                        'directionInfo': info, 'controlStage': stage, 'payloadBytes': len(body),
+                        'firstPayloadByte': body[0] if body else None, 'setup': setup,
+                        'packets': 0, 'firstPacket': packets, 'lastPacket': packets,
+                        'firstSample': {'packet': packets, 'timestampSeconds': sec,
+                            'timestampFraction': subsecond, 'timestampResolution': resolution,
+                            'irpID': f'0x{irp:016x}', 'usbStatus': status if info == 1 else None,
+                            'payloadHex': body.hex() if len(body) <= 256 else None,
+                            'payloadSHA256': hashlib.sha256(body).hexdigest()},
+                        'classification': 'opaque selected-device traffic; first sample only, not full payload history'}
+                    opaque_groups[key] = group
+                group['packets'] += 1
+                group['lastPacket'] = packets
                 continue
             require(len(frames) < 100_000 and len(issues) <= 10_000, "所选通信超过分析上限。")
             counts[f"{source}:0x{payload[3]:02x}"] += 1
@@ -186,11 +210,13 @@ def inspect(path, bus, device):
         final = os.fstat(handle.fileno())
         require((initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns), "分析期间抓包文件发生变化。")
-    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 3,
+    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 4,
             "captureSHA256": digest.hexdigest(), "bus": bus, "deviceAddress": device,
             "packets": packets, "selectedDevicePackets": selected, "report4Frames": frames,
             "commandCounts": dict(sorted(counts.items())), "issues": issues,
             "usbCompletionCounts": dict(sorted(completion_counts.items())),
+            "opaqueTrafficGroups": list(opaque_groups.values()),
+            "opaqueTrafficPackets": sum(group['packets'] for group in opaque_groups.values()),
             "outReportsWithoutAssociatedCompletion": sum(f.get('usbCompletionAssociation') is not None and
                                                           f.get('usbCompletion') is None for f in frames),
             "targetIdentityVerified": False, "configurationWriteAccepted": False,
@@ -198,7 +224,8 @@ def inspect(path, bus, device):
             "limits": "Offline observed bytes only. USB completion is not a keyboard acknowledgement. "
                       "No keyboard-protocol request/reply pairing, VID/PID identity, reconnect address continuity, "
                       "old split-control DATA, Feature reports or persistence inference. "
-                      "Other selected-device traffic is counted but not decoded."}
+                      "Other selected-device traffic is grouped with a first raw sample, not decoded; "
+                      "samples do not contain every unknown payload."}
 
 
 if __name__ == "__main__":
