@@ -2291,6 +2291,96 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_light_info_getter_gaps(pe):
+    """Separate zeroed JSON conversion from the other 47-byte fallback copy."""
+    start, end = 0x47ade0, 0x47b315
+    digest = "17ef8d74daaae6fd5656525a0a4da164bdf7638c420d2dd7b0a18a812567217f"
+    if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+        raise ValueError("LightInfo getter full body differs")
+    records = [
+        ('SelectItem', 0x74506c, 0x47ae9c, 0x47aeb0, 0),
+        ('Light', 0x745064, 0x47aeb3, 0x47aec7, 1),
+        ('Speed', 0x745730, 0x47aeca, 0x47aede, 2),
+        ('MultiColor', 0x7450d4, 0x47aee1, 0x47aef5, 4),
+        ('Red', 0x7452b4, 0x47aef8, 0x47af0c, 5),
+        ('Green', 0x745738, 0x47af0f, 0x47af23, 6),
+        ('Blue', 0x745740, 0x47af26, 0x47af3a, 7),
+        ('Fx', 0x7454f4, 0x47af3d, 0x47af51, 3),
+        ('LightOpenFlag', 0x745750, 0x47af54, 0x47af68, 11),
+        ('Setlock', 0x745748, 0x47af6b, 0x47af7f, 12),
+        ('Setdelay', 0x745768, 0x47af82, 0x47af96, 13),
+        ('Distime', 0x745760, 0x47af99, 0x47afad, 14),
+        ('FunPointColorR', 0x745784, 0x47afb0, 0x47afc4, 15),
+        ('FunPointColorG', 0x745774, 0x47afc7, 0x47afdb, 16),
+        ('FunPointColorB', 0x7457a4, 0x47afde, 0x47aff2, 17),
+        ('PairPointColorR', 0x745794, 0x47aff5, 0x47b009, 18),
+        ('PairPointColorG', 0x7457c4, 0x47b00c, 0x47b020, 19),
+        ('PairPointColorB', 0x7457b4, 0x47b023, 0x47b037, 20),
+        ('WorkModePointColorR', 0x7457e8, 0x47b03a, 0x47b04e, 21),
+        ('WorkModePointColorG', 0x7457d4, 0x47b051, 0x47b065, 22),
+        ('WorkModePointColorB', 0x74580c, 0x47b068, 0x47b07c, 23),
+        ('SuspendTimeL', 0x7457fc, 0x47b07f, 0x47b093, 24),
+        ('SuspendTimeH', 0x745830, 0x47b096, 0x47b0aa, 25),
+        ('DeepsleepTimeL', 0x745820, 0x47b0ad, 0x47b0c1, 26),
+        ('DeepsleepTimeH', 0x745854, 0x47b0c4, 0x47b0d8, 27),
+        ('SidelightSelectItem', 0x745840, 0x47b0db, 0x47b0ef, 28),
+        ('SidelightLight', 0x745874, 0x47b0f2, 0x47b106, 29),
+        ('SidelightSpeed', 0x745864, 0x47b109, 0x47b11d, 30),
+        ('SidelightFx', 0x745898, 0x47b120, 0x47b134, 31),
+        ('SidelightMultiColor', 0x745884, 0x47b137, 0x47b14b, 32),
+        ('SidelightRed', 0x7458b4, 0x47b14e, 0x47b162, 33),
+        ('SidelightGreen', 0x7458a4, 0x47b165, 0x47b179, 34),
+        ('SidelightBlue', 0x7458d8, 0x47b17c, 0x47b190, 35),
+        ('SidelightChangeOnly', 0x7458c4, 0x47b193, 0x47b1a7, 36),
+        ('SidelightOff', 0x7458f4, 0x47b1aa, 0x47b1be, 37),
+        ('AudioIndex', 0x7458e8, 0x47b1c1, 0x47b1d5, 38),
+        ('AudioVolume', 0x745914, 0x47b1d8, 0x47b1ec, 39),
+        ('AudioStartup', 0x745904, 0x47b1ef, 0x47b203, 40),
+        ('ModuleKey', 0x74592c, 0x47b206, 0x47b21a, 41),
+        ('Setlock0', 0x745920, 0x47b21d, 0x47b231, 42),
+        ('SOCDLock', 0x74594c, 0x47b234, 0x47b248, 43),
+        ('MultiFunKeyIndex', 0x745938, 0x47b24b, 0x47b25f, 44),
+        ('IsRamMemory', 0x745968, 0x47b262, 0x47b276, 45),
+        ('IsSysLightFirst', 0x745958, 0x47b279, 0x47b28d, 46),
+    ]
+    fields = []
+    for name, address, push, store, offset in records:
+        if pe.at(address, len(name)+1) != (name+"\0").encode("ascii"):
+            raise ValueError("LightInfo getter field name differs")
+        if pe.at(push, 5) != b"\x68"+struct.pack("<I", address):
+            raise ValueError("LightInfo getter field lookup differs")
+        if pe.at(store, 3) != bytes([0x88, 0x45, (offset-64)&255]):
+            raise ValueError("LightInfo getter byte store differs")
+        fields.append({"name": name, "structureOffset": offset, "store": hex(store)})
+    setter = inspect_light_info_setter_fields(pe)
+    if {x["name"]:x["structureOffset"] for x in fields} != {x["name"]:x["structureOffset"] for x in setter["fields"]}:
+        raise ValueError("LightInfo getter/setter field inventories disagree")
+    checks = {0x47ae0d: "c645c000", 0x47ae11: "6a2e", 0x47ae13: "6a00",
+              0x47ae15: "8d45c1", 0x47ae19: "e882c42000",
+              0x47ae34: "0f857f040000", 0x47ae59: "0f8542040000",
+              0x47b2a4: "81c643010000", 0x47b2bc: "81c643010000",
+              0x47b2d2: "81c714010000", 0x47b2d8: "b90b000000",
+              0x47b2ea: "8d75c0", 0x47b2ed: "8b7d08", 0x47b312: "c20400"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("LightInfo getter initialization or fallback differs")
+    return {"method": hex(start), "endExclusive": hex(end), "codeSHA256": digest,
+            "initialization": {"firstByte": 0, "remaining46Bytes": "memset zero at0x47ae19",
+                               "localStructure": "ebp-0x40"},
+            "JSONFields": fields, "matchesSetterFieldOffsets": True,
+            "JSONPathUnassignedOffsetsRemainZero": setter["unserializedStructureOffsets"],
+            "fallback": {"branchTargets": ["0x47b2a1", "0x47b2b9"],
+                         "source": "configuration+0x143", "bytes": 47,
+                         "scope": "Copies the whole fallback structure; its origin is not identified here"},
+            "output": {"configurationCache": "configuration+0x114", "callerBytes": 47},
+            "hardwareWriteAuthorized": False,
+            "limits": "Only this fixed host JSON/getter method and field inventory. "
+                      "Zero unassigned JSON-conversion bytes are not hardware defaults, USB bank tail bytes "
+                      "or permission to fill missing backup data. Fallback initialization, other callers, "
+                      "JSON coercion/error paths and current firmware remain separately unproved."}
+
+
 def inspect_light_info_setter_fields(pe):
     """Pin field serialization independently of the device/report layout."""
     start, end = 0x47b320, 0x47bf32
@@ -3930,7 +4020,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 90,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 91,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3981,6 +4071,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyLightSetter": inspect_basic_apply_light_setter(pe),
         "lightModeTabSelection": inspect_light_mode_tab_selection(ui_dll, skin) if ui_dll else None,
         "lightInfoSetterFields": inspect_light_info_setter_fields(pe),
+        "lightInfoGetterGaps": inspect_light_info_getter_gaps(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
