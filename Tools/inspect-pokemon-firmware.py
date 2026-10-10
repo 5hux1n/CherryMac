@@ -599,6 +599,50 @@ def inspect_parameter_write_common_tail(image):
                      'successful persistent writes. No execution, simulated inputs or hardware access.'}
 
 
+def inspect_parameter_protocol_state_flag(image):
+    """Pin one consumer of the write-set state flag; not all consumers."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):raise ValueError("Protocol-state flag exceeds image")
+        return image[offset:offset+size]
+    bodies={(0x291fa,0x29204):'584bf3ce42bffc5bd779cb31da53b697c797cc6b859d45da3f89c5bb6cf83bb2',
+            (0x2a23c,0x2a29c):'941786190cca000f4e934a575bdd4dab792467a9f4e98359bae27807673fb9ec',
+            (0x2a7fc,0x2a82c):'4b82df3ea0102a9373b6788be2d4b285b6b0698cb5ce62844805f785b5ae69f7'}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=digest:
+            raise ValueError("Protocol-state flag consumer differs")
+    literals={0x29400:0x20000cd8,0x2a508:0x20009ae9,0x2a518:0x20009aa8,
+              0x2a51c:0x20009ab4,0x2a520:0x20009aeb,0x2a524:0x52768,
+              0x2a918:0x20009ac4,0x2a928:0x20009aeb,0x2a8cc:0x52768,
+              0x52768:0x4f50c}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Protocol-state flag literal differs")
+    if at(0x4f50c,len(b'mulprotocol_event\0'))!=b'mulprotocol_event\0':
+        raise ValueError("Protocol-state event type differs")
+    return {'codeSHA256':{f'{a:#x}..{b:#x}':h for (a,b),h in bodies.items()},
+            'flag':'0x20009aa8','read':'0x2a240','clear':'0x2a264 stores0',
+            'whenFlagZero':'0x2a252 sets0x20009ab4 to1 before comparison',
+            'comparison':{'left':'byte16 of pointer loaded from stack+4 at0x2a256',
+                          'pointerInitialization':'0x291fa/0x29200 initializes stack+4 to0x20000cd8',
+                          'right':'byte0x20009ae9','equalTarget':'0x2a7fc',
+                          'interveningPointerLifetimeFullyAudited':False},
+            'differentBranch':{'allocator':'0x4bcb4','arguments':[4,12],
+                               'eventType':'mulprotocol_event','newByteOffset':8,'oldByteOffset':9,
+                               'clearBeforeAllocation':'0x20009aeb','publish':'0x2a28c ->0x3737c'},
+            'equalBranch':{'gate':'0x20009ac4 nonzero','zeroTarget':'0x2a290',
+                           'clearBeforeAllocation':['0x20009ac4','0x20009aeb'],
+                           'allocator':'0x4bcb4','arguments':[4,12],
+                           'eventType':'mulprotocol_event','offset8And9':'same byte16 value'},
+            'relatedListener':inspect_save_scheduler(image)['protocolStateEvent'],
+            'hardwareReady':False,
+            'limits':'One fixed0104 local flag-consumer and event construction path, plus an '
+                     'already pinned named listener; full function control flow and pointer lifetime, '
+                     'event delivery, state meanings, other flag consumers, current0102 identity '
+                     'and flash retention remain unproved. Not a polling-rate interface or fault root '
+                     'cause. No reports generated, firmware execution or hardware access.'}
+
+
 def inspect_parameter_consumers(image):
     """Locate declared base loads and pin two actual consumers; no emulation."""
     def at(address, size):
@@ -1708,7 +1752,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 37,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 38,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1730,6 +1774,7 @@ def inspect(path):
             'parameterConsumers': inspect_parameter_consumers(image),
             'parameterWriteSideEffects': inspect_parameter_write_side_effects(image),
             'parameterWriteCommonTail': inspect_parameter_write_common_tail(image),
+            'parameterProtocolStateFlag': inspect_parameter_protocol_state_flag(image),
             'lightFlagCallback': inspect_light_flag_callback(image),
             'customLightingOutput': inspect_custom_lighting_output(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
