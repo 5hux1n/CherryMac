@@ -8,7 +8,7 @@ from pathlib import Path
 def parse_descriptor(data):
     if not data or len(data) > 65535:
         raise ValueError('Descriptor size invalid')
-    state = {'page': 0, 'size': 0, 'count': 0, 'id': 0}
+    state = {'page': 0, 'size': 0, 'count': 0, 'id': 0, 'logicalMinimum': 0, 'logicalMaximum': 0}
     stack, reports, collections = [], {}, []
     local, offset, top_level_count = {}, 0, 0
     collection_ordinals = []
@@ -20,7 +20,8 @@ def parse_descriptor(data):
         size = [0, 1, 2, 4][prefix & 3]
         if offset + size > len(data):
             raise ValueError('Truncated HID item')
-        value = int.from_bytes(data[offset:offset + size], 'little')
+        raw = data[offset:offset + size]
+        value = int.from_bytes(raw, 'little')
         offset += size
         kind, tag = (prefix >> 2) & 3, prefix >> 4
         if kind == 1:
@@ -31,6 +32,10 @@ def parse_descriptor(data):
                 if field in ['size', 'count'] and value > 65535:
                     raise ValueError('Oversized report field')
                 state[field] = value
+            elif tag == 1:
+                state['logicalMinimum'] = int.from_bytes(raw, 'little', signed=True)
+            elif tag == 2:
+                state['logicalMaximum'] = int.from_bytes(raw, 'little', signed=state['logicalMinimum'] < 0)
             elif tag == 10:
                 stack.append(state.copy())
             elif tag == 11:
@@ -38,8 +43,12 @@ def parse_descriptor(data):
                     raise ValueError('Global state stack underflow')
                 state = stack.pop()
         elif kind == 2:
+            if tag == 10:
+                raise ValueError('Usage delimiter unsupported; refusing an ambiguous layout')
             if tag in [0, 1, 2]:
                 local[{0: 'usage', 1: 'minimum', 2: 'maximum'}[tag]] = value
+                if tag == 0:
+                    local.setdefault('usages', []).append(value)
         elif kind == 0:
             if tag == 10:
                 if not collections:
@@ -60,6 +69,7 @@ def parse_descriptor(data):
                     raise ValueError('Oversized report')
                 report['fields'].append({'offsetBits': report['bits'], 'sizeBits': state['size'], 'count': state['count'],
                                          'usagePage': state['page'], 'flags': value, 'local': local.copy(),
+                                         'logicalMinimum': state['logicalMinimum'], 'logicalMaximum': state['logicalMaximum'],
                                          'collections': [list(c) for c in collections],
                                          'topLevelCollectionOrdinal': collection_ordinals[0] if collection_ordinals else None})
                 report['bits'] += bits
