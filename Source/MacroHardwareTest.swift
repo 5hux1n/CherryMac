@@ -37,6 +37,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var passed:Bool{firstExecutionPassed && (!includePowerCycle || (secondExecutionPassed && powerVerified)) && restored && errorMessage==nil && interruptions.isEmpty}
     var locationID:Int?,errorMessage:String?,raw:[[String:Any]]=[]
     var activeRegistryID:UInt64?,recoveryRebinds:[[String:Any]]=[]
+    var executionArtifactHashes:[String:String]=[:]
+    var frozenExecutionAssessmentMilliseconds:Int?
     var interruptions:[MacroExecutionEvidence.Interruption]=[]
     var writeAttempted=false
     var transitions:[[String:Any]]=[]
@@ -94,7 +96,11 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         guard Array(baseline.keymap[306..<309])==[0x30,0x92,0x01],let bank=baseline.macroData else{throw HardwareError(message:"本轮需要原始计算器键和完整宏备份，未授权写入。")}
         var library=try CherryMacroCodec.decode(bank);guard library.count<32 else{throw HardwareError(message:"宏库已满，测试不会覆盖现有宏。")}
         let index=library.count;library.append(scenario.macro)
-        var target=baseline;target.macroData=try CherryMacroCodec.encode(library)
+        let headerReserved=bank[0]==0xaa && bank[1]==0x55 ? Array(bank[6..<16]):[]
+        let encoded=try CherryMacroCodec.encode(library,headerReserved:headerReserved)
+        let used=Int(encoded[2]) | Int(encoded[3])<<8
+        var targetBank=bank;targetBank.replaceSubrange(0..<used,with:encoded[0..<used])
+        var target=baseline;target.macroData=targetBank
         target.keymap.replaceSubrange(306..<309,with:try CherryMacroCodec.binding(index,playback:scenario.playback))
         return try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:true)
     }
@@ -108,29 +114,44 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encoded<T:Encodable>(_ value:T)throws->Data{let e=JSONEncoder();e.outputFormatting=[.prettyPrinted,.sortedKeys];return try e.encode(value)}
     func persist()throws {
-        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"powerTestRequested":includePowerCycle,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
+        var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":2,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"powerTestRequested":includePowerCycle,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
         if let errorMessage{session["error"]=errorMessage};if let locationID{session["locationID"]=locationID}
         if let activeRegistryID{session["activeRegistryID"]=String(activeRegistryID)}
         session["recoveryRebinds"]=recoveryRebinds
         if let power{session["originalRegistryID"]=String(power.originalRegistryID);session["disconnectedAt"]=power.disconnectedAt;session["powerOffConfirmedAt"]=power.powerOffConfirmedAt;session["reconnectedAt"]=power.reconnectedAt;session["confirmedOffInterval"]=power.confirmedOffInterval}
-        try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
         if let execution {
-            let log=MacroExecutionLog(format:"CherryMacMacroExecution",version:1,macro:scenario.macro,playback:scenario.playback,source:execution.source,startedMilliseconds:executionStart,events:execution.observations,stop:stopMarker,assessedMilliseconds:max(milliseconds(),execution.observations.last?.milliseconds ?? executionStart),interruptions:interruptions)
+            let assessed=frozenExecutionAssessmentMilliseconds ?? max(milliseconds(),execution.observations.last?.milliseconds ?? executionStart)
+            let log=MacroExecutionLog(format:"CherryMacMacroExecution",version:1,macro:scenario.macro,playback:scenario.playback,source:execution.source,startedMilliseconds:executionStart,events:execution.observations,stop:stopMarker,assessedMilliseconds:assessed,interruptions:interruptions)
             let data=try encoded(log),name=powerVerified ? "execution-after-power":"execution-before-power"
             try data.write(to:directory.appendingPathComponent(name+".json"),options:.atomic)
-            try encoded(MacroExecutionReport(inputSHA256:SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined(),assessment:try log.replay())).write(to:directory.appendingPathComponent(name+"-assessment.json"),options:.atomic)
+            let assessmentData=try encoded(MacroExecutionReport(inputSHA256:SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined(),assessment:try log.replay()))
+            try assessmentData.write(to:directory.appendingPathComponent(name+"-assessment.json"),options:.atomic)
+            executionArtifactHashes[name+".json"]=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+            executionArtifactHashes[name+"-assessment.json"]=SHA256.hash(data:assessmentData).map{String(format:"%02x",$0)}.joined()
         }
+        session["executionArtifacts"]=executionArtifactHashes
+        session["saveScope"]="Derived files first, session last; per-file atomic replacement, not a multi-file transaction or power-loss guarantee"
+        try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
     }
     func fail(_ message:String,_ interruption:MacroExecutionEvidence.Interruption = .cancelled){
+        if phase == .observing{freezeExecutionAssessment()}
         if phase == .observing,execution != nil{execution?.invalidate(interruption);if !interruptions.contains(interruption){interruptions.append(interruption)}}
         scenarioPicker.isEnabled=false;stopButton.isEnabled=false;powerOption.isEnabled=false;phase = .failed;transitions.append(["phase":"failed","at":Date().timeIntervalSince1970,"error":message]);errorMessage=message;status.stringValue=message;action.isEnabled=false;off.isEnabled=false
         restore.isEnabled=authorization != nil && !busy;detail.stringValue="停止正在运行的宏；重连后可点击恢复。备份与日志：\(directory.path)";try? persist()
     }
-    func set(_ next:Phase,_ text:String)throws{phase=next;status.stringValue=text;action.isEnabled=[.ready,.observeReady,.restoreReady,.complete].contains(next);restore.isEnabled=authorization != nil && !busy && ![.ready,.complete,.cancelled].contains(next);
+    func freezeExecutionAssessment(at assessed:Int?=nil){
+        if frozenExecutionAssessmentMilliseconds==nil,let execution{
+            frozenExecutionAssessmentMilliseconds=max(assessed ?? milliseconds(),execution.observations.last?.milliseconds ?? executionStart)
+        }
+    }
+    func set(_ next:Phase,_ text:String)throws{phase=next;transitions.append(["phase":next.rawValue,"at":Date().timeIntervalSince1970]);try persist()
+        // UI completion follows a successful save of the derived evidence and
+        // final session. The caller reports logging failure instead on throw.
+        status.stringValue=text;action.isEnabled=[.ready,.observeReady,.restoreReady,.complete].contains(next);restore.isEnabled=authorization != nil && !busy && ![.ready,.complete,.cancelled].contains(next);
         if next != .observing{stopButton.isEnabled=false}
         scenarioPicker.isEnabled=next == .ready && !busy && !writeAttempted
         powerOption.isEnabled=next == .ready && !busy && !writeAttempted
-        transitions.append(["phase":next.rawValue,"at":Date().timeIntervalSince1970]);try persist()}
+    }
     func registry(_ device:IOHIDDevice)->UInt64?{var id:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS && id != 0 ? id:nil}
     func devices()->Set<IOHIDDevice>{IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []}
     func soleDevice()throws->IOHIDDevice{let all=devices();guard all.count==1,let d=all.first,
@@ -179,7 +200,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         case .ready:write()
         case .observeReady:
             do{guard adapter.allReleased else{throw HardwareError(message:"请完全松开按键后开始观察。")};_ = try soleDevice()
-                executionStart=milliseconds();execution=try MacroExecutionEvidence(macro:scenario.macro,playback:scenario.playback,source:.hid,startedMilliseconds:executionStart);stopMarker=nil;interruptions=[];raw=[]
+                executionStart=milliseconds();execution=try MacroExecutionEvidence(macro:scenario.macro,playback:scenario.playback,source:.hid,startedMilliseconds:executionStart);frozenExecutionAssessmentMilliseconds=nil;stopMarker=nil;interruptions=[];raw=[]
                 try set(.observing,scenario.instruction);window?.makeFirstResponder(window?.contentView)
             }catch{fail(error.localizedDescription)}
         case .restoreReady:recover()
@@ -219,9 +240,10 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             if execution.source == .hid{
                 do{_ = try soleDevice()}catch{fail(error.localizedDescription,.observerDisconnected);return}
             }
-            do{let result=try execution.assessment(milliseconds:milliseconds());stopButton.isEnabled=scenario.playback.mode != .count && stopMarker==nil && result.completedCycles>=2 && result.held.isEmpty && adapter.allReleased && result.status != "failed";try persist()
+            do{let assessed=milliseconds();let result=try execution.assessment(milliseconds:assessed);stopButton.isEnabled=scenario.playback.mode != .count && stopMarker==nil && result.completedCycles>=2 && result.held.isEmpty && adapter.allReleased && result.status != "failed";try persist()
                 if result.status=="failed"{fail(result.failure ?? "宏执行检查失败。",.reportRejected);return}
                 if result.passed{
+                    freezeExecutionAssessment(at:assessed)
                     if powerVerified{secondExecutionPassed=true;action.title="恢复原配置";try set(.restoreReady,"断电后的实体输出检查通过。点击恢复原配置，完成本轮测试。")}
                     else{firstExecutionPassed=true
                         if includePowerCycle{action.title="等候断开";try set(.disconnect,"实体输出检查通过。请拔 USB 并关闭键盘电源；断开后勾选电源关闭确认。")}
@@ -253,7 +275,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             }catch{fail(error.localizedDescription)}}
         }
     }
-    @objc func requestRestore(){guard !busy,authorization != nil,phase != .ready else{return};do{try rebindRecoveryIfNeeded()}catch{fail(error.localizedDescription,.observerDisconnected);return};if phase == .observing{execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
+    @objc func requestRestore(){guard !busy,authorization != nil,phase != .ready else{return};do{try rebindRecoveryIfNeeded()}catch{fail(error.localizedDescription,.observerDisconnected);return};if phase == .observing{freezeExecutionAssessment();execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
     func recover(){
         guard let authorization else{return};do{_ = try soleDevice();busy=true;try set(.restoring,"正在按原事务范围读取并恢复原宏与绑定。请勿拔线或按键。")}catch{busy=false;fail(error.localizedDescription);return}
         let expectedID=activeRegistryID
