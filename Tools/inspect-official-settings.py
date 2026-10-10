@@ -2287,6 +2287,45 @@ def inspect_basic_apply_transport_chain(pe):
     }
 
 
+
+def inspect_polling_apply_destination(pe):
+    """Distinguish the dialog's wired/RF field choice for the actual PID."""
+    tail = inspect_basic_apply_transport_chain(pe)
+    layouts = inspect_settings_layouts(pe)
+    checks = {
+        0x4aff4a: "81fada010000", 0x4aff5f: "81f9e6010000",
+        0x4aff74: "3def010000", 0x4aff88: "81fafb010000",
+        0x4aff9d: "81f942010000", 0x4affb2: "3d4c010000",
+        0x4affb7: "7534", 0x4affc7: "8b8280020000",
+        0x4affcd: "ffd0", 0x4affd1: "740d",
+        0x4affda: "66894de8", 0x4affe7: "668955e6",
+        0x4affed: "668b8510dcffff", 0x4afff4: "668945e6",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Polling apply field selection differs")
+    if layouts["keyboard"]["structureBytes"] != 14:
+        raise ValueError("Polling apply settings layout differs")
+    return {"functionSHA256": tail["functionBodies"]["0x4aff1f"]["sha256"],
+            "selectedIndexLocal": "ebp-0x23f0", "existingSettingsLocal": "ebp-0x20",
+            "specialProducts": [0x1da, 0x1e6, 0x1ef, 0x1fb, 0x142, 0x14c],
+            "specialBranch": {"statusCall": "0x4affcd virtual+0x280",
+                              "nonzeroDestination": {"local": "ebp-0x18", "structureOffset": 8,
+                                                     "field": "RFReportSelectItem"},
+                              "zeroDestination": {"local": "ebp-0x1a", "structureOffset": 6,
+                                                  "field": "ReportSelectItem"}},
+            "target01CE": {"usesSpecialBranch": False, "usesNamedStatusPredicateHere": False,
+                           "destination": "ReportSelectItem", "structureOffset": 6,
+                           "store": "0x4afff4", "RFReportSelectItemPreserved": True,
+                           "otherSixWordsPreservedInThisLocalCopy": True},
+            "nextCall": "0x4b001c ->0x4fb8c0 settings JSON copy",
+            "subsequentCalls": tail["orderedCalls"], "hardwareWriteAuthorized": False,
+            "limits": "This one local seven-word settings copy and PID branch only. "
+                      "Preservation does not prove the following callbacks leave all settings unchanged. "
+                      "The target ordinary parameter sender omits offsets53/54; JSON field choice "
+                      "is not firmware polling acceptance, wireless support or proof of no other interface."}
+
+
 def inspect_basic_apply_save(pe):
     """Resolve the save virtuals separately from the following USB sender."""
     checks = {
@@ -3704,7 +3743,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 86,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 87,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3751,6 +3790,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyRefresh": inspect_basic_apply_refresh(pe),
         "basicApplySave": inspect_basic_apply_save(pe),
         "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
+        "pollingApplyDestination": inspect_polling_apply_destination(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
