@@ -87,7 +87,7 @@ enum CherryMacroCodec {
         var result=MacroCompletionRequirements()
         for slot in 0..<126 where [UInt8(0x70),0x71].contains(keymap[slot*3]) {
             let record=Array(keymap[slot*3..<slot*3+3]),mode=try playback(record,macroCount:macros.count)
-            let macro=macros[Int(record[1])];try macro.validate()
+            let macro=macros[Int(record[1])];try macro.validate(maximumEvents:762)
             let cycle=macro.steps.reduce(0){$0+$1.delayMilliseconds}
             if mode.mode == .count{result.finiteDurationMilliseconds=max(result.finiteDurationMilliseconds,cycle*mode.count)}
             else{result.repeatingBindings.append(.init(slot:slot,macro:macro,playback:mode,quietMilliseconds:cycle+200))}
@@ -193,7 +193,7 @@ struct MacroExecutionEvidence {
     private var stopMilliseconds:Int?,stopSource:StopSource?
     private var failure:String?
     init(macro:KeyboardMacro,playback:MacroPlayback,source:Source,startedMilliseconds:Int)throws {
-        try macro.validate();try playback.validate()
+        try macro.validate(maximumEvents:762);try playback.validate()
         guard !macro.steps.isEmpty,!macro.steps.contains(where:{$0.isMovement}) else{throw HardwareError(message:"空宏或位移宏不能通过当前按键观察判定执行成功，请使用独立触发／位移验收。")}
         guard startedMilliseconds>=0 else{throw HardwareError(message:"执行观察时钟无效。")}
         self.macro=macro;self.playback=playback;self.source=source;lastMilliseconds=startedMilliseconds

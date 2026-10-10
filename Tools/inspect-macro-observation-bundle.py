@@ -51,13 +51,16 @@ def inspect(folder):
     session = parse(session_bytes)
     diagnostic = mouse.inspect(session)
     phase = session.get('phase')
-    require(phase in ('prepared', 'ready', 'observing', 'complete', 'failed'), 'Session phase invalid')
+    require(phase in ('prepared', 'ready', 'observing', 'complete', 'diagnosticComplete', 'failed'), 'Session phase invalid')
+    diagnostic_only = session.get('diagnosticOnly', False)
+    require(type(diagnostic_only) is bool and (phase != 'diagnosticComplete' or diagnostic_only), 'Diagnostic phase/flag invalid')
     artifacts = {'session.json': session_bytes}
     has_execution = 'executionSHA256' in session
     has_assessment = 'assessmentSHA256' in session
     require(has_execution == has_assessment, 'Session contains incomplete derived-file binding')
-    binding = {'available': False, 'reason': 'No derived files bound by this saved session', 'reportedAssessment': None}
+    binding = {'available': False, 'reason': 'Diagnostic-only capture has no execution assessment' if diagnostic_only else 'No derived files bound by this saved session', 'reportedAssessment': None}
     issues = []
+    require(not diagnostic_only or not has_execution, 'Diagnostic-only capture unexpectedly binds an execution assessment')
     if has_execution:
         require(digest(session['executionSHA256']) and digest(session['assessmentSHA256']), 'Derived hash invalid')
         for filename, key in [('execution.json', 'executionSHA256'), ('assessment.json', 'assessmentSHA256')]:
@@ -129,7 +132,7 @@ def inspect(folder):
     for filename, original in artifacts.items():
         require(read_file(folder / filename) == original, 'Bundle changed while inspecting: '+filename)
     return {'format': 'CherryMacMacroObservationBundleReview', 'version': 1, 'historicalOnly': True,
-            'sessionPhase': phase, 'fileSHA256': {name: hashlib.sha256(raw).hexdigest() for name, raw in artifacts.items()},
+            'sessionPhase': phase, 'diagnosticOnly': diagnostic_only, 'fileSHA256': {name: hashlib.sha256(raw).hexdigest() for name, raw in artifacts.items()},
             'derivedFileBinding': binding, 'issues': issues, 'mouseDiagnostic': diagnostic,
             'macroExecutionReplayed': False, 'hardwareExecutionPassed': False, 'onboardWriteVerified': False,
             'powerCycleVerified': False, 'authorizesHardwareOperation': False,
