@@ -956,6 +956,47 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_feature_configurable_module(image):
+    """Pin the real one-module section and descriptor/fetch branch, no peer erase."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Feature module evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x241d4,0x2425c):"4d972669f1000355609310b449160f23d90fe1c2b003ff016e138cb820647983",
+        (0x2446c,0x24490):"6d94b4efce92cbd3db2d56d30e01ab7715091330821672dd3f7413208a7c18ab",
+        (0x24776,0x247d0):"e753c0eb671cb2a620ca6158ab6890bb554bad7779200b3d94b9fd0a036cc9ad",
+        (0x2550e,0x255aa):"046aa1d60f24a4df3ac7559f671dbde3ea48e899816bf3db5e6fa0cd0c4da8f8",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Feature configurable-module body differs")
+    literals={0x25628:0x529b0,0x2562c:0x529b1,
+              0x24394:0x529b0,0x24398:0x529b0,
+              0x24834:0x4ca60,0x24838:0x4ca6c}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Feature module section/name literal differs")
+    if at(0x529b0,1)!=b'\0' or at(0x4ca60,9)!=b'ble_bond\0' or at(0x4ca6c,11)!=b'peer_erase\0':
+        raise ValueError("Feature module names/section differ")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "moduleSection":{"start":"0x529b0","endExclusive":"0x529b1","bytes":1,"declaredMaxModuleID":0,
+                "calculation":"GET_MAX_MOD_ID0x25572 subtracts section bounds and1; returns one byte with status8"},
+            "namedModule":{"moduleID":0,"name":"ble_bond","optionNames":["peer_erase"],
+                "moduleIDCalculation":"0x241de..0x241fa subtracts0x529b0 from0x529b0 and compares against eventID high nibble",
+                "descriptor":"eventID low nibble0 cycles module name, option name and newline; increments/reset RAM cursor"},
+            "optionFetch":{"branch":"0x24202 nonzero option nibble ->0x2448a",
+                "effect":"Allocates response with zero data, statusSUCCESS8 through0x24220; not a keymap/lighting/identity record read",
+                "warning":"A successful empty response is not proof of supported configuration read"},
+            "optionSet":{"status":6,"optionNibble":1,"branch":"0x2446c..0x2448a",
+                "gate":"Requires RAM state2; branch0x247a2 invokes0x23ebc, changes state5 and schedules delayed work",
+                "warning":"Peer erase option is destructive; do not use SET as a discovery query"},
+            "upstreamReference":"https://github.com/nrfconnect/sdk-nrf/blob/v2.0.0/applications/nrf_desktop/src/modules/ble_bond.c",
+            "limits":"Fixed0104 named compiled section/handler only, not a whole-program absence proof or current0102 module discovery. Event-manager record layout is not assumed identical to SDKv2.0.0. No requests, peer erase, radio pairing, device access or backup promotion."}
+
+
 def inspect_feature_configuration_channel(image):
     """Pin actual report9 transport evidence and upstream format correspondence."""
     def at(address,size):
@@ -1320,7 +1361,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 28,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 29,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1357,6 +1398,7 @@ def inspect(path):
             'hidCallbackReadSources': inspect_hid_callback_read_sources(image),
             'controlReportReadSources': inspect_control_report_read_sources(image),
             'featureConfigurationChannel': inspect_feature_configuration_channel(image),
+            'featureConfigurableModule': inspect_feature_configurable_module(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
