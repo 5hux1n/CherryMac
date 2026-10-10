@@ -2293,6 +2293,64 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_main_window_notify_boundary(pe):
+    """Pin registration and the derived window listener, preserving base forwarding."""
+    start, end = 0x48b4b0, 0x48b8b6
+    digest = "42f8c0725a5ebeca4502425f5eabba64244d8be8227ca565e1e5fffa29f22531"
+    if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+        raise ValueError("Main-window notify body differs")
+    if hashlib.sha256(pe.at(0x486900, 0x3a)).hexdigest() != "0fb4b63963033a4032ba33c3daf30f1e8e7a19a8fbd41c6a0cc17af74ffa7782":
+        raise ValueError("Skin-frame notifier registration differs")
+    if pe.class_name(0x77e990) != ".?AVCMainWnd@@" or pe.pointer(0x77e990) != start:
+        raise ValueError("Main-window notification interface differs")
+    locator = pe.pointer(0x77e990-4)
+    if pe.pointer(locator+4) != 0x20:
+        raise ValueError("Main-window notification interface displacement differs")
+    checks = {0x48690f: "83c010", 0x486931: "83c114", 0x486934: "ff158cb46e00",
+              0x487ea2: "c7422090e97700", 0x48b531: "83e920",
+              0x48b878: "8b4d08", 0x48b882: "ff1588b16e00"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Main-window notification registration or forwarding differs")
+    imports = {0x6eb48c: "?AddNotifier@CPaintManagerUI@DuiLib@@QAE_NPAVINotifyUI@2@@Z",
+               0x6eb8a4: "??8CDuiString@DuiLib@@QBE_NPB_W@Z",
+               0x6eb188: "?Notify@WindowImplBase@DuiLib@@UAEXAAUtagTNotifyUI@2@@Z"}
+    for address, name in imports.items():
+        encoded = (name+"\0").encode("ascii")
+        if pe.at(pe.base+pe.pointer(address)+2, len(encoded)) != encoded:
+            raise ValueError("Main-window notify import differs")
+    names = [
+        ("windowinit", 0x75af38, 0x48b516), ("windowsize", 0x75af20, 0x48b53e),
+        ("colorchanged", 0x75af5c, 0x48b570), ("click", 0x75af50, 0x48b5a2),
+        ("dbclick", 0x75af88, 0x48b5ce), ("msleave", 0x75af78, 0x48b600),
+        ("msenter", 0x75afb4, 0x48b632), ("selectchanged", 0x75af98, 0x48b664),
+        ("valuechanged", 0x75afe8, 0x48b696), ("movevaluechanged", 0x75afc4, 0x48b6c8),
+        ("itemselect", 0x75b018, 0x48b6fa), ("itemclick", 0x75b004, 0x48b72c),
+        ("textchanged", 0x75b050, 0x48b75e), ("click_wpremove", 0x75b030, 0x48b790),
+        ("click_wpadd", 0x75b084, 0x48b7c2), ("click_wpedit", 0x75b068, 0x48b7dc),
+        ("click_wpselect", 0x75b0b0, 0x48b80b), ("killfocus", 0x75b09c, 0x48b822),
+        ("click_select_end", 0x75b0f8, 0x48b851),
+    ]
+    for name, address, push in names:
+        encoded = (name+"\0").encode("utf-16-le")
+        if pe.at(address, len(encoded)) != encoded or pe.at(push, 5) != b"\x68"+struct.pack("<I", address):
+            raise ValueError("Main-window named notification differs")
+    return {"method": hex(start), "endExclusive": hex(end), "codeSHA256": digest,
+            "skinFrameRegistration": {"call": "0x486934 AddNotifier", "listener": "frame+0x10",
+                                      "manager": "frame+0x14", "scope": "Named base-frame initialization only"},
+            "derivedMainWindow": {"interfaceTable": "0x77e990", "rootObjectOffset": 0x20,
+                                  "constructorInstall": "0x487ea2", "notify": hex(start)},
+            "namedTypeBranches": [name for name, _, _ in names], "hasNamedTabselectBranch": False,
+            "beforeTypeDispatch": "Sender virtual+4 produces class-name string; side effects not classified here",
+            "baseForwarding": {"call": "0x48b882", "method": "WindowImplBase.Notify", "notification": "Original record"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed base registration and derived listener table/body only. Do not substitute base "
+                      "CSkinFrame's click handler for the derived listener or conflate relative object offsets. "
+                      "No named tabselect branch does not prove absence of a handler: base message-map "
+                      "forwarding, control delegates, other listeners and runtime object selection remain unclassified."}
+
+
 def inspect_light_info_fallback_initialization(pe):
     """Identify fresh host-object defaults, without treating them as firmware defaults."""
     bodies = {
@@ -4087,7 +4145,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 92,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 93,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4141,6 +4199,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightInfoGetterGaps": inspect_light_info_getter_gaps(pe),
         "lightInfoFallbackInitialization": inspect_light_info_fallback_initialization(pe),
         "tabNotifyDispatch": inspect_tab_notify_dispatch(ui_dll) if ui_dll else None,
+        "mainWindowNotifyBoundary": inspect_main_window_notify_boundary(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
