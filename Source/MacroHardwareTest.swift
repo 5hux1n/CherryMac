@@ -38,6 +38,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var passed:Bool{firstExecutionPassed && (!includePowerCycle || (secondExecutionPassed && powerVerified)) && restored && errorMessage==nil && interruptions.isEmpty}
     var locationID:Int?,errorMessage:String?,raw:[[String:Any]]=[]
     var activeRegistryID:UInt64?,recoveryRebinds:[[String:Any]]=[]
+    var factoryKeymap:[UInt8]?
     var executionArtifactHashes:[String:String]=[:]
     var frozenExecutionAssessmentMilliseconds:Int?
     var pendingLogSave=false,lastLogSaveMilliseconds:Int?
@@ -48,6 +49,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     static let testMacro=KeyboardMacro(name:"CherryMac 实体测试 AB",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:80),.init(usage:5,pressed:true,delayMilliseconds:80),.init(usage:5,pressed:false,delayMilliseconds:80)])
     enum Scenario:String,CaseIterable {
         case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",maximumCount="ab-255",modifier="modifier",extended="keyboard-300",movement="mouse-xy"
+        case official="official-ab",officialExtended="official-300"
         case mouseLeft="mouse-left",mouseRight="mouse-right",mouse="mouse",mouseBack="mouse-back",mouseForward="mouse-forward"
         case held="held",toggle="toggle"
         var isMouse:Bool{[Self.mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward].contains(self)}
@@ -57,16 +59,16 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         var mouseName:String{
             switch self{case .mouseLeft:return "鼠标左键";case .mouseRight:return "鼠标右键";case .mouseBack:return "鼠标后退";case .mouseForward:return "鼠标前进";default:return "鼠标中键"}
         }
-        var playback:MacroPlayback{MacroPlayback(mode:self == .held ? .held:self == .toggle ? .toggle:.count,count:self == .maximumCount ? 255:self == .abTwice ? 2:self == .abThree ? 3:1)}
+        var playback:MacroPlayback{MacroPlayback(mode:self == .held ? .held:self == .toggle ? .toggle:.count,count:self == .maximumCount ? 255:[Self.abTwice,.official].contains(self) ? 2:self == .abThree ? 3:1)}
         var macro:KeyboardMacro{
             switch self {
-            case .abTwice,.abOnce,.abThree,.maximumCount,.held,.toggle:return MacroHardwareTestController.testMacro
+            case .abTwice,.abOnce,.abThree,.maximumCount,.held,.toggle,.official:return MacroHardwareTestController.testMacro
             case .modifier:return KeyboardMacro(name:"CherryMac 修饰键测试",steps:[
                 .init(usage:225,pressed:true,delayMilliseconds:0),
                 .init(usage:4,pressed:true,delayMilliseconds:80),
                 .init(usage:4,pressed:false,delayMilliseconds:80),
                 .init(usage:225,pressed:false,delayMilliseconds:80)])
-            case .extended:return KeyboardMacro(name:"CherryMac 300步容量测试",steps:(0..<150).flatMap{_ in [
+            case .extended,.officialExtended:return KeyboardMacro(name:"CherryMac 300步容量测试",steps:(0..<150).flatMap{_ in [
                 KeyboardMacro.Step(usage:4,pressed:true,delayMilliseconds:20),
                 KeyboardMacro.Step(usage:4,pressed:false,delayMilliseconds:20)]})
             case .movement:return KeyboardMacro(name:"CherryMac XY位移测试",steps:[
@@ -92,6 +94,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             case .modifier:return "Shift+A 一次（全部释放）"
             case .extended:return "300 步键盘宏（150 次 A，单次触发）"
             case .movement:return "X／Y 正负位移（含 +255／-256）"
+            case .official:return "官方绑定存储：AB 两次"
+            case .officialExtended:return "官方绑定存储：300 步单次"
             case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return "\(mouseName)一次（按下并释放）"
             case .held:return "AB 按住持续、松开停止"
             case .toggle:return "AB 开关、再次按键停止"
@@ -102,7 +106,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             if self == .toggle{return "按一下并松开计算器键启动，约两秒后再次按一下并松开停止；再点击「已停止，核对输出」。"}
             if isMouse{return "先把鼠标指针移到窗口空白处，避开按钮和输入框，再按下并完全松开计算器键一次；预期 \(label)，共两个鼠标按钮事件。不要用实际鼠标代替键盘触发。"}
             if self == .movement{return "把指针移到屏幕中央，开始观察后不要移动实际鼠标；按一次计算器键并松开。预期X、Y依次各+1/-1，再各+255/-256，共8个非零轴回调；不以屏幕像素距离核对。"}
-            if self == .extended{return "只按下并松开计算器键一次，等待300个按下／松开事件及静默核对。每步设定等待20ms，总等待量约6秒，不代表实际固件时序已验证。"}
+            if [Self.extended,.officialExtended].contains(self){return "只按下并松开计算器键一次，等待300个按下／松开事件及静默核对。每步设定等待20ms，总等待量约6秒，不代表实际固件时序已验证。"}
             if self == .maximumCount{return "只按下并松开计算器键一次，等候255轮AB、共1020个事件。设定等待总量约61秒；不要重复触发，完成后按提示恢复。"}
             return "请按下并完全松开计算器键一次；预期 \(label)，共 \(macro.steps.count*playback.count) 个按下／松开事件。"
         }
@@ -111,10 +115,23 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         self.includePowerCycle=includePowerCycle ?? (scenario == .abTwice);self.scenario=scenario;self.resumeDirectory=resumeDirectory
         self.directory=directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareTests/Macro-\(UUID().uuidString)");super.init()
     }
-    static func plan(_ baseline:HardwareSnapshot,scenario:Scenario = .abTwice)throws->MacroWriteAuthorization {
+    static func plan(_ baseline:HardwareSnapshot,scenario:Scenario = .abTwice,factoryKeymap:[UInt8]?=nil)throws->MacroWriteAuthorization {
         try baseline.validate()
         guard Array(baseline.keymap[306..<309])==[0x30,0x92,0x01],let bank=baseline.macroData else{throw HardwareError(message:"本轮需要原始计算器键和完整宏备份，未授权写入。")}
         var library=try CherryMacroCodec.decode(bank)
+        if [Scenario.official,.officialExtended].contains(scenario){
+            guard let factoryKeymap,library.isEmpty,
+                  !(0..<126).contains(where:{[UInt8(0x70),0x71].contains(baseline.keymap[$0*3])}) else{
+                throw HardwareError(message:"官方布局验收需实际双遍默认表及无现存宏的基线；不会清除旧宏来准备测试。")
+            }
+            let receipt=try OfficialMacroDraftReceipt.prepare(before:baseline,factoryKeymap:factoryKeymap,
+                macros:[scenario.macro],bindings:[102:scenario.macro.name],modes:[102:scenario.playback])
+            try receipt.validate()
+            guard (0..<126).filter({$0 != 102}).allSatisfy({receipt.expected.keymap[$0*3..<$0*3+3]==baseline.keymap[$0*3..<$0*3+3]}) else{
+                throw HardwareError(message:"官方布局验收目标改变了其他键位，拒绝准备。")
+            }
+            return try MacroWriteAuthorization(baseline:baseline,target:receipt.expected,allowUnbounded:true)
+        }
         if scenario == .extended{
             let (targetBank,index)=try appendExtendedRecord(bank,macro:scenario.macro)
             var target=baseline;target.macroData=targetBank
@@ -210,6 +227,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":2,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"powerTestRequested":includePowerCycle,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
         if let errorMessage{session["error"]=errorMessage};if let locationID{session["locationID"]=locationID}
         if let activeRegistryID{session["activeRegistryID"]=String(activeRegistryID)}
+        if let factoryKeymap{session["factoryKeymapByteSHA256"]=Self.digest(Data(factoryKeymap))}
+        session["macroStoragePath"]=[Scenario.official,.officialExtended].contains(scenario) ? "OfficialMacroDraftReceipt.prepare":"research append/shared layout"
         session["recoveryRebinds"]=recoveryRebinds
         if let power{session["originalRegistryID"]=String(power.originalRegistryID);session["disconnectedAt"]=power.disconnectedAt;session["powerOffConfirmedAt"]=power.powerOffConfirmedAt;session["reconnectedAt"]=power.reconnectedAt;session["confirmedOffInterval"]=power.confirmedOffInterval}
         if let execution {
@@ -278,7 +297,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func stop(_ request:MacroStopRequest)throws{try MacroPhysicalStopController.confirm(request,owner:window,directory:directory.appendingPathComponent("stop-\(UUID().uuidString)"))}
     func selectScenario(_ selected:Scenario)throws{
         guard phase == .ready,!busy,!writeAttempted,let authorization else{throw HardwareError(message:"只可在首次写入前选择测试场景。")}
-        let updated=try Self.plan(authorization.before,scenario:selected)
+        let updated=try Self.plan(authorization.before,scenario:selected,factoryKeymap:factoryKeymap)
         try Self.saveRecoveryPlan(updated,directory:directory)
         self.authorization=updated;scenario=selected;includePowerCycle=selected == .abTwice
         scenarioPicker.selectItem(at:Scenario.allCases.firstIndex(of:selected)!)
@@ -430,17 +449,27 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         locationID=location.intValue;activeRegistryID=id;power=CalculatorPowerCycleEvidence(originalRegistryID:id)
         timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){[weak self] _ in self?.tick()}
         busy=true;queue.async{[self] in
-            let result=Result<MacroWriteAuthorization,Error>{
+            let result=Result<(MacroWriteAuthorization,[UInt8]?),Error>{
                 let usb=try Self.boundUSB(id)
                 let s=try usb.completeSnapshot();try usb.requireReadOnlyObservationSession(id)
                 let plan:MacroWriteAuthorization
+                var factory:[UInt8]?
                 if let resumeDirectory{
                     plan=try Self.resumePlan(directory:resumeDirectory,current:s)
                     try HardwareProfile(snapshot:s).encoded().write(to:directory.appendingPathComponent("recovery-start.json"),options:.atomic)
-                }else{plan=try Self.plan(s,scenario:scenario)}
-                try Self.saveRecoveryPlan(plan,directory:directory);return plan
+                }else{
+                    let first=try usb.read(7,count:378),second=try usb.read(7,count:378)
+                    guard first==second,try usb.read(3,count:34)==s.deviceInfo,try usb.read(8,count:378)==s.keymap else{
+                        throw HardwareError(message:"默认表两遍读取或基线核对不一致，未准备宏测试。")
+                    }
+                    try usb.requireReadOnlyObservationSession(id);factory=first
+                    let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+                    try encoder.encode(first).write(to:directory.appendingPathComponent("factory-keymap.json"),options:.atomic)
+                    plan=try Self.plan(s,scenario:scenario,factoryKeymap:first)
+                }
+                try Self.saveRecoveryPlan(plan,directory:directory);return (plan,factory)
             }
-            DispatchQueue.main.async{[self] in busy=false;do{let plan=try result.get();guard phase == .preparing else{return};authorization=plan
+            DispatchQueue.main.async{[self] in busy=false;do{let (plan,factory)=try result.get();guard phase == .preparing else{return};authorization=plan;factoryKeymap=factory
                 if resumeDirectory != nil{errorMessage="恢复以前中断的测试，不计作本轮宏验收通过。";action.title="恢复原配置";try set(.restoreReady,"已核对以前测试的原表、目标和当前配置。点击恢复原宏与计算器键；不会重写测试目标。")}
                 else{action.title="备份并写入测试宏";try set(.ready,"已保存原配置和测试目标。点击后，仅把计算器键绑定到 \(scenario.label)；灯效不变。首次写入前可直接关闭窗口退出。")};detail.stringValue="测试完成将恢复原配置。日志：\(directory.path)"}catch{fail(error.localizedDescription)}}
         }
@@ -479,7 +508,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         let library=try CherryMacroCodec.decode(plan.expected.macroData!);precondition(library.last?.steps==Self.testMacro.steps)
         let decoded=try CherryMacroCodec.playback(Array(plan.expected.keymap[306..<309]),macroCount:library.count);precondition(decoded==Self.playback)
         for scenario in Scenario.allCases{
-            let scoped=try Self.plan(baseline,scenario:scenario)
+            let scoped=try Self.plan(baseline,scenario:scenario,factoryKeymap:baseline.keymap)
             let macros=try CherryMacroCodec.decode(scoped.expected.macroData!)
             precondition(macros.last?.steps==scenario.macro.steps)
             precondition(try! CherryMacroCodec.playback(Array(scoped.expected.keymap[306..<309]),macroCount:macros.count)==scenario.playback)
