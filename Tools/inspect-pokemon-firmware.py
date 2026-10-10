@@ -1391,6 +1391,57 @@ def inspect_nonreading_control_branches(image):
             "limits":"Fixed packaged0104 image only. No whole-program caller inventory, current firmware equivalence, exact downstream reset behavior, blackout causation or execution. No commands generated or sent; missing keymap byte remains unknown."}
 
 
+
+def inspect_remaining_report_read_candidates(image):
+    """Inventory the entire fixed table and classify the remaining status pair."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("Report candidate inventory exceeds image bounds")
+        return image[offset:offset+size]
+    table_address = 0x2f0f4
+    table = at(table_address, 174*2)
+    table_sha = 'eb517b3f7b43bdbc3872f6a0c5cf8fb25cd27e9d90ad0779faa6cb2bcdfbf36d'
+    if hashlib.sha256(table).hexdigest() != table_sha:
+        raise ValueError("Report candidate table differs")
+    bodies = {
+        (0x2f4e0, 0x2f4f4): '877fa881eda16122dfcfa62ae955adfb605ab4d75b12260bc9ba05c64842a4c0',
+        (0x2f4fe, 0x2f516): '0749e7410e2dc2bcfc3be15712751186d03027fb7318c00da7b4fe5d498ae70e',
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Remaining status branch differs")
+    literals = {0x2f628: 0x200019fb, 0x2f62c: 0x20009b2a,
+                0x2f5ec: 0x20007174, 0x2f630: 0x20000c98,
+                0x2f60c: 0x20009b23, 0x2f634: 0x20009ab0}
+    for address, value in literals.items():
+        if struct.unpack('<I', at(address, 4))[0] != value:
+            raise ValueError("Remaining status source/write literal differs")
+    groups = {}
+    for command in range(3, 177):
+        target = table_address + 2*struct.unpack_from('<H', table, 2*(command-3))[0]
+        groups.setdefault(target, []).append(command)
+    require_targets = {0x1a: 0x2f4e0, 0x1d: 0x2f4f4, 0x1e: 0x2f4fe}
+    for command, target in require_targets.items():
+        if command not in groups.get(target, []):
+            raise ValueError("Status command dispatch differs")
+    return {'table': {'address': hex(table_address), 'sha256': table_sha, 'firstCommand': 3,
+                      'lastCommand': 176, 'entries': 174, 'distinctDestinations': len(groups),
+                      'groups': [{'destination': hex(target), 'commands': commands} for target, commands in sorted(groups.items())]},
+            'codeSHA256': {f'{a:#x}..{b:#x}': h for (a, b), h in bodies.items()},
+            'command1A': {'entry': '0x2f4e0', 'freshStateByteSources': ['0x200019fb', '0x20009b2a'],
+                          'stores': 'Two LDRB values to reply+8/+9, then shared reply copy',
+                          'copySource': 'Cached reply payload0x20007174',
+                          'configurationTailReaderFound': False,
+                          'scope': 'Only two fresh state bytes in this branch; no requested configuration-bank pointer or offset is used'},
+            'command1E': {'entry': '0x2f4fe', 'destination': '0x20000c98 + unsigned request offset',
+                          'source': 'incoming payload', 'count': 'incoming length', 'copy': '0x2f50c ->0x3a084',
+                          'flagsSet': ['0x20009b23', '0x20009ab0'], 'readOnly': False,
+                          'candidateRequestCreated': False},
+            'backupRelation': 'No missing keymap-tail read found in the newly classified1A/1E branches; keymap byte511 remains unknown',
+            'limits': 'Full fixed table destinations, not whole-program side effects for all174 commands. Other callbacks/interfaces, live0102 code, alias correspondence and complete wireless/configuration backup remain unproved. No arbitrary RAM reader, reports, firmware execution, simulation or hardware access.'}
+
+
 def inspect_status_region_aliases(image):
     """Pin a bounded candidate calculation, not current device read support."""
     def at(address,size):
@@ -1568,7 +1619,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 34,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 35,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1601,6 +1652,7 @@ def inspect(path):
             'backupBoundaries': inspect_backup_boundaries(image),
             'pairingEndpointCommands': inspect_pairing_endpoint_commands(image),
             'statusRegionAliases': inspect_status_region_aliases(image),
+            'remainingReportReadCandidates': inspect_remaining_report_read_candidates(image),
             'nonreadingControlBranches': inspect_nonreading_control_branches(image),
             'hidCallbackReadSources': inspect_hid_callback_read_sources(image),
             'controlReportReadSources': inspect_control_report_read_sources(image),
