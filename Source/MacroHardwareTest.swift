@@ -42,7 +42,16 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     static let playback=MacroPlayback(count:2)
     static let testMacro=KeyboardMacro(name:"CherryMac 实体测试 AB",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:80),.init(usage:5,pressed:true,delayMilliseconds:80),.init(usage:5,pressed:false,delayMilliseconds:80)])
     enum Scenario:String,CaseIterable {
-        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",modifier="modifier",mouse="mouse",held="held",toggle="toggle"
+        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",modifier="modifier"
+        case mouseLeft="mouse-left",mouseRight="mouse-right",mouse="mouse",mouseBack="mouse-back",mouseForward="mouse-forward"
+        case held="held",toggle="toggle"
+        var isMouse:Bool{[Self.mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward].contains(self)}
+        var mouseCode:UInt8{
+            switch self{case .mouseLeft:return 1;case .mouseRight:return 2;case .mouseBack:return 8;case .mouseForward:return 16;default:return 4}
+        }
+        var mouseName:String{
+            switch self{case .mouseLeft:return "鼠标左键";case .mouseRight:return "鼠标右键";case .mouseBack:return "鼠标后退";case .mouseForward:return "鼠标前进";default:return "鼠标中键"}
+        }
         var playback:MacroPlayback{MacroPlayback(mode:self == .held ? .held:self == .toggle ? .toggle:.count,count:self == .abTwice ? 2:self == .abThree ? 3:1)}
         var macro:KeyboardMacro{
             switch self {
@@ -52,9 +61,9 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
                 .init(usage:4,pressed:true,delayMilliseconds:80),
                 .init(usage:4,pressed:false,delayMilliseconds:80),
                 .init(usage:225,pressed:false,delayMilliseconds:80)])
-            case .mouse:return KeyboardMacro(name:"CherryMac 鼠标中键测试",steps:[
-                .init(usage:4,pressed:true,delayMilliseconds:0,kind:.mouse),
-                .init(usage:4,pressed:false,delayMilliseconds:80,kind:.mouse)])
+            case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return KeyboardMacro(name:"CherryMac \(mouseName)测试",steps:[
+                .init(usage:mouseCode,pressed:true,delayMilliseconds:0,kind:.mouse),
+                .init(usage:mouseCode,pressed:false,delayMilliseconds:80,kind:.mouse)])
             }
         }
         var label:String{
@@ -63,7 +72,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             case .abOnce:return "AB 一次"
             case .abThree:return "AB 三次"
             case .modifier:return "Shift+A 一次（全部释放）"
-            case .mouse:return "鼠标中键一次（按下并释放）"
+            case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return "\(mouseName)一次（按下并释放）"
             case .held:return "AB 按住持续、松开停止"
             case .toggle:return "AB 开关、再次按键停止"
             }
@@ -71,6 +80,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         var instruction:String{
             if self == .held{return "按住计算器键约两秒，看到至少两轮 AB 后松开；再用鼠标点击「已停止，核对输出」。"}
             if self == .toggle{return "按一下并松开计算器键启动，约两秒后再次按一下并松开停止；再点击「已停止，核对输出」。"}
+            if isMouse{return "先把鼠标指针移到窗口空白处，避开按钮和输入框，再按下并完全松开计算器键一次；预期 \(label)，共两个鼠标按钮事件。不要用实际鼠标代替键盘触发。"}
             return "请按下并完全松开计算器键一次；预期 \(label)，共 \(macro.steps.count*playback.count) 个按下／松开事件。"
         }
     }
