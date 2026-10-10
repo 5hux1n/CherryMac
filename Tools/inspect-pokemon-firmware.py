@@ -959,6 +959,46 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_mouse_usb_submission(image):
+    """Pin the original report buffer at the named USB submission boundary."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Mouse USB submission evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x26e44,0x26eb8):"b5261c7e3823bfc4b3a040d57f8310d4554b99055cbf2731bb7499382e152bf9",
+        (0x446a4,0x446c4):"f3bf3f0fe39f6604f009c5e5437a4f14ed1f3b544341d19f5d1767a1e0ffcf01",
+        (0x32f64,0x32f9a):"0a205192b273fa5cd0f7c5d8d8c65eb7b046d06618db578039baa852162e25f4",
+        (0x35a0c,0x35ab0):"0fb769a1eb4ff4bd58451f6ce5a0193c27227982266948abeb8ff2c5db68d863",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Mouse USB submission branch differs")
+    literals={0x26f14:0x52538,0x26f34:0x2000466c,0x26f38:0x20009a9b}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("USB report event/session literal differs")
+    if struct.unpack('<I',at(0x52538,4))[0]!=0x4c6b8 or at(0x4c6b8,17)!=b'hid_report_event\0':
+        raise ValueError("USB output event type differs")
+    if at(0x26ed4,4)!=bytes.fromhex('c268cee7'):
+        raise ValueError("USB state3 length-load branch differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "event":"hid_report_event at0x52538",
+            "ordinaryNumberedBranch":{"sessionObject":"0x2000466c","gate":"Event+8 equals session object; RAM0x20009a9b equals2, session byte8 equals1",
+                "dataSource":"Event+0x10", "byteCount":"Event+0x0c", "submitCall":"0x26e94 ->0x446a4",
+                "separateGate":"Transport state byte !=3 clears non-report4/5 payload first; state3 skips that clearing"},
+            "forwarding":{"0x446a4":"Loads endpoint number and tail-calls0x32f64 with source/count unchanged",
+                "0x32f64":"Preserves buffer inr8 and count inr7; forwards them to0x35a0c, up to4 attempts on -11",
+                "0x35a0cPrefix":"Copies caller buffer/count to local state, then stores both unchanged at stack+4/+8 for0x48dac",
+                "fieldReorderingFound":False},
+            "mouseRelation":{"source":"mouseCacheEventConversion publishesID2/buttons/X16/Y16/scroll8 in7 bytes",
+                "descriptor":"macroExtraMouseHandlers pins Report2 with buttons/Wheel8/X16/Y16",
+                "result":"The named producer/USB submission boundary has a field-order discrepancy. No reordering in the pinned forwarding layers"},
+            "limits":"Fixed0104 conditional submission chain only; does not prove the currently active branch, lower transfer implementation, packet reaching host, current0102 defect or blackout cause. No compensating macro encoding, driver patch, reports, simulation or hardware access."}
+
+
 def inspect_mouse_cache_event_conversion(image):
     """Pin cache -> keyboard_event -> HID-state accumulator -> output event."""
     def at(address,size):
@@ -1453,7 +1493,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 31,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 32,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1493,6 +1533,7 @@ def inspect(path):
             'featureConfigurableModule': inspect_feature_configurable_module(image),
             'macroExtraMouseHandlers': inspect_macro_extra_mouse_handlers(image),
             'mouseCacheEventConversion': inspect_mouse_cache_event_conversion(image),
+            'mouseUSBSubmission': inspect_mouse_usb_submission(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
