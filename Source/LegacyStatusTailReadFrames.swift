@@ -1,7 +1,8 @@
 import Foundation
 import CryptoKit
 
-// Pure unexecuted candidates from fixed0104 code. Matching ROM info is not
+// Pure candidate frames from fixed0104 code; live observations are recorded separately.
+// Matching ROM info is not
 // running-firmware identity. No I/O, general memory read, keymap alias or grant.
 enum LegacyStatusTailReadFrames {
     enum Region:String {case parameters,colors,macroData}

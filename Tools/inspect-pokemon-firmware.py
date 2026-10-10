@@ -960,6 +960,45 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_mouse_usb_transfer_descriptor(image):
+    """Pin the lower transfer descriptor and conditional RAM buffer handoff."""
+    def at(address, size):
+        offset = address - 0x10000
+        if offset < 0 or size < 0 or offset + size > len(image):
+            raise ValueError("USB transfer descriptor evidence exceeds image bounds")
+        return image[offset:offset + size]
+    bodies = {
+        (0x48dac, 0x48ea0): "6ccff2ff5d62646f87a0e90d33426a9c9a46db920b6839dcd778acece4d120b7",
+        (0x47dc0, 0x47de4): "001fbffb15f0fdbe9b05ea3cb82019cc8cebdecfbba2bc80cce72b225fa38094",
+        (0x47de4, 0x47e12): "7164224cb413b719a4217a723a63eae77164b36fd3fedb6b261c5c71aa882165",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(at(start, end - start)).hexdigest() != digest:
+            raise ValueError("USB transfer descriptor body differs")
+    literals = {0x48eb4: 0x200087d0, 0x48ec0: 0x20008940,
+                0x48ec4: 0x20008840, 0x48ed0: 0x47dc1, 0x48ed4: 0x47de5}
+    for address, value in literals.items():
+        if struct.unpack('<I', at(address, 4))[0] != value:
+            raise ValueError("USB transfer descriptor literal differs")
+    checks = {0x48e60: "0a68", 0x48e66: "02f06042", 0x48e6e: "b2f1005f",
+              0x48e90: "8a68", 0x48e94: "54bf", 0x48e96: "0e4a",
+              0x48e34: "07c9", 0x48e44: "83e80700", 0x47dd0: "c0e90052"}
+    for address, encoded in checks.items():
+        if at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("USB transfer descriptor instruction differs")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a, b), h in bodies.items()},
+            "caller": "mouseUSBSubmission: 0x35a76 stores original buffer/count; 0x35a7a stores transfer flags0",
+            "descriptorCopy": {"entry": "0x48dac", "operation": "0x48e34 loads three descriptor words; 0x48e44 stores them unchanged in endpoint-indexed state",
+                               "sourceRAMDescriptorBase": "0x20008840", "wordMeaning": "buffer pointer, remaining byte count, flags"},
+            "conditionalRAMHandler": {"gate": "signed endpoint argument <0; buffer pointer &0xe0000000 ==0x20000000; flags bit0 clear",
+                                      "handlerThumbPointer": "0x47dc1", "body": "0x47dc0..0x47de4",
+                                      "operation": "clamp chunk length to remaining count; output original pointer/count; advance saved pointer by chunk length",
+                                      "payloadByteTransformation": "None in this pinned handler; no payload bytes loaded or stored"},
+            "otherBranches": "Non-RAM source and flags-bit0 paths select different handlers; they are not substituted into the direct-RAM conclusion",
+            "limits": "Fixed0104 static conditional handoff only. Final peripheral descriptor consumer, host packets, current0102 code and active runtime branch remain unproved. No firmware execution, simulation, hardware reports, compensation or write capability."}
+
+
 def inspect_mouse_usb_submission(image):
     """Pin the original report buffer at the named USB submission boundary."""
     def at(address,size):
@@ -1493,7 +1532,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 32,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 33,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1534,6 +1573,7 @@ def inspect(path):
             'macroExtraMouseHandlers': inspect_macro_extra_mouse_handlers(image),
             'mouseCacheEventConversion': inspect_mouse_cache_event_conversion(image),
             'mouseUSBSubmission': inspect_mouse_usb_submission(image),
+            'mouseUSBTransferDescriptor': inspect_mouse_usb_transfer_descriptor(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
