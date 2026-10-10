@@ -1649,6 +1649,62 @@ def inspect_settings_slider_scope(pe, skin):
             "limits": "Named editing and this initialization visibility path only. Shared resources do not prove target support or a settings send. Other control changes, callbacks, deep-sleep visibility and whole-program transports remain separately unproved."}
 
 
+
+def inspect_deep_sleep_initialization(pe, skin):
+    """Pin deep-sleep visibility inside the previously audited PID group."""
+    bodies = {
+        (0x42ae30, 0x42ae80): "dee7bd519cb69b9ea8add66a9df89b0469f8005f586d110d6cf1bfee198bad81",
+        (0x4af32f, 0x4af7ad): "350a22428bc9c19eff936224831a0a9fe864670764531493d1fba22e20d34443",
+    }
+    for (start, end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start, end - start)).hexdigest() != expected:
+            raise ValueError("Deep-sleep initialization body differs")
+    checks = {
+        0x42ae39: "6834b57200", 0x42ae44: "ff157cb16e00",
+        0x42ae55: "837d0800", 0x42ae72: "8b8218010000",
+        0x4af54b: "6a01", 0x4af553: "e8d8b8f7ff",
+        0x4af6a6: "6a00", 0x4af6ae: "e83db2f7ff",
+        0x4af6b3: "6a00", 0x4af6bb: "e870b7f7ff",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Deep-sleep initialization instruction differs")
+    name = "kb_deepsleeptime_layout"
+    encoded = (name + "\0").encode("utf-16-le")
+    if pe.at(0x72b534, len(encoded)) != encoded:
+        raise ValueError("Deep-sleep layout name differs")
+    # Reuse the full fixed PID-gate audit rather than invent another allowlist.
+    previous = inspect_settings_slider_scope(pe, skin)
+    resource = None
+    if skin:
+        raw = (Path(skin) / "KbBasicSetWnd.xml").read_bytes()
+        cleaned = re.sub(r"<!--.*?-->", "", raw.decode("utf-8"), flags=re.S)
+        layouts = [tag for tag in re.findall(r"<VerticalLayout\b[^>]*>", cleaned)
+                   if 'name="kb_deepsleeptime_layout"' in tag]
+        sliders = [tag for tag in re.findall(r"<Slider\b[^>]*>", cleaned)
+                   if 'name="kb_deepsleeptime_slider"' in tag]
+        if len(layouts) != 1 or 'visible="false"' not in layouts[0]:
+            raise ValueError("Deep-sleep initial visibility differs")
+        if len(sliders) != 1 or 'min="15"' not in sliders[0] or 'max="300"' not in sliders[0]:
+            raise ValueError("Deep-sleep resource bounds differ")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(), "initialVisible": False,
+                    "sliderRange": [15, 300], "displayedUnit": "minutes"}
+        if 'text="15min"' not in cleaned or 'text="300min"' not in cleaned:
+            raise ValueError("Deep-sleep displayed units differ")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a, b), h in bodies.items()},
+            "setter": {"address": "0x42ae30", "control": name, "virtual": "0x118",
+                       "operation": "Normalize Boolean argument and change layout visibility"},
+            "showCall": "0x4af553 with1", "sharedPIDGate": previous["sleepVisibility"]["pidGate"],
+            "target01CESkipsShowGroup": previous["sleepVisibility"]["target01CESkipsShowGroup"],
+            "skipTarget": "0x4af7ad",
+            "additionalHide": {"productID": 0x1d7, "sleepCall": "0x4af6ae with0",
+                               "deepSleepCall": "0x4af6bb with0"},
+            "resource": resource, "hardwareWriteAuthorized": False,
+            "limits": "Only this fixed executable initialization and named layout helper. "
+                      "Not whole-program visibility, current firmware support, a device settings report, "
+                      "or evidence that all sleep functionality is unavailable."}
+
+
 def inspect_polling_option_selection(pe, skin):
     """Pin the actual child selection callback separately from firmware sends."""
     bodies = {
@@ -3648,7 +3704,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 85,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 86,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3681,6 +3737,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
         "pollingOptionSelection": inspect_polling_option_selection(pe, skin),
         "settingsSliderScope": inspect_settings_slider_scope(pe, skin),
+        "deepSleepInitialization": inspect_deep_sleep_initialization(pe, skin),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
