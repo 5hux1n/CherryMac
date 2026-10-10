@@ -2,6 +2,7 @@
 import Cocoa
 import IOKit.hid
 import CryptoKit
+import Darwin
 
 private final class MacroTestInputView:NSView {
     override func draw(_ dirtyRect:NSRect){NSColor.windowBackgroundColor.setFill();bounds.fill()}
@@ -150,9 +151,44 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
         return (result,UInt8(old.count))
     }
+    struct RecoveryPlanReceipt:Codable {
+        let format:String,version:Int,originalSHA256:String,targetSHA256:String
+        let originalBytes:Int,targetBytes:Int
+    }
+    static func digest(_ data:Data)->String{SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+    static func savedRecoveryFile(_ url:URL)throws->Data {
+        let descriptor=Darwin.open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+        guard descriptor>=0 else{throw HardwareError(message:"恢复资料无法打开或是符号链接："+url.lastPathComponent)}
+        let handle=FileHandle(fileDescriptor:descriptor,closeOnDealloc:true);defer{try? handle.close()}
+        var metadata=stat()
+        guard fstat(descriptor,&metadata)==0,metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size>=0,metadata.st_size<=2_097_152 else{throw HardwareError(message:"恢复资料不是有效的大小受限普通文件。")}
+        let data=try handle.read(upToCount:2_097_153) ?? Data()
+        guard data.count==Int(metadata.st_size),data.count<=2_097_152 else{throw HardwareError(message:"恢复资料读取不完整或读取时发生变化。")}
+        return data
+    }
+    static func saveRecoveryPlan(_ plan:MacroWriteAuthorization,directory:URL)throws {
+        let original=try HardwareProfile(snapshot:plan.before).encoded(),target=try HardwareProfile(snapshot:plan.expected).encoded()
+        try original.write(to:directory.appendingPathComponent("original.json"),options:.atomic)
+        try target.write(to:directory.appendingPathComponent("target.json"),options:.atomic)
+        let receipt=RecoveryPlanReceipt(format:"CherryMacMacroRecoveryPlan",version:1,
+            originalSHA256:digest(original),targetSHA256:digest(target),originalBytes:original.count,targetBytes:target.count)
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        // Publish the pairing receipt last. An interrupted replacement fails
+        // digest checks rather than silently combining two different plans.
+        try encoder.encode(receipt).write(to:directory.appendingPathComponent("recovery-plan.json"),options:.atomic)
+    }
     static func resumePlan(directory:URL,current:HardwareSnapshot)throws->MacroWriteAuthorization {
-        let before=try HardwareProfile.decode(Data(contentsOf:directory.appendingPathComponent("original.json"))).snapshot
-        let target=try HardwareProfile.decode(Data(contentsOf:directory.appendingPathComponent("target.json"))).snapshot
+        let receiptData=try savedRecoveryFile(directory.appendingPathComponent("recovery-plan.json"))
+        let receipt=try JSONDecoder().decode(RecoveryPlanReceipt.self,from:receiptData)
+        let original=try savedRecoveryFile(directory.appendingPathComponent("original.json")),targetData=try savedRecoveryFile(directory.appendingPathComponent("target.json"))
+        guard receipt.format=="CherryMacMacroRecoveryPlan",receipt.version==1,
+              receipt.originalBytes==original.count,receipt.targetBytes==targetData.count,
+              receipt.originalSHA256==digest(original),receipt.targetSHA256==digest(targetData) else{
+            throw HardwareError(message:"原配置与测试目标的恢复关联不一致，不能自动恢复。旧日志缺少关联文件时需单独核对。")
+        }
+        let before=try HardwareProfile.decode(original).snapshot
+        let target=try HardwareProfile.decode(targetData).snapshot
         let plan=try MacroWriteAuthorization(baseline:before,target:target,allowUnbounded:true)
         try plan.validateRecovery(current);return plan
     }
@@ -232,7 +268,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func selectScenario(_ selected:Scenario)throws{
         guard phase == .ready,!busy,!writeAttempted,let authorization else{throw HardwareError(message:"只可在首次写入前选择测试场景。")}
         let updated=try Self.plan(authorization.before,scenario:selected)
-        try HardwareProfile(snapshot:updated.expected).encoded().write(to:directory.appendingPathComponent("target.json"),options:.atomic)
+        try Self.saveRecoveryPlan(updated,directory:directory)
         self.authorization=updated;scenario=selected;includePowerCycle=selected == .abTwice
         scenarioPicker.selectItem(at:Scenario.allCases.firstIndex(of:selected)!)
         powerOption.state=includePowerCycle ? .on:.off;stopButton.isHidden=selected.playback.mode == .count
@@ -385,8 +421,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
                     plan=try Self.resumePlan(directory:resumeDirectory,current:s)
                     try HardwareProfile(snapshot:s).encoded().write(to:directory.appendingPathComponent("recovery-start.json"),options:.atomic)
                 }else{plan=try Self.plan(s,scenario:scenario)}
-                try HardwareProfile(snapshot:plan.before).encoded().write(to:directory.appendingPathComponent("original.json"),options:.atomic)
-                try HardwareProfile(snapshot:plan.expected).encoded().write(to:directory.appendingPathComponent("target.json"),options:.atomic);return plan
+                try Self.saveRecoveryPlan(plan,directory:directory);return plan
             }
             DispatchQueue.main.async{[self] in busy=false;do{let plan=try result.get();guard phase == .preparing else{return};authorization=plan
                 if resumeDirectory != nil{errorMessage="恢复以前中断的测试，不计作本轮宏验收通过。";action.title="恢复原配置";try set(.restoreReady,"已核对以前测试的原表、目标和当前配置。点击恢复原宏与计算器键；不会重写测试目标。")}
@@ -464,8 +499,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         precondition(!early.reconnected(at:20,registryID:2) && !early.hasConfirmedPowerCycle)
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacMacroFullFlow-\(UUID().uuidString)")
         defer{try? FileManager.default.removeItem(at:folder)};try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
-        try HardwareProfile(snapshot:plan.before).encoded().write(to:folder.appendingPathComponent("original.json"))
-        try HardwareProfile(snapshot:plan.expected).encoded().write(to:folder.appendingPathComponent("target.json"))
+        try Self.saveRecoveryPlan(plan,directory:folder)
         let resumed=try Self.resumePlan(directory:folder,current:plan.expected);precondition(resumed.before==plan.before && resumed.expected==plan.expected)
         do{_ = try Self.resumePlan(directory:folder,current:outside);throw HardwareError(message:"outside resume accepted")}catch let e as HardwareError{precondition(e.message != "outside resume accepted")}
         let controller=MacroHardwareTestController(directory:folder);controller.authorization=plan
