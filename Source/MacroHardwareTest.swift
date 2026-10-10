@@ -36,6 +36,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     var powerVerified=false,firstExecutionPassed=false,secondExecutionPassed=false,restored=false
     var passed:Bool{firstExecutionPassed && (!includePowerCycle || (secondExecutionPassed && powerVerified)) && restored && errorMessage==nil && interruptions.isEmpty}
     var locationID:Int?,errorMessage:String?,raw:[[String:Any]]=[]
+    var activeRegistryID:UInt64?,recoveryRebinds:[[String:Any]]=[]
     var interruptions:[MacroExecutionEvidence.Interruption]=[]
     var writeAttempted=false
     var transitions:[[String:Any]]=[]
@@ -109,6 +110,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func persist()throws {
         var session:[String:Any]=["format":"CherryMacMacroHardwareTest","version":1,"phase":phase.rawValue,"source":execution?.source.rawValue ?? "hid","passed":passed,"scenario":scenario.rawValue,"powerTestRequested":includePowerCycle,"scope":"calculator-slot "+scenario.label+" only; exact firmware delay and other playback modes require separate acceptance","firstExecutionPassed":firstExecutionPassed,"secondExecutionPassed":secondExecutionPassed,"retainedAfterConfirmedPowerCycle":powerVerified,"originalRestored":restored,"writeAttempted":writeAttempted,"transitions":transitions,"rawValues":raw,"powerOffEvidence":"explicit user confirmation; internal battery power is not measured"]
         if let errorMessage{session["error"]=errorMessage};if let locationID{session["locationID"]=locationID}
+        if let activeRegistryID{session["activeRegistryID"]=String(activeRegistryID)}
+        session["recoveryRebinds"]=recoveryRebinds
         if let power{session["originalRegistryID"]=String(power.originalRegistryID);session["disconnectedAt"]=power.disconnectedAt;session["powerOffConfirmedAt"]=power.powerOffConfirmedAt;session["reconnectedAt"]=power.reconnectedAt;session["confirmedOffInterval"]=power.confirmedOffInterval}
         try JSONSerialization.data(withJSONObject:session,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
         if let execution {
@@ -128,9 +131,29 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         scenarioPicker.isEnabled=next == .ready && !busy && !writeAttempted
         powerOption.isEnabled=next == .ready && !busy && !writeAttempted
         transitions.append(["phase":next.rawValue,"at":Date().timeIntervalSince1970]);try persist()}
-    func registry(_ device:IOHIDDevice)->UInt64?{var id:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS ? id:nil}
+    func registry(_ device:IOHIDDevice)->UInt64?{var id:UInt64=0;return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&id)==KERN_SUCCESS && id != 0 ? id:nil}
     func devices()->Set<IOHIDDevice>{IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []}
-    func soleDevice()throws->IOHIDDevice{let all=devices();guard all.count==1,let d=all.first,(IOHIDDeviceGetProperty(d,kIOHIDLocationIDKey as CFString) as? NSNumber)?.intValue==locationID else{throw HardwareError(message:"无法确认同一把 USB 键盘，停止操作。")};return d}
+    func soleDevice()throws->IOHIDDevice{let all=devices();guard all.count==1,let d=all.first,
+        (IOHIDDeviceGetProperty(d,kIOHIDLocationIDKey as CFString) as? NSNumber)?.intValue==locationID,
+        let activeRegistryID,registry(d)==activeRegistryID else{throw HardwareError(message:"无法确认当前选定 USB 连接，停止操作。")};return d}
+    static func boundUSB(_ expected:UInt64?)throws->CherryUSB{
+        guard let expected,expected != 0 else{throw HardwareError(message:"测试缺少固定 USB 连接标识。")}
+        let usb=try CherryUSB();try usb.requireReadOnlyObservationSession(expected);return usb
+    }
+    func rebindRecoveryIfNeeded()throws {
+        // Only reached by the explicit restore action. The transport still
+        // validates the saved transaction against a fresh complete readback.
+        let all=devices()
+        guard all.count==1,let device=all.first,let id=registry(device),id != 0,
+              (IOHIDDeviceGetProperty(device,kIOHIDLocationIDKey as CFString) as? NSNumber)?.intValue==locationID else{
+            throw HardwareError(message:"恢复需要原 USB 位置的唯一目标键盘。")
+        }
+        if id != activeRegistryID{
+            recoveryRebinds.append(["previousRegistryID":activeRegistryID.map{String($0)} ?? "unknown",
+                "registryID":String(id),"at":Date().timeIntervalSince1970,"scope":"recovery only; not power-cycle or execution evidence"])
+            activeRegistryID=id;try persist()
+        }
+    }
     func stop(_ request:MacroStopRequest)throws{try MacroPhysicalStopController.confirm(request,owner:window,directory:directory.appendingPathComponent("stop-\(UUID().uuidString)"))}
     func selectScenario(_ selected:Scenario)throws{
         guard phase == .ready,!busy,!writeAttempted,let authorization else{throw HardwareError(message:"只可在首次写入前选择测试场景。")}
@@ -178,8 +201,9 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func write(){
         guard let authorization else{return};writeAttempted=true;do{_ = try soleDevice();busy=true;try set(.writing,"正在备份、写入并完整读回宏。请勿按键或拔线。")}catch{busy=false;fail(error.localizedDescription);return}
+        let expectedID=activeRegistryID
         queue.async{[self] in
-            let result=Result<HardwareSnapshot,Error>{let usb=try CherryUSB(),log=try HardwareOperationLog(kind:"macro-test-write",directory:directory.appendingPathComponent("operations"));return try usb.applyMacro(authorization.expected,baseline:authorization.before,log:log,confirmStopped:stop)}
+            let result=Result<HardwareSnapshot,Error>{let usb=try Self.boundUSB(expectedID),log=try HardwareOperationLog(kind:"macro-test-write",directory:directory.appendingPathComponent("operations"));let snapshot=try usb.applyMacro(authorization.expected,baseline:authorization.before,log:log,confirmStopped:stop);try usb.requireReadOnlyObservationSession(expectedID!);return snapshot}
             DispatchQueue.main.async{[self] in busy=false;do{let snapshot=try result.get();try HardwareProfile(snapshot:snapshot).encoded().write(to:directory.appendingPathComponent("after-write.json"),options:.atomic)
                 guard phase == .writing else{restore.isEnabled=true;return};action.title="开始实体输出观察";try set(.observeReady,"写入和完整读回一致。松开全部键，点击开始，再按计算器键。")
             }catch{fail(error.localizedDescription)}}
@@ -192,6 +216,9 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             status.stringValue=remaining>0 ? "已确认关闭电源，还需等待 \(remaining) 秒；先不要开电或接 USB。":"15 秒已满。现在可以开电、接 USB 并切换到有线模式。"
         }
         if phase == .observing,let execution{
+            if execution.source == .hid{
+                do{_ = try soleDevice()}catch{fail(error.localizedDescription,.observerDisconnected);return}
+            }
             do{let result=try execution.assessment(milliseconds:milliseconds());stopButton.isEnabled=scenario.playback.mode != .count && stopMarker==nil && result.completedCycles>=2 && result.held.isEmpty && adapter.allReleased && result.status != "failed";try persist()
                 if result.status=="failed"{fail(result.failure ?? "宏执行检查失败。",.reportRejected);return}
                 if result.passed{
@@ -207,7 +234,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     func connected(_ device:IOHIDDevice){
         guard phase == .reconnect,let id=registry(device),power?.reconnected(at:ProcessInfo.processInfo.systemUptime,registryID:id)==true else{return}
         guard power?.hasConfirmedPowerCycle==true else{fail("USB 在关闭电源确认前或 15 秒内重新连接，断电测试未通过；请恢复原配置。");return}
-        readReconnected()
+        activeRegistryID=id;readReconnected()
     }
     func removed(){
         adapter=MacroHIDObservationAdapter()
@@ -216,8 +243,9 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func readReconnected(){
         do{_ = try soleDevice();busy=true;try set(.reading,"已检测到重连，先读取宏、绑定和其他配置；不会先重写目标。")}catch{busy=false;fail(error.localizedDescription);return}
+        let expectedID=activeRegistryID
         queue.async{[self] in
-            let result=Result<HardwareSnapshot,Error>{try CherryUSB().completeSnapshot()}
+            let result=Result<HardwareSnapshot,Error>{let usb=try Self.boundUSB(expectedID);let snapshot=try usb.completeSnapshot();try usb.requireReadOnlyObservationSession(expectedID!);return snapshot}
             DispatchQueue.main.async{[self] in busy=false;do{let s=try result.get();try HardwareProfile(snapshot:s).encoded().write(to:directory.appendingPathComponent("after-reconnect.json"),options:.atomic)
                 guard phase == .reading,let authorization,power?.hasConfirmedPowerCycle==true else{throw HardwareError(message:"断电／重连证据或阶段不足，不能判定保留。")}
                 guard Self.matches(s,authorization.expected) else{throw HardwareError(message:"断电后宏／绑定未完整保留或其他配置变化；请恢复原配置。")}
@@ -225,11 +253,12 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             }catch{fail(error.localizedDescription)}}
         }
     }
-    @objc func requestRestore(){guard !busy,authorization != nil,phase != .ready else{return};if phase == .observing{execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
+    @objc func requestRestore(){guard !busy,authorization != nil,phase != .ready else{return};do{try rebindRecoveryIfNeeded()}catch{fail(error.localizedDescription,.observerDisconnected);return};if phase == .observing{execution?.invalidate(.cancelled);interruptions.append(.cancelled)};recover()}
     func recover(){
         guard let authorization else{return};do{_ = try soleDevice();busy=true;try set(.restoring,"正在按原事务范围读取并恢复原宏与绑定。请勿拔线或按键。")}catch{busy=false;fail(error.localizedDescription);return}
+        let expectedID=activeRegistryID
         queue.async{[self] in
-            let result=Result<HardwareSnapshot,Error>{let usb=try CherryUSB(),log=try HardwareOperationLog(kind:"macro-test-recovery",directory:directory.appendingPathComponent("operations"));return try usb.recoverMacro(authorization,log:log,confirmStopped:stop)}
+            let result=Result<HardwareSnapshot,Error>{let usb=try Self.boundUSB(expectedID),log=try HardwareOperationLog(kind:"macro-test-recovery",directory:directory.appendingPathComponent("operations"));let snapshot=try usb.recoverMacro(authorization,log:log,confirmStopped:stop);try usb.requireReadOnlyObservationSession(expectedID!);return snapshot}
             DispatchQueue.main.async{[self] in busy=false;do{let s=try result.get();try HardwareProfile(snapshot:s).encoded().write(to:directory.appendingPathComponent("restored.json"),options:.atomic)
                 guard Self.matches(s,authorization.before) else{throw HardwareError(message:"恢复读回不一致。")};restored=true;action.title="完成并关闭"
                 try set(.complete,passed ? (includePowerCycle ? "本轮宏写入、两次实体输出、断电保留和恢复均通过。":"本轮宏写入、实体输出和恢复通过；未测试断电保留。"):"原配置已恢复；宏测试未完成全部验收，不计作通过。")
@@ -237,7 +266,12 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
     }
     func receive(_ value:IOHIDValue){
+        guard ![Phase.complete,.failed,.cancelled,.disconnect,.reconnect].contains(phase) else{return}
         let element=IOHIDValueGetElement(value),page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element),v=IOHIDValueGetIntegerValue(value),at=Int(ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000)
+        if activeRegistryID != nil{
+            do{let device=try soleDevice();guard CFEqual(IOHIDElementGetDevice(element),device) else{throw HardwareError(message:"宏验收收到其他 USB 连接的输出。")}}
+            catch{fail(error.localizedDescription,.observerDisconnected);return}
+        }
         do{let event=try adapter.receive(page:page,usage:usage,value:v,milliseconds:at);guard phase == .observing,let event else{return}
             guard raw.count<65536 else{throw HardwareError(message:"记录容量已满。")};raw.append(["page":page,"usage":usage,"value":v,"milliseconds":at]);try execution?.observe(event);try persist()
         }catch{if phase == .observing || phase == .observeReady{fail(error.localizedDescription,.reportRejected)}}
@@ -259,16 +293,17 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             fail("请在系统设置 → 隐私与安全性 → 输入监控中允许 \(name)，然后退出并重新打开测试 App。尚未写入键盘。");return
         }
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
-        IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in guard let context else{return};let owner=Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue();if result==0{owner.receive(value)}else{owner.fail("HID 观察失败。",.reportRejected)}},Unmanaged.passUnretained(self).toOpaque())
+        IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in guard let context else{return};let owner=Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue();guard ![Phase.complete,.failed,.cancelled].contains(owner.phase) else{return};if result==0{owner.receive(value)}else{owner.fail("HID 观察失败。",.reportRejected)}},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in guard let context else{return};Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue().removed()},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceMatchingCallback(manager,{context,_,_,device in guard let context else{return};Unmanaged<MacroHardwareTestController>.fromOpaque(context).takeUnretainedValue().connected(device)},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerScheduleWithRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.defaultMode.rawValue);opened=IOHIDManagerOpen(manager,0)==0
         guard opened,devices().count==1,let d=devices().first,let id=registry(d),let location=IOHIDDeviceGetProperty(d,kIOHIDLocationIDKey as CFString) as? NSNumber else{fail("需要唯一的 USB 有线键盘和有效输入监控权限。");return}
-        locationID=location.intValue;power=CalculatorPowerCycleEvidence(originalRegistryID:id)
+        locationID=location.intValue;activeRegistryID=id;power=CalculatorPowerCycleEvidence(originalRegistryID:id)
         timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){[weak self] _ in self?.tick()}
         busy=true;queue.async{[self] in
             let result=Result<MacroWriteAuthorization,Error>{
-                let s=try CherryUSB().completeSnapshot()
+                let usb=try Self.boundUSB(id)
+                let s=try usb.completeSnapshot();try usb.requireReadOnlyObservationSession(id)
                 let plan:MacroWriteAuthorization
                 if let resumeDirectory{
                     plan=try Self.resumePlan(directory:resumeDirectory,current:s)
