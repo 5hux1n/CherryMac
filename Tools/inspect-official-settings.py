@@ -2288,6 +2288,54 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_basic_apply_light_setter(pe):
+    """Resolve the earlier +324 call and host-cache/UI leaves separately."""
+    bodies = {
+        (0x4fb970, 0x4fc140): "cd873edeaa2da8debf05d9391416a5f8cd0ba9c52d25d616b56575297b3c7fe0",
+        (0x5414f0, 0x541517): "0d5b97bb807efef20fa401d522fae8ee4270183a6200b95f005043730c8dc713",
+        (0x540c60, 0x540c74): "4d0fc410e63150863f20be276a07066074886f21004b44d9cf5013611c204e95",
+        (0x505ab0, 0x505b03): "1f6cc3cef9f48564e68b00048b464653f1187983eda9de2ffd7b2f38dff59b31",
+        (0x4f51e0, 0x4f5202): "4de35f155029793068580baaeb3cf4bcd157f952d3b537b5931f77ed3da2f601",
+    }
+    for (start, end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != expected:
+            raise ValueError("Basic-apply lighting setter leaf differs")
+    for offset, target in {0x324: 0x4fb970, 0x2ec: 0x540c60, 0x38c: 0x505ab0}.items():
+        if pe.pointer(0x77f604+offset) != target:
+            raise ValueError("Basic-apply lighting virtual differs")
+    checks = {0x4aff0a: "8b8224030000", 0x4aff10: "ffd0",
+              0x4fbe84: "81face010000", 0x4fbe94: "8b82ec020000",
+              0x4fbe9f: "0f84a6010000", 0x4fc11c: "8b828c030000",
+              0x540c6a: "8b8014210000", 0x4f51ed: "8988240d0000"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Basic-apply lighting setter instruction differs")
+    for address, name in {0x6eb3dc: "?Invalidate@CControlUI@DuiLib@@QAEXXZ",
+                          0x6eb3a4: "?FindSubControlByName@CPaintManagerUI@DuiLib@@QBEPAVCControlUI@2@PAV32@PB_W@Z"}.items():
+        encoded = (name + "\0").encode("ascii")
+        if pe.at(pe.base+pe.pointer(address)+2, len(encoded)) != encoded:
+            raise ValueError("Basic-apply lighting UI import differs")
+    control = ("device_light_mode_switch\0").encode("utf-16-le")
+    if pe.at(0x76df38, len(control)) != control:
+        raise ValueError("Basic-apply lighting control differs")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a, b), h in bodies.items()},
+            "dialogCall": "0x4aff10 virtual+0x324 ->0x4fb970",
+            "cacheCopy": {"method": "0x5414f0", "bytes": 47, "destination": "device+0x215c"},
+            "configurationSetter": "0x4fb9b6 ->0x47b320 using device+0x4000",
+            "target01CECondition": {"site": "0x4fbe84", "getter": "virtual+0x2ec ->0x540c60",
+                                    "getterOperation": "Read device+0x2114 DWORD only; no calls",
+                                    "getterEqualsOneTarget": "0x4fc04b"},
+            "control": "device_light_mode_switch", "controlCalls": ["virtual+0x118 visibility", "virtual+0x230 with0/1/2"],
+            "keyStateBranch": {"virtual": "0x38c ->0x505ab0", "iteration": "device+0x2124 vector",
+                               "leaf": "0x4f51e0", "store": "control+0xd24 = argument",
+                               "followingCall": "DuiLib CControlUI.Invalidate"},
+            "hardwareWriteAuthorized": False,
+            "limits": "Named caller, fixed method and host-cache/UI leaves only. "
+                      "JSON setter internals, UI virtual+0x230 callbacks and repaint side effects "
+                      "are not all classified here. No whole-path transport absence or firmware setting acceptance."}
+
+
 def inspect_polling_apply_destination(pe):
     """Distinguish the dialog's wired/RF field choice for the actual PID."""
     tail = inspect_basic_apply_transport_chain(pe)
@@ -3743,7 +3791,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 87,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 88,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3791,6 +3839,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplySave": inspect_basic_apply_save(pe),
         "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
         "pollingApplyDestination": inspect_polling_apply_destination(pe),
+        "basicApplyLightSetter": inspect_basic_apply_light_setter(pe),
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
