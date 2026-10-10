@@ -910,6 +910,101 @@ def inspect_default_key_finish(pe):
                      'persistence acceptance. No Windows execution or report generation.'}
 
 
+def inspect_report_exchange(pe):
+    """Classify the finish lock and transport from fixed, real PE bytes."""
+    bodies = {
+        0x4d91ea: (0x4d921c, 'd6dd93e17cf7a6fe75af15c0e8b0c8e4d445450221c8ebc66692c0880c861aa1'),
+        0x4d9380: (0x4d9811, '6e7fbe8c15193c08e566dc01124075901e22b3a2a59c8dd0e3bc0403e2bdf725'),
+        0x4d6eb0: (0x4d6ecd, '9c19f137d2eda4ed10bc123fd4dda327756bce6b1e44dddfa4ae3290ad87837f'),
+        0x4e0dd0: (0x4e0ded, 'e65aeec1c15eef568236947cedeef10c62050bc60f4bded7ae122751a7d6d02a'),
+        0x4e0e30: (0x4e0ea5, '8d360b86f0904b291910cd3f8090c4a09720a79685f2fa849ccee0806a83e1d3'),
+        0x545360: (0x545420, '13bf5a9b8a610539fc0071f5a11414608093f05eae451ae5e4b969b0436f2973'),
+        0x545420: (0x5454e0, '6231f5da74050ac23a0fa9a0e2229cd53ec682b26294606933022deb66fd3cd0'),
+    }
+    for address, (end, digest) in bodies.items():
+        if hashlib.sha256(pe.at(address, end-address)).hexdigest() != digest:
+            raise ValueError('Report exchange or synchronization body differs')
+    checks = {
+        0x4d91ed: '81c104060000', 0x4d91f3: 'e8387c0000',
+        0x4d91ff: '81c124060000', 0x4d9205: 'e8267c0000',
+        0x4d9211: '81c144060000', 0x4d9217: 'e8147c0000',
+        0x4e0e6c: 'c70004706f00', 0x4d6ebe: 'ff1570bc6e00',
+        0x4e0dde: 'ff156cbc6e00', 0x4d93b7: 'c6400201',
+        0x4d9480: '81c104060000', 0x4d9486: 'e825daffff',
+        0x4d94ab: 'ff155cba6e00', 0x4d951a: 'e801bf0600',
+        0x4d954a: 'e8d1be0600', 0x4d9577: 'e8a4be0600',
+        0x4d95bd: '81c104060000', 0x4d95c3: 'e8e8d8ffff',
+        0x4d963f: 'e81cbd0600', 0x4d9669: 'e8f2bc0600',
+        0x4d9690: 'e8cbbc0600',
+        0x4d96d4: '3bc2', 0x4d96d6: '7564',
+        0x4d96f4: '3bca', 0x4d96f6: '7544',
+        0x4d9714: '3bd1', 0x4d9716: '7524',
+        0x4d9734: '3bc8', 0x4d9736: '0f8483000000',
+        0x4d974b: '81f9ff000000', 0x4d9771: '3daa000000',
+        0x4d979b: '83bd1cffffff02', 0x4d97cd: 'c6420200',
+        0x5453b2: 'ff1554bc6e00', 0x545472: 'ff158cbc6e00',
+        0x5453d4: 'ff150cbd6e00', 0x545494: 'ff150cbd6e00',
+    }
+    for address, encoded in checks.items():
+        raw = bytes.fromhex(encoded)
+        if pe.at(address, len(raw)) != raw:
+            raise ValueError('Report exchange instruction differs')
+    imports = {
+        0x6ebc70: 'EnterCriticalSection', 0x6ebc6c: 'LeaveCriticalSection',
+        0x6eba5c: 'HidD_FlushQueue', 0x6ebc54: 'ReadFile',
+        0x6ebc8c: 'WriteFile', 0x6ebca4: 'GetLastError',
+        0x6ebd0c: 'WaitForMultipleObjects', 0x6ebbe8: 'GetOverlappedResult',
+        0x6ebbe4: 'CancelIo', 0x6ebcf4: 'Sleep',
+    }
+    for slot, name in imports.items():
+        raw = (name+'\0').encode('ascii')
+        if pe.at(pe.base+pe.pointer(slot)+2, len(raw)) != raw:
+            raise ValueError('Report exchange import differs')
+    if pe.pointer(0x6f7004+0x14) != 0x4e0dd0:
+        raise ValueError('Synchronization leave virtual differs')
+    return {
+        'method': '0x4d9380', 'instructionChecks': len(checks),
+        'functionSHA256': {hex(k): v[1] for k, v in bodies.items()},
+        'constructorWindow': {'start': '0x4d91ea', 'endExclusive': '0x4d921c',
+                              'completeConstructor': False},
+        'synchronization': {
+            'constructedMembers': ['0x604', '0x624', '0x644'],
+            'constructor': '0x4e0e30', 'vtable': '0x6f7004',
+            'enter': '0x4d6eb0 -> EnterCriticalSection(object+8)',
+            'leaveVirtual14': '0x4e0dd0 -> LeaveCriticalSection(object+8)',
+            'exchangeWriteAndReadLockMember': '0x604',
+            'finishFollowingVirtual': 'transport+0x644 virtual+0x14 is lock release under this constructed table',
+            'notAnAdditionalSaveCommand': True,
+        },
+        'transport': {
+            'requestBytes': 64, 'shortRequest': 'zero-padded', 'longRequest': 'first64',
+            'write': '0x545420 -> WriteFile', 'read': '0x545360 -> ReadFile',
+            'overlapped': ['WaitForMultipleObjects', 'GetOverlappedResult', 'CancelIo'],
+            'timeouts': {'modeMember684Zero': 1000,
+                         'modeMember684NonzeroVID046APID0142Or0144': 2000,
+                         'modeMember684NonzeroOther': 5000},
+            'nonzeroMode': 'HidD_FlushQueue before write; object+0x32c',
+            'zeroMode': 'object+0x54',
+            'limits': 'Mode member names do not establish USB/Bluetooth/receiver identity or SET_REPORT routing.',
+        },
+        'replyComparison': {
+            'equalBytes': [3, 4, 5, 6],
+            'localReportIDChecksumPayloadComparison': False,
+            'readResultOrLengthGuardBeforeComparison': False,
+            'matchingHeader': 'return latest read result; does not verify reply statusByte7',
+            'mismatchCommandFF': 0,
+            'mismatchCommandAAWhenMode684Nonzero': -101,
+            'otherMismatch': 'Sleep(2); increment counter; second mismatch returns -101; no request resend',
+            'final': 'Sleep(1), clear transport byte+2, return saved result',
+        },
+        'hardwareWriteAuthorized': False,
+        'limits': 'Fixed executable static paths only. Runtime table replacement, endpoint selection, '
+                  'all callbacks, installed firmware and persistence remain separate evidence. '
+                  'Do not weaken product report validation or introduce rejected finish commands. '
+                  'No official execution, generated report, HID access or behavioral test.',
+    }
+
+
 def inspect_default_macro_dispatch(pe, skin=None):
     """Bound the direct default-button dispatch and alternate key wrappers."""
     checks = {
@@ -4711,7 +4806,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 103,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 104,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4738,6 +4833,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightingSenderReturnStatus": inspect_lighting_sender_return_status(pe),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
         "defaultKeyFinish": inspect_default_key_finish(pe),
+        "reportExchange": inspect_report_exchange(pe),
         "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
