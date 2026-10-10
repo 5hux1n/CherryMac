@@ -1592,6 +1592,63 @@ def inspect_settings_ui_control_actions(path):
 
 
 
+
+def inspect_settings_slider_scope(pe, skin):
+    """Separate named slider editing and model-gated visibility from sends."""
+    bodies = {
+        (0x425f70, 0x42636a): "504ef36ff65b701998a3c0cbd0f754c3d5c0408d90b386f10758a21a58604d6a",
+        (0x42a8f0, 0x42a940): "7976e8de5d3a811667adf0bcd7d0babd8ebdf47f4c2bceafd0c54fce5b4f9dbb",
+        (0x4af1b0, 0x4af32f): "ad3291e611a52cf5feac4827568addb6659c8be9834bb942601472a4d5e37d98",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end - start)).hexdigest() != digest:
+            raise ValueError("Settings slider body or model gate differs")
+    if pe.class_name(0x77813c) != ".?AVCBasicSetWnd@@" or pe.pointer(0x77813c + 0x98) != 0x425f70:
+        raise ValueError("Settings slider child virtual differs")
+    checks = {0x42608d: "687cb97200", 0x426166: "6890b57200", 0x42623f: "6860b47200",
+              0x42619f: "ff15f0b06e00", 0x4261ab: "8981100b0000", 0x426225: "e8a63b0000",
+              0x426284: "89811c0b0000", 0x426307: "e8c43a0000",
+              0x42a8f9: "6824b67200", 0x42a932: "8b8218010000",
+              0x4af462: "6a01", 0x4af46a: "e881b4f7ff", 0x4af329: "0f857e040000"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Settings slider instruction differs")
+    names = {0x72b97c: 'deng_light_slider', 0x72b590: 'kb_suspendtime_slider',
+             0x72b460: 'kb_deepsleeptime_slider', 0x72b624: 'kb_suspendtime_layout'}
+    for address, name in names.items():
+        encoded = (name + '\0').encode('utf-16-le')
+        if pe.at(address, len(encoded)) != encoded:
+            raise ValueError("Settings slider name differs")
+    get_value = b'?GetValue@CProgressUI@DuiLib@@QBEHXZ\0'
+    if pe.at(pe.base + pe.pointer(0x6eb0f0) + 2, len(get_value)) != get_value:
+        raise ValueError("Settings slider GetValue import differs")
+    resource = None
+    if skin:
+        raw = (Path(skin) / 'KbBasicSetWnd.xml').read_bytes()
+        cleaned = re.sub(r'<!--.*?-->', '', raw.decode('utf-8'), flags=re.S)
+        layouts = [tag for tag in re.findall(r'<VerticalLayout\b[^>]*>', cleaned) if 'name="kb_suspendtime_layout"' in tag]
+        if len(layouts) != 1 or 'visible="false"' not in layouts[0]:
+            raise ValueError("Sleep-layout initial visibility differs")
+        sliders = [tag for tag in re.findall(r'<Slider\b[^>]*>', cleaned) if 'name="kb_suspendtime_slider"' in tag]
+        if len(sliders) != 1 or 'min="30"' not in sliders[0] or 'max="300"' not in sliders[0]:
+            raise ValueError("Sleep-slider resource bounds differ")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(), "sleepInitialVisible": False, "sleepSliderRange": [30, 300]}
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a, b), h in bodies.items()},
+            "sliderMethod": "CBasicSetWnd virtual+0x98 ->0x425f70",
+            "namedBranches": {"deng_light_slider": "Reads value to child+a5c, updates light_edit, enables Apply",
+                              "kb_suspendtime_slider": "Reads value to child+b10, updates sleep edit, enables Apply",
+                              "kb_deepsleeptime_slider": "Reads value to child+b1c, updates deep-sleep edit, enables Apply"},
+            "pollingRelation": "This full method has no report_slider named branch; polling option selection is separately audited",
+            "sleepVisibility": {"setter": "0x42a8f0", "role": "Find kb_suspendtime_layout then virtual+0x118 with Boolean argument",
+                                "showCall": "0x4af46a with1", "pidGate": "0x4af1b0..0x4af32f",
+                                "products": [0x1b2, 0x1b1, 0xe5, 0x1c2, 0x1d7, 0xe3, 0x1de, 0x1f3,
+                                             0x1e2, 0x1da, 0x1e6, 0x1f7, 0x1ef, 0x1fb, 0x142, 0x14c],
+                                "conditionalProduct": "01DE additionally requires global0x7cd064==0",
+                                "target01CESkipsShowGroup": True, "skipTarget": "0x4af7ad"},
+            "resource": resource, "hardwareWriteAuthorized": False,
+            "limits": "Named editing and this initialization visibility path only. Shared resources do not prove target support or a settings send. Other control changes, callbacks, deep-sleep visibility and whole-program transports remain separately unproved."}
+
+
 def inspect_polling_option_selection(pe, skin):
     """Pin the actual child selection callback separately from firmware sends."""
     bodies = {
@@ -3591,7 +3648,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 84,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 85,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3623,6 +3680,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "settingsWindowNotifications": inspect_settings_window_messages(pe),
         "settingsChildPollingUpdate": inspect_settings_child_polling_message(pe),
         "pollingOptionSelection": inspect_polling_option_selection(pe, skin),
+        "settingsSliderScope": inspect_settings_slider_scope(pe, skin),
         "settingsStatusPredicate": inspect_settings_status_predicate(pe),
         "systemDevicePaths": inspect_system_device_paths(pe),
         "settingsPostApplyDeviceList": inspect_settings_post_apply(pe),
