@@ -957,6 +957,52 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_macro_extra_mouse_handlers(image):
+    """Pin type2/3 mouse-cache updates without inventing a wheel output codec."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Extra mouse evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x28ca0,0x28cd8):"c82efe604ed8686e2e76aad23f5a8741b0c4822bdd0d3e8e884da89f6086a4fb",
+        (0x28cf4,0x28d2c):"83b6bdc829cfa1dfbed49ddd73a8fd0df3fd06a82027acf9cf701d1e3f782dc1",
+        (0x2f8a6,0x2f8ca):"222093c2f2710bf0cbfb2a138762b1d20a66cc3ee3fbf8d2ba267f35db60a61c",
+        (0x2f8fe,0x2f922):"8dce5b6cf72e9b3fcf0c0abfb0eb8707f8633f41ca7326f2b99439c6004ff257",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Extra macro mouse handler differs")
+    literals={0x28cd8:0x20009ad4,0x28cf0:0x20004c3c,
+              0x28d2c:0x20009ad4,0x28d44:0x20004c3c,
+              0x2f974:0x20009ad4}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Extra mouse state/cache literal differs")
+    descriptor=at(0x4c1c4,268)
+    digest=hashlib.sha256(descriptor).hexdigest()
+    if digest!="e6b1b1f2c53bf00ca9a66a52e8fe8d63e293c64b7875f8d518480446b6c0bbd9":
+        raise ValueError("USB HID descriptor differs")
+    spec=importlib.util.spec_from_file_location('cherrymac_hid_layout',Path(__file__).with_name('hid-report-layout.py'))
+    layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
+    mouse=next(row for row in layout.parse_descriptor(descriptor) if row['id']==2 and row['direction']=='input')
+    if mouse['bits']!=48 or mouse['fields'][1]['offsetBits']!=8 or mouse['fields'][1]['local'].get('usage')!=0x38:
+        raise ValueError("Mouse wheel report layout differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "macroType2":{"dispatch":"0x2f8a6","helper":"0x28ca0","argument0":0,
+                "argument1":"Macro payload byte", "conditionalCacheStore":"RAM0x20004c3c+6"},
+            "macroType3":{"dispatch":"0x2f8fe","helper":"0x28cf4","argument0":0,
+                "argument1":"Macro payload byte", "conditionalCacheStore":"RAM0x20004c3c+5"},
+            "stateGate":{"RAM":"0x20009ad4","macroHandlers":"Both set0xff before calling helper",
+                "helper":"Copies low/high mode nibble and payload into staging state, sets dirty flag; writes cache only when gate nonzero",
+                "afterMacroHelper":"Both call held-state helper0x2f660 then clear three per-kind staging bytes"},
+            "USBMouseDescriptor":{"ROM":"0x4c1c4","bytes":268,"SHA256":digest,"report":mouse,
+                "difference":"Declared Wheel is payload byte1; internal handler byte5/6 are not directly that report position"},
+            "outputConversionProved":False,"wheelCodecCreated":False,
+            "limits":"Fixed0104 intermediate cache producers only. Does not identify type2/3 as vertical/horizontal wheel, signed delta ranges, current firmware behavior or Windows recorder producers. Descriptor presence is not macro-output proof. No new macro encoding, reports, simulation or hardware access."}
+
+
 def inspect_feature_configurable_module(image):
     """Pin the real one-module section and descriptor/fetch branch, no peer erase."""
     def at(address,size):
@@ -1361,7 +1407,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 29,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 30,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1399,6 +1445,7 @@ def inspect(path):
             'controlReportReadSources': inspect_control_report_read_sources(image),
             'featureConfigurationChannel': inspect_feature_configuration_channel(image),
             'featureConfigurableModule': inspect_feature_configurable_module(image),
+            'macroExtraMouseHandlers': inspect_macro_extra_mouse_handlers(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
