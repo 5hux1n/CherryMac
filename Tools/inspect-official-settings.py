@@ -2297,6 +2297,52 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_notify_parent_map_matching(path):
+    """Pin the terminal parent map and exact event-type matching semantics."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Notify parent-map DuiLib image differs")
+    pe = PE32(data)
+    bodies = {
+        (0x11001450, 0x11001509): "aba8f4375d42356340c15684e0b4b2816a14530a315965ee82e2b0210cd8c9a5",
+        (0x110501d0, 0x110501d7): "adf5734cb19952ef6a8ff664e1ed762459032712ad8f47669db4e934f719ebb2",
+        (0x11050a20, 0x11050b8a): "f007462df490fb655cef31a36cc6051f2f5ad53fca8318b21b2667b97426d5a7",
+        (0x1104e390, 0x1104e3c2): "36a3b55b39082dc724f57d79ee40eb2be8a498650d5125a72b844041f8b8398e",
+        (0x1104ebe0, 0x1104ebff): "461a72dd97bded337ee9334ebce629461cfddffa2fcb8a94bc5f9cb1b1a33fbb",
+        (0x110ce8eb, 0x110ce92b): "c31ff9718bf45a10a480595cc11c6e44fc63114d59267081fc800b78703ef915",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Notify parent initialization or matcher differs")
+    if struct.unpack("<2I", pe.at(0x11119820, 8)) != (0x110501d0, 0x11166288):
+        raise ValueError("Notify parent-map header differs")
+    checks = {0x1100147c: "b988621611", 0x11001494: "b90c631611",
+              0x1100149e: "c7059063161100000000", 0x110501d3: "33c0",
+              0x11050a92: "83b90801000000", 0x11050a99: "0f849f000000",
+              0x11050aae: "e8ddd8ffff", 0x11050ab8: "7473",
+              0x11050acd: "7555", 0x11050b30: "81c120010000",
+              0x1104e3a0: "e83b080000", 0x1104ebf1: "e8f5fc0700"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Notify parent terminator or matcher instruction differs")
+    if pe.at(0x1110d660, 2) != b"\0\0":
+        raise ValueError("Notify parent initializer empty name differs")
+    return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "parentMap": {"address": "0x11119820", "entry": "0x11166288", "initializer": "0x11001450",
+                          "firstEntrySignature": 0, "parentGetter": "0x110501d0 returns null"},
+            "matcher": {"method": "0x11050a20", "entryBytes": 0x120,
+                        "terminator": "Signature0 ends search before comparing this row's strings",
+                        "eventType": "Exact UTF16 comparison; zero comparison result means equality",
+                        "senderClassFilter": "Only after event-type equality; empty filter retains same-type fallback entry"},
+            "mainpageTabselectBoundary": "Fixed four named own types do not match tabselect; terminal parent has no handlers",
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed initialized mainpage/CNotifyPump map definitions and matching logic only. "
+                      "Not a runtime snapshot or a proof about other named receivers, main-window own tables, "
+                      "control delegates, later table mutation, sender virtual methods or whole-program reports."}
+
+
 def inspect_mainpage_message_map(pe):
     """Pin real static initialization rather than treating unbacked data as an empty map."""
     bodies = {
@@ -4309,7 +4355,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 96,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 97,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4367,6 +4413,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "windowBaseNotifyRouting": inspect_window_base_notify_routing(pe, ui_dll, skin) if ui_dll else None,
         "virtualWindowNameSources": inspect_virtual_window_name_sources(pe, ui_dll) if ui_dll else None,
         "mainpageMessageMap": inspect_mainpage_message_map(pe),
+        "notifyParentMapMatching": inspect_notify_parent_map_matching(ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
