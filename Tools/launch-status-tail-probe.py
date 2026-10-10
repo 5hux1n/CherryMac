@@ -67,8 +67,8 @@ def save_identical(path, raw):
         return False
 
 
-def analyzer():
-    path = Path(__file__).resolve().with_name('inspect-status-tail-receipt.py')
+def analyzer(alias=False):
+    path = Path(__file__).resolve().with_name('inspect-status-alias-receipt.py' if alias else 'inspect-status-tail-receipt.py')
     spec = importlib.util.spec_from_file_location('cherrymac_status_tail_review', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -102,6 +102,8 @@ def collect(ticket_path):
     copied = save_identical(target, raw)
     diagnosis_path = ticket_path.parent / ('status-tail-review-' + ticket['operationID'] + '.json')
     try:
+        if 'aliasCorrelationScope' in receipt:
+            review = analyzer(alias=True)
         diagnosis = review.inspect(receipt)
         diagnosis['receiptSHA256'] = hashlib.sha256(raw).hexdigest()
     except (ValueError, TypeError, KeyError) as error:
@@ -110,16 +112,16 @@ def collect(ticket_path):
                      'completeBackupCreated': False, 'authorizesRestoreOrPairing': False}
     save_identical(diagnosis_path, (json.dumps(diagnosis, ensure_ascii=False, indent=2) + '\n').encode())
     return {'status': receipt['status'], 'receipt': str(target), 'review': str(diagnosis_path),
-            'rawFileCreated': copied, 'diagnosisAccepted': diagnosis['format'] == 'CherryMacStatusTailReceiptReview',
+            'rawFileCreated': copied, 'diagnosisAccepted': diagnosis['format'] in ('CherryMacStatusTailReceiptReview', 'CherryMacStatusAliasReceiptReview'),
             'error': receipt.get('error'), 'relaunchPerformed': False}
 
 
-def launch(app_path, output_directory):
+def launch(app_path, output_directory, alias=False):
     app = app_path.resolve(strict=True)
     info = plistlib.loads(regular(app / 'Contents' / 'Info.plist', 16384))
-    require(info.get('CFBundleIdentifier') == 'local.cherrymac.read-only-probe.v4' and
-            info.get('CFBundleShortVersionString') == '0.4.0' and
-            info.get('CFBundleExecutable') == 'CherryMacReadOnlyProbe', '需要已构包的独立v4只读工具。')
+    require(info.get('CFBundleIdentifier') == ('local.cherrymac.read-only-probe.v5' if alias else 'local.cherrymac.read-only-probe.v4') and
+            info.get('CFBundleShortVersionString') == ('0.5.0' if alias else '0.4.0') and
+            info.get('CFBundleExecutable') == 'CherryMacReadOnlyProbe', '需要与指定模式对应的独立v4／v5只读工具。')
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     output_directory.mkdir(parents=True, exist_ok=True)
     out = output_directory.resolve(strict=True)
@@ -132,7 +134,7 @@ def launch(app_path, output_directory):
             'stagingDirectory': str(stage), 'receiptPath': str(receipt)}
     # Save launch intent before asking LaunchServices to open the App.
     exclusive(ticket, (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode())
-    subprocess.run(['open', '-n', '-a', str(app), '--args', str(receipt), '--status-tail-candidates'], check=True)
+    subprocess.run(['open', '-n', '-a', str(app), '--args', str(receipt), '--status-alias-correlation' if alias else '--status-tail-candidates'], check=True)
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         if receipt.exists():
@@ -151,11 +153,12 @@ if __name__ == '__main__':
     start = actions.add_parser('launch')
     start.add_argument('app', type=Path)
     start.add_argument('output_directory', type=Path)
+    start.add_argument('--alias-correlation', action='store_true', help='Requires the separate v5 App; fixed prefix comparisons only')
     saved = actions.add_parser('collect')
     saved.add_argument('ticket', type=Path)
     args = parser.parse_args()
     try:
-        result = launch(args.app, args.output_directory) if args.action == 'launch' else collect(args.ticket)
+        result = launch(args.app, args.output_directory, args.alias_correlation) if args.action == 'launch' else collect(args.ticket)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, ValueError, TypeError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\n')
