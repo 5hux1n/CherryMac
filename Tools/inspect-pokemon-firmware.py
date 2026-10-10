@@ -958,6 +958,52 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_mouse_cache_event_conversion(image):
+    """Pin cache -> keyboard_event -> HID-state accumulator -> output event."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Mouse conversion evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x28500,0x28560):"d78735c0b9cd4c42c6354207a310778c7debdc4dd7f71911393670c2742b95a2",
+        (0x263d6,0x2640e):"e63a8cf963735ff28867ed773d00b481f49810afffdf56f64a6e3a632b1b1bab",
+        (0x25ad2,0x25b2c):"3a5c3a647e2fe90f1049e9411f3d53da21f8e2fef8262415384465c610aff167",
+        (0x259a0,0x259e2):"4bc2b9684e83313f0037634d78c02f7968d5a36ec319d959349ac0848592ac0d",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Mouse cache/event conversion differs")
+    literals={0x2867c:0x20004c3c,0x28660:0x52718,0x26068:0x52718}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Mouse cache/event source literal differs")
+    if at(0x2599a,6)!=bytes.fromhex('fe216ff07e08') or at(0x25bf2,10)!=bytes.fromhex('6ff0fd014ff07f08d1e6'):
+        raise ValueError("Mouse scroll saturation branches differ")
+    name=struct.unpack('<I',at(0x52718,4))[0]
+    if name!=0x4f4e4 or at(name,15)!=b'keyboard_event\0':
+        raise ValueError("Mouse intermediate event type differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "cachePublisher":{"entry":"0x28500","event":"keyboard_event","subtype":2,
+                "cacheRAM":"0x20004c3c", "fields":{"buttons":"cache0 -> event+8",
+                    "X":"cache1/2 -> event+0x8a", "Y":"cache3/4 -> event+0x8c",
+                    "cache5":"LDRB zero-extends byte -> halfword at event+0x8e",
+                    "cache6":"LDRB zero-extends byte -> halfword at event+0x90"}},
+            "stateConsumer":{"entry":"0x263d6","stride":284,
+                "X":"Add event+0x8a to state+0x10c", "Y":"Add event+0x8c to state+0x10e",
+                "scrollAccumulator":"Add event+0x8e to state+0x110",
+                "ignoredInNamedBranch":"event+0x90 is not loaded; no horizontal output inferred"},
+            "serializer":{"entry":"0x25ad2","scrollLoad":"Signed halfword at state+0x110",
+                "ordinaryScroll":"Accumulator -253..253: truncate toward zero after division by2; retain residual by subtracting twice output",
+                "outsideRange":"Branches0x2599a/0x25bf2 choose -127/+127 and adjust residual",
+                "outputEvent":"0x259a0..0x259e2 allocates and publishes 7 data bytes: ID2, buttons, X16, Y16, scroll8",
+                "Y":"The named path negates Y before bounding; X and Y use separate limits",
+                "wireOrderNotProved":"Serialized event order puts scroll last; pinned USB descriptor puts Wheel at payload byte1"},
+            "macroRelation":"Type3 cache+5 reaches the named scroll accumulator through a zero-extended intermediate byte. Type2 cache+6 is not consumed by this branch",
+            "limits":"Fixed0104 intermediate output chain only. No assumption of correct signed macro scroll or direct wire-byte equivalence; USB/BLE final transport conversion, current0102, Windows producers and physical behavior remain unproved. No new codec, reports, simulation or device access."}
+
+
 def inspect_macro_extra_mouse_handlers(image):
     """Pin type2/3 mouse-cache updates without inventing a wheel output codec."""
     def at(address,size):
@@ -1407,7 +1453,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 30,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 31,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1446,6 +1492,7 @@ def inspect(path):
             'featureConfigurationChannel': inspect_feature_configuration_channel(image),
             'featureConfigurableModule': inspect_feature_configurable_module(image),
             'macroExtraMouseHandlers': inspect_macro_extra_mouse_handlers(image),
+            'mouseCacheEventConversion': inspect_mouse_cache_event_conversion(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
