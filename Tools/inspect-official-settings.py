@@ -2292,6 +2292,73 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_light_info_fallback_initialization(pe):
+    """Identify fresh host-object defaults, without treating them as firmware defaults."""
+    bodies = {
+        (0x482e10, 0x482e3d): "82f1086166a340cdbe2e1ab2e9255cfa8b544659d746e5be8dc021761b6e7ca8",
+        (0x47a8f0, 0x47ab8a): "ac26cbb8be66cb34a2322f55f44d5264a997b4f439a44f869b53791c63bbf8aa",
+    }
+    for (start, end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != expected:
+            raise ValueError("LightInfo host constructor body differs")
+    if pe.class_name(0x77d174) != ".?AVCKeyboardProfiledata@@":
+        raise ValueError("LightInfo profile class differs")
+    checks = {0x482e1a: "e8d17affff", 0x482e22: "c70074d17700",
+              0x47aa58: "c645b400", 0x47aa5c: "6a2e", 0x47aa5e: "6a00",
+              0x47aa60: "8d55b5", 0x47aa64: "e837c82000",
+              0x47aa72: "81c743010000", 0x47aa78: "b90b000000",
+              0x47aa7d: "8d75b4", 0x47aa80: "f3a5", 0x47aa82: "66a5", 0x47aa84: "a4",
+              0x47aa8b: "81c714010000", 0x47aa91: "b90b000000",
+              0x47aa96: "8d75b4", 0x47aa99: "f3a5", 0x47aa9b: "66a5", 0x47aa9d: "a4"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("LightInfo host zero-default initialization differs")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "profileConstructor": "0x482e10 -> base constructor0x47a8f0",
+            "local": "ebp-0x4c; first byte zero plus remaining46 memset zero",
+            "initialCopies": [{"destination": "configuration+0x143", "bytes": 47, "value": "all zero"},
+                              {"destination": "configuration+0x114", "bytes": 47, "value": "all zero"}],
+            "hardwareWriteAuthorized": False,
+            "limits": "Fresh fixed host-object constructor only. Subsequent setters, configuration loads, "
+                      "other mutations and runtime lifetime are not covered. These zeros are not "
+                      "keyboard defaults or missing backup bytes, and do not authorize any hardware write."}
+
+
+def inspect_tab_notify_dispatch(path):
+    """Pin synchronous versus queued dispatch for the observed tab call argument."""
+    tab = inspect_light_mode_tab_selection(path, None)
+    pe = PE32(Path(path).read_bytes())
+    bodies = {
+        (0x11068ad0, 0x11068b78): "54f2cf04422170b6e26948b49ab9470a657bd52aaa61ad63115c1a2613df781a",
+        (0x11068820, 0x11068ac1): "05567e6011dab721911a89ae2fe45c015e35742259b3d970527cfed187a10eb7",
+    }
+    for (start, end), expected in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != expected:
+            raise ValueError("Tab notify dispatch body differs")
+    checks = {0x11068b34: "0fb64d18", 0x11068b46: "e8d5fcffff",
+              0x110688e7: "0fb6550c", 0x110688ed: "0f859c000000",
+              0x1106891b: "e8204dfeff", 0x11068941: "81c178020000",
+              0x11068984: "8b02", 0x11068986: "ffd0",
+              0x11068a7f: "81c1d8020000", 0x11068a8e: "6801800000",
+              0x11068aa0: "ff15d8d31011"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Tab notify synchronous branch differs")
+    return {"dllSHA256": tab["dllSHA256"], "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "wrapper": "0x11068ad0 ->0x11068820", "BooleanArgument": "wrapper+0x18 -> core+0x0c",
+            "targetTabArgument": tab["notification"]["lastArgument"],
+            "targetTabRoute": "zero: synchronous control callbacks and manager notifier loop",
+            "controlCallback": {"member": "sender+0x38", "call": "0x1106891b ->0x1104d640",
+                                "condition": "preceding delegate check nonzero"},
+            "managerNotifiers": {"collection": "manager+0x278", "call": "0x11068986 listener virtual+0"},
+            "nonzeroArgumentRoute": "separate queue manager+0x2d8 and message0x8001",
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed dispatch mechanics only. Individual delegates/listeners, reentrant callbacks, "
+                      "registration and runtime manager state remain unclassified; synchronous notification "
+                      "is not a HID report or proof that the original apply call has no indirect sends."}
+
+
 def inspect_light_info_getter_gaps(pe):
     """Separate zeroed JSON conversion from the other 47-byte fallback copy."""
     start, end = 0x47ade0, 0x47b315
@@ -4020,7 +4087,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 91,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 92,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4072,6 +4139,8 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightModeTabSelection": inspect_light_mode_tab_selection(ui_dll, skin) if ui_dll else None,
         "lightInfoSetterFields": inspect_light_info_setter_fields(pe),
         "lightInfoGetterGaps": inspect_light_info_getter_gaps(pe),
+        "lightInfoFallbackInitialization": inspect_light_info_fallback_initialization(pe),
+        "tabNotifyDispatch": inspect_tab_notify_dispatch(ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
