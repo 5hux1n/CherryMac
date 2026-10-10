@@ -34,6 +34,9 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     var rawMouseValues:[[String:Any]]=[]
     var registryID:UInt64?,reportDescriptor:Data?
     var diagnosticOnly=false
+    var baselineLogSHA256:String?
+    var diagnosticEndedMilliseconds:Int?
+    var observationHasStarted=false
     var terminalError:String?
     var pendingLogSave=false,lastLogSaveMilliseconds:Int?
     init(directory:URL?=nil){
@@ -55,7 +58,26 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             metadata["reportDescriptorSHA256"]=SHA256.hash(data:reportDescriptor).map{String(format:"%02x",$0)}.joined()
         }
         if let terminalError{metadata["error"]=terminalError}
-        if let baseline,!FileManager.default.fileExists(atPath:directory.appendingPathComponent("baseline.json").path){try HardwareProfile(snapshot:baseline).encoded().write(to:directory.appendingPathComponent("baseline.json"),options:.atomic)}
+        if let baseline,baselineLogSHA256==nil{
+            let file=directory.appendingPathComponent("baseline.json")
+            guard !FileManager.default.fileExists(atPath:file.path) else{throw HardwareError(message:"基线文件已存在，不能覆盖或采用未绑定记录。")}
+            let data=try HardwareProfile(snapshot:baseline).encoded()
+            try data.write(to:file,options:.atomic)
+            guard try Data(contentsOf:file)==data else{throw HardwareError(message:"观察基线保存后的读回不一致。")}
+            baselineLogSHA256=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+        }
+        if let baselineLogSHA256,let baseline,let macro,let playback{
+            metadata["baselineSHA256"]=baselineLogSHA256
+            metadata["observationContext"]=["format":"CherryMacMacroObservationContext","version":1,
+                "slot":102,"binding":Array(baseline.keymap[306..<309]),
+                "macro":try JSONSerialization.jsonObject(with:encode(macro)),
+                "playback":try JSONSerialization.jsonObject(with:encode(playback)),"source":source.rawValue,
+                "startedMilliseconds":startedMilliseconds,"started":observationHasStarted]
+        }
+        if let diagnosticEndedMilliseconds{
+            metadata["diagnosticEnd"]=["milliseconds":diagnosticEndedMilliseconds,
+                "source":"userAcknowledged","physicalTriggerVerified":false,"quietIntervalVerified":false]
+        }
         if let evidence,let macro,let playback {
             let log=MacroExecutionLog(format:"CherryMacMacroExecution",version:1,macro:macro,playback:playback,source:source,startedMilliseconds:startedMilliseconds,
                 events:evidence.observations,stop:stopMarker,assessedMilliseconds:max(now,lastMilliseconds),interruptions:interruptions)
@@ -96,7 +118,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func begin(at now:Int)throws {
         guard phase=="ready",adapter.allReleased,let macro,let playback else{throw HardwareError(message:"请先完成读取并松开全部键。")}
         evidence=diagnosticOnly ? nil:try MacroExecutionEvidence(macro:macro,playback:playback,source:source,startedMilliseconds:now)
-        startedMilliseconds=now;lastMilliseconds=now;phase="observing";startButton.isEnabled=false
+        startedMilliseconds=now;lastMilliseconds=now;observationHasStarted=true;phase="observing";startButton.isEnabled=false
         stopButton.isEnabled=diagnosticOnly
         status.stringValue=diagnosticOnly ? "请触发计算器键绑定的宏；先用键盘停止持续输出，再点击结束诊断。这里只保存日志。":playback.mode == .count ? "请按下并松开计算器键一次，等待自动检查。":"请触发宏，观察至少两轮；按官方方式停止后，再用鼠标点击停止确认。"
         try persist(at:now)
@@ -124,6 +146,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
         rawMouseValues.append(["reportID":2,"page":page,"usage":usage,"value":value,
             "milliseconds":now,"registryID":String(registryID)])
+        lastMilliseconds=max(lastMilliseconds,now)
         // Record zero movement, wheel and unchanged buttons too; these values
         // must not be mistaken for the filtered macro-event projection.
         pendingLogSave=true
@@ -140,6 +163,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         }
         rawMouseReports.append(["reportID":2,"result":Int(result),"bytes":bytes,
             "receivedLength":bytes.count,"milliseconds":now,"registryID":String(registryID)])
+        lastMilliseconds=max(lastMilliseconds,now)
         guard result==0,!bytes.isEmpty else{invalidate(.reportRejected,"鼠标原始报告回调失败或长度无效。");return}
         // Raw bytes supplement diagnosis only; never manufacture macro events
         // or replace the existing decoded-value assessment with these bytes.
@@ -184,6 +208,8 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         guard diagnosticOnly,phase=="observing",adapter.allReleased else{throw HardwareError(message:"请先停止输出并松开按键，再结束诊断。")}
         // User acknowledgement closes capture, not a successful stop/playback
         // assessment. Keep it distinct from the execution-complete phase.
+        guard now>=startedMilliseconds,now>=lastMilliseconds else{throw HardwareError(message:"诊断结束时钟无效。")}
+        diagnosticEndedMilliseconds=now
         phase="diagnosticComplete";timer?.invalidate();stopButton.isEnabled=false;pendingLogSave=true
         do{try persist(at:now)}catch{invalidate(.loggingFailed,"诊断最终日志保存失败："+error.localizedDescription);throw error}
         status.stringValue="诊断观察记录已保存，尚未判定宏输出通过。"
@@ -275,7 +301,9 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
                 for cycle in 0..<2{for (index,step) in macro.steps.enumerated(){looping.receive(page:7,usage:UInt32(step.usage),value:step.pressed ? 1:0,at:1000+cycle*100+index*10)}}
                 looping.poll(at:1420);precondition(looping.phase=="observing")
                 try looping.markStop(at:1420,source:.simulation);looping.poll(at:1710);precondition(looping.phase=="complete")
-                let interrupted=MacroObserverTestController(directory:subfolder)
+                let interruptedFolder=folder.appendingPathComponent(mode.rawValue+"-interrupted")
+                try FileManager.default.createDirectory(at:interruptedFolder,withIntermediateDirectories:true)
+                let interrupted=MacroObserverTestController(directory:interruptedFolder)
                 try interrupted.configure(snapshot,source:.simulation);try interrupted.begin(at:1000)
                 interrupted.invalidate(.observerDisconnected,"simulated disconnect");interrupted.poll(at:1710)
                 precondition(interrupted.phase=="failed")
