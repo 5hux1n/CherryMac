@@ -1211,20 +1211,58 @@ enum WindowsProfile {
             guard !operationID.isEmpty,operationID != ".",operationID != "..",operationID.utf8.count<=128,operationID.unicodeScalars.allSatisfy({allowed.contains($0)}) else{throw HardwareError(message:"默认恢复存储标识无效。")}
             self.operationID=operationID;directory=root.appendingPathComponent("operation-"+operationID,isDirectory:true)
         }
-        private func locked<T>(_ body:()throws->T)throws->T {
+        private func locked<T>(create:Bool=true,_ body:()throws->T)throws->T {
             lock.lock();defer{lock.unlock()}
-            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
-            let descriptor=Darwin.open(directory.appendingPathComponent(".lock").path,O_CREAT|O_RDWR|O_NOFOLLOW,0o600)
+            if create {
+                var missing:[URL]=[],cursor=directory.standardizedFileURL
+                while !FileManager.default.fileExists(atPath:cursor.path) {
+                    missing.append(cursor);let parent=cursor.deletingLastPathComponent()
+                    guard parent.path != cursor.path else{throw HardwareError(message:"默认恢复记录目录无效。")};cursor=parent
+                }
+                try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+                for folder in missing.reversed(){try syncDirectory(folder);try syncDirectory(folder.deletingLastPathComponent())}
+            }
+            let attributes=try FileManager.default.attributesOfItem(atPath:directory.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else{throw HardwareError(message:"默认恢复记录目录无效。")}
+            let flags=(create ? O_CREAT|O_RDWR:O_RDONLY)|O_NOFOLLOW|O_NONBLOCK
+            let descriptor=Darwin.open(directory.appendingPathComponent(".lock").path,flags,0o600)
             guard descriptor>=0 else{throw HardwareError(message:"无法打开默认恢复记录锁。")}
             defer{Darwin.close(descriptor)}
+            var info=stat()
+            guard fstat(descriptor,&info)==0,(info.st_mode & S_IFMT)==S_IFREG else{throw HardwareError(message:"默认恢复记录锁类型无效。")}
             guard flock(descriptor,LOCK_EX|LOCK_NB)==0 else{throw HardwareError(message:"默认恢复记录正被其他进程使用。")}
             defer{flock(descriptor,LOCK_UN)}
             return try body()
         }
         private func read(_ url:URL)throws->Data {
-            let values=try url.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey,.isSymbolicLinkKey])
-            guard values.isRegularFile==true,values.isSymbolicLink != true,let size=values.fileSize,size<=16_000_000 else{throw HardwareError(message:"默认恢复记录文件类型或大小无效。")}
-            let data=try Data(contentsOf:url);guard data.count<=16_000_000 else{throw HardwareError(message:"默认恢复记录超过 16 MB。")};return data
+            let descriptor=Darwin.open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+            guard descriptor>=0 else{throw HardwareError(message:"默认恢复记录无法读取。")}
+            let handle=FileHandle(fileDescriptor:descriptor,closeOnDealloc:true);defer{try? handle.close()}
+            var info=stat()
+            guard fstat(descriptor,&info)==0,(info.st_mode & S_IFMT)==S_IFREG,info.st_size>0,info.st_size<=16_000_000 else{throw HardwareError(message:"默认恢复记录文件类型或大小无效。")}
+            let data=try handle.read(upToCount:16_000_001) ?? Data()
+            guard data.count==Int(info.st_size),data.count<=16_000_000 else{throw HardwareError(message:"默认恢复记录读取不完整或超过 16 MB。")};return data
+        }
+        private func syncDirectory(_ folder:URL)throws {
+            let descriptor=Darwin.open(folder.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+            guard descriptor>=0 else{throw HardwareError(message:"无法同步默认恢复记录目录。")};defer{Darwin.close(descriptor)}
+            var info=stat()
+            guard fstat(descriptor,&info)==0,(info.st_mode & S_IFMT)==S_IFDIR,fsync(descriptor)==0 else{throw HardwareError(message:"默认恢复记录目录同步失败。")}
+        }
+        private func syncExisting(_ url:URL)throws {
+            let descriptor=Darwin.open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+            guard descriptor>=0 else{throw HardwareError(message:"无法同步默认恢复记录。")};defer{Darwin.close(descriptor)}
+            var info=stat()
+            guard fstat(descriptor,&info)==0,(info.st_mode & S_IFMT)==S_IFREG,fsync(descriptor)==0 else{throw HardwareError(message:"默认恢复记录同步失败。")}
+            try syncDirectory(directory)
+        }
+        private func writeNew(_ data:Data,to url:URL)throws {
+            let descriptor=Darwin.open(url.path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0o600)
+            guard descriptor>=0 else{throw HardwareError(message:"无法新建默认恢复记录，原文件不覆盖。")}
+            let handle=FileHandle(fileDescriptor:descriptor,closeOnDealloc:true);defer{try? handle.close()}
+            try handle.write(contentsOf:data);try handle.synchronize();try handle.close()
+            try syncDirectory(directory)
+            guard try read(url)==data else{throw HardwareError(message:"默认恢复记录读回校验失败。")}
         }
         private func encode<T:Encodable>(_ value:T)throws->Data {
             let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
@@ -1234,9 +1272,8 @@ enum WindowsProfile {
             try snapshot.validate();guard snapshot.colors != nil,snapshot.macroData != nil else{throw HardwareError(message:"默认恢复备份不完整。")}
             try locked {
                 let url=directory.appendingPathComponent("before.json"),data=try encode(snapshot)
-                if FileManager.default.fileExists(atPath:url.path){guard try read(url)==data else{throw HardwareError(message:"此事务已有不同备份，不覆盖。")};return}
-                try data.write(to:url,options:.atomic)
-                guard try read(url)==data else{throw HardwareError(message:"默认恢复备份读回校验失败。")}
+                if FileManager.default.fileExists(atPath:url.path){guard try read(url)==data else{throw HardwareError(message:"此事务已有不同备份，不覆盖。")};try syncExisting(url);return}
+                try writeNew(data,to:url)
             }
         }
         func persist(_ record:DefaultTransactionRecord)throws {
@@ -1246,8 +1283,8 @@ enum WindowsProfile {
                 let before=try JSONDecoder().decode(HardwareSnapshot.self,from:read(directory.appendingPathComponent("before.json")))
                 guard before==record.started else{throw HardwareError(message:"默认恢复事务与写前备份不一致。")}
                 let bindingURL=directory.appendingPathComponent("binding.json"),bindingData=try encode(Binding(record))
-                if FileManager.default.fileExists(atPath:bindingURL.path){guard try read(bindingURL)==bindingData else{throw HardwareError(message:"默认恢复事务来源已改变，不混用记录。")}}
-                else{try bindingData.write(to:bindingURL,options:.atomic);guard try read(bindingURL)==bindingData else{throw HardwareError(message:"默认恢复来源记录读回校验失败。")}}
+                if FileManager.default.fileExists(atPath:bindingURL.path){guard try read(bindingURL)==bindingData else{throw HardwareError(message:"默认恢复事务来源已改变，不混用记录。")};try syncExisting(bindingURL)}
+                else{try writeNew(bindingData,to:bindingURL)}
 
                 let existing=try FileManager.default.contentsOfDirectory(atPath:directory.path).filter{$0.hasPrefix("event-") && $0.hasSuffix(".json")}
                 let positions=try existing.map{name->Int in
@@ -1256,8 +1293,7 @@ enum WindowsProfile {
                 let sequence=(positions.max() ?? 0)+1
                 let digits=String(sequence)
                 let url=directory.appendingPathComponent("event-"+String(repeating:"0",count:max(0,20-digits.count))+digits+"-"+UUID().uuidString+".json")
-                try data.write(to:url,options:.atomic)
-                guard try read(url)==data else{throw HardwareError(message:"默认恢复日志读回校验失败。")}
+                try writeNew(data,to:url)
             }
         }
         func execute(review:DefaultConfigurationReview,recovery:DefaultRecoveryPlan?=nil,source:String,
@@ -1279,7 +1315,7 @@ enum WindowsProfile {
             })
         }
         func records()throws->[DefaultTransactionRecord] {
-            try locked {
+            try locked(create:false) {
                 let before=try JSONDecoder().decode(HardwareSnapshot.self,from:read(directory.appendingPathComponent("before.json")))
                 try before.validate();guard before.colors != nil,before.macroData != nil else{throw HardwareError(message:"默认恢复备份不完整。")}
                 let urls=try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:[.creationDateKey]).filter{$0.lastPathComponent.hasPrefix("event-") && $0.pathExtension=="json"}

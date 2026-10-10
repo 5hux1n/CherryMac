@@ -67,14 +67,14 @@ export async function saveDefaultBackup(operationID,snapshot){
   requireThat(typeof operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(operationID),'默认恢复存储标识无效。');validateSnapshot(snapshot,true);
   const value={operationID,snapshot:clone(snapshot)},database=await defaultDB();
   return new Promise((resolve,reject)=>{
-    const transaction=database.transaction('backups','readwrite'),store=transaction.objectStore('backups');let failure=null;
+    const transaction=strictWriteTransaction(database,'backups'),store=transaction.objectStore('backups');let failure=null,verified=false;
     const fail=error=>{failure=error;transaction.abort();};
-    const check=request=>{request.onsuccess=()=>{if(!equal(request.result,value))fail(new Error('默认恢复备份读回校验失败。'));};};
+    const check=request=>{request.onsuccess=()=>{if(!equal(request.result,value))fail(new Error('默认恢复备份读回校验失败。'));else verified=true;};};
     const existing=store.get(operationID);existing.onsuccess=()=>{
-      if(existing.result!=null){if(existing.result.operationID!==operationID||!equal(existing.result.snapshot,value.snapshot))fail(new Error('此事务已有不同备份，不覆盖。'));return;}
+      if(existing.result!=null){if(existing.result.operationID!==operationID||!equal(existing.result.snapshot,value.snapshot))fail(new Error('此事务已有不同备份，不覆盖。'));else verified=true;return;}
       const added=store.add(value);added.onsuccess=()=>check(store.get(operationID));
     };
-    transaction.oncomplete=()=>resolve(clone(value));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复备份保存失败。'));
+    transaction.oncomplete=()=>verified?resolve(clone(value)):reject(new Error('默认恢复备份尚未核对。'));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复备份保存失败。'));
   });
 }
 export async function saveDefaultTransaction(input){
@@ -82,18 +82,21 @@ export async function saveDefaultTransaction(input){
   requireThat(new TextEncoder().encode(JSON.stringify(record)).length<=16_000_000,'默认恢复记录超过 16 MB。');
   const database=await defaultDB();
   return new Promise((resolve,reject)=>{
-    const transaction=database.transaction(['backups','records'],'readwrite');let failure=null,saved=null;
+    const transaction=strictWriteTransaction(database,['backups','records']);let failure=null,saved=null,recordVerified=false,bindingVerified=false;
     const fail=error=>{failure=error;transaction.abort();};
     const backup=transaction.objectStore('backups').get(record.operationID);backup.onsuccess=()=>{
       if(!backup.result||!equal(backup.result.snapshot,record.started)){fail(new Error('默认恢复事务与写前备份不一致。'));return;}
       const binding={direction:record.direction,sourceReview:record.sourceReview,recovery:record.recovery??null,started:record.started,source:record.trace.source};
       if(backup.result.binding!=null&&!equal(backup.result.binding,binding)){fail(new Error('默认恢复事务来源已改变，不混用记录。'));return;}
-      if(backup.result.binding==null)transaction.objectStore('backups').put({...backup.result,binding});
+      if(backup.result.binding==null){
+        const expected={...backup.result,binding},store=transaction.objectStore('backups');
+        store.put(expected).onsuccess=()=>{const check=store.get(record.operationID);check.onsuccess=()=>{if(!equal(check.result,expected))fail(new Error('默认恢复来源记录读回校验失败。'));else bindingVerified=true;};};
+      }else bindingVerified=true;
 
       const store=transaction.objectStore('records'),value={operationID:record.operationID,date:new Date().toISOString(),record},added=store.add(value);
-      added.onsuccess=()=>{saved={...value,sequence:added.result};const check=store.get(added.result);check.onsuccess=()=>{if(!equal(check.result,saved))fail(new Error('默认恢复日志读回校验失败。'));};};
+      added.onsuccess=()=>{saved={...value,sequence:added.result};const check=store.get(added.result);check.onsuccess=()=>{if(!equal(check.result,saved))fail(new Error('默认恢复日志读回校验失败。'));else recordVerified=true;};};
     };
-    transaction.oncomplete=()=>resolve(clone(saved));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复日志保存失败。'));
+    transaction.oncomplete=()=>recordVerified&&bindingVerified?resolve(clone(saved)):reject(new Error('默认恢复日志或来源尚未核对。'));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复日志保存失败。'));
   });
 }
 export async function listDefaultTransactions(){
