@@ -2301,6 +2301,65 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_standard_tab_factory(path):
+    """Pin fresh standard-class construction separately from XML factory selection."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Tab-factory DuiLib image differs")
+    pe = PE32(data)
+    bodies = {
+        (0x1108ad30, 0x1108ada5): "ed4c8e33ad8a6ac2a7a60ea35d81e600da66755490dad791377e9f6cf9241daa",
+        (0x1101dc89, 0x1101dcb6): "92a56a08b1ec5cdf7da11c3ce2e642159884255a0f02196cda5c5d6ed16776c0",
+        (0x1101e420, 0x1101e4e5): "908859f591695dcefd7c1973c93239d25cfeb041d5e93447e6f040fc040a8c54",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Tab standard factory body or registration differs")
+    checks = {0x1108ad55: "6848080000", 0x1108ad75: "e836feffff",
+              0x1101dc89: "6830ad0811", 0x1101dc9e: "68ac021111",
+              0x1101dcb1: "e80a090000", 0x1101e4a6: "8b8884000000",
+              0x1101e4ac: "ffd1"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Tab factory allocation, constructor or lookup differs")
+    key = "CTabLayoutUI"
+    if pe.at(0x111102ac, len((key+"\0").encode("utf-16-le"))) != (key+"\0").encode("utf-16-le"):
+        raise ValueError("Tab standard registration key differs")
+    if pe.class_name(0x1110ff04) != ".?AVCControlFactory@DuiLib@@":
+        raise ValueError("Tab registration factory class differs")
+    if pe.class_name(0x111104fc) != ".?AVCAnimationTabLayoutUI@DuiLib@@":
+        raise ValueError("Other base-tab constructor caller class differs")
+    directory = pe.base+pe.u32(pe.u32(0x3c)+24+96)
+    count, names_count, functions, names, ordinals = struct.unpack("<5I", pe.at(directory+20, 20))
+    if not 1 <= names_count <= count <= 65536:
+        raise ValueError("Tab factory export table bounds invalid")
+    wanted = {"?CreateControl@CTabLayoutUI@DuiLib@@SAPAVCControlUI@2@XZ": 0x1108ad30,
+              "?CreateControl@CControlFactory@DuiLib@@QAEPAVCControlUI@2@VCDuiString@2@@Z": 0x1101e420,
+              "?RegistControl@CControlFactory@DuiLib@@QAEXVCDuiString@2@P6APAVCControlUI@2@XZ@Z": 0x1101e5c0}
+    found = {}
+    for index in range(names_count):
+        name = pe.at(pe.base+pe.pointer(pe.base+names+index*4), 256).split(b"\0", 1)[0].decode("ascii")
+        if name in wanted:
+            ordinal = struct.unpack("<H", pe.at(pe.base+ordinals+index*2, 2))[0]
+            if ordinal >= count or name in found:
+                raise ValueError("Tab factory export ordinal invalid")
+            found[name] = pe.base+pe.pointer(pe.base+functions+ordinal*4)
+    if found != wanted:
+        raise ValueError("Tab factory export targets differ")
+    return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "standardCreator": {"method": "0x1108ad30", "allocationBytes": 0x848,
+                                "constructor": "0x1108abb0 default constructor", "copiesExistingObject": False},
+            "registration": {"key": key, "functionPointer": "0x1108ad30", "call": "0x1101dcb1 ->0x1101e5c0"},
+            "lookup": "0x1101e420 resolves supplied name in factory map and calls entry+0x84 function pointer",
+            "otherBaseConstructorCaller": "0x11021e99 belongs to CAnimationTabLayoutUI construction, not the standard creator",
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed standard factory definition/registration only. Target XML TabLayout-to-key "
+                      "translation, custom builder callbacks, registry overrides and later delegate registration "
+                      "remain separate; fresh creation does not prove the active keyboard UI's runtime callback state."}
+
+
 def inspect_library_delegate_registrations(pe, path):
     """Classify pinned direct library registrations without a global no-callback claim."""
     import_review = inspect_control_notify_delegate_boundary(pe, path)["ordinaryNamedImportInventory"]
@@ -4554,7 +4613,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 100,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 101,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4616,6 +4675,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "mainWindowMessageMaps": inspect_main_window_message_maps(pe, ui_dll) if ui_dll else None,
         "controlNotifyDelegateBoundary": inspect_control_notify_delegate_boundary(pe, ui_dll) if ui_dll else None,
         "libraryDelegateRegistrations": inspect_library_delegate_registrations(pe, ui_dll) if ui_dll else None,
+        "standardTabFactory": inspect_standard_tab_factory(ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
