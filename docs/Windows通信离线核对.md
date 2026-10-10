@@ -25,3 +25,15 @@ python3 Tools/inspect-windows-usb-capture.py /私有目录/official.pcap --bus 1
 2026-10-10：版本3拒绝用零值IRP关联提交与完成，将其标记为身份不可用；不采用时间近邻补配。文件以非阻塞方式打开后检查普通文件类型，避免误选FIFO时等待写入方。仅代码审查、语法与差异检查完成，未运行真实或合成抓包；两项不提供新增键盘协议或写入证据。用户已确认Windows电脑和官方软件仍可使用，安排到最后统一验收时使用；现在不开始抓包或真机测试。
 
 2026-10-10：版本4增加未解码流量分类，按传输类型、endpoint、URB function、方向、控制stage、长度、首字节及SETUP字段统计包数与首末包号。每组仅保存第一份样本的原始payload（不超过256字节）或SHA-256，以及该样本时间、IRP和完成状态；最多一万组。首字节不称为Report ID，样本不是全部未知数据历史，后续仍须保留原抓包。控制IN不登记为待关联OUT提交，控制IN端点完成不进入OUT完成关联；未知Feature及其他通信不凭样本补解码。已完成语法／差异检查和源码审查，尚无真实抓包运行证据、不生成合成样本；工具与原始结果不编入公开两端0.96.0。
+
+## Windows 资料整理助手（留到最后使用）
+
+新增[collect-windows-evidence.ps1](../Tools/collect-windows-evidence.ps1)，供最后统一验收时在Windows收集已经保存完的官方JSON和USBPcap文件。运行后一次多选文件，桌面生成独立目录、复制资料、核对长度及SHA-256，生成collection.json；若可用，附带当前046A:01CE／01CF的PnP条目。元数据读取失败会记录原因，不能把缺失信息当“未连接”。PnP实例编号不是抓包bus/address或固件证明，原始文件名、设备标识与配置需保持私有。
+
+```powershell
+powershell.exe -NoProfile -File .\collect-windows-evidence.ps1
+```
+
+脚本不修改执行策略；系统策略拦截时保留提示，先单独处理，不自动绕过。也可通过-Files和-OutputParent指定文件与已有输出目录。仅接收最多16份JSON（每份<=16MB）或pcap／pcapng（每份<=256MB），拒绝目录和链接。已有写入方共享的文件拒绝读取，不收集正在抓包／导出的文件；复制失败保留已有资料，未生成完整collection.json者不当完整结果。脚本不启动抓包或官方软件，不写键盘，不上传，不自动压缩或推送任何资料。现在不用执行；用户已明确Windows资料在最后统一测试时准备。
+
+采用带BOM的UTF-8脚本源兼容Windows PowerShell5.1读取中文。当前Mac没有PowerShell解析器，仅完成源码审查和差异检查；未执行脚本或进行Windows运行／语法验收，实际文件选择、PnP读取及复制仍待最后Windows环境验证。此助手不编入App／PHP，公开两端0.96.0保持。
