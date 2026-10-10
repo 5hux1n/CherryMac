@@ -2300,6 +2300,62 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_library_delegate_registrations(pe, path):
+    """Classify pinned direct library registrations without a global no-callback claim."""
+    import_review = inspect_control_notify_delegate_boundary(pe, path)["ordinaryNamedImportInventory"]
+    dll = PE32(Path(path).read_bytes())
+    bodies = {
+        (0x110b79d0, 0x110b7c17): "dcc88d8196af69040839c4c99c50dc3da1e1b0763325af64b4aaef7d642a9bcb",
+        (0x110b7dd0, 0x110b8025): "66e6a68e088b22bc6f4ed4928eff6e1c352bbecce0bbadb684e6ddc264616a0b",
+        (0x1104d710, 0x1104d784): "9c08ffad0e3c4cfaac26a26ac8ec8782185226881dbb8c74528e5b084839ee28",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(dll.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Library delegate registration body differs")
+    checks = {0x110b7a6b: "83c138", 0x110b7ac4: "83c038", 0x110b7b22: "83c038",
+              0x110b7e6d: "83c138", 0x110b7ec6: "83c038", 0x110b7f24: "83c038"}
+    calls = [0x110b7a6e, 0x110b7ac9, 0x110b7b27, 0x110b7e70, 0x110b7ecb, 0x110b7f29, 0x1104d75f]
+    for address in calls:
+        if dll.at(address, 5) != b"\xe8"+struct.pack("<i", 0x1104d6a0-address-5):
+            raise ValueError("Library delegate registration direct call differs")
+    for address, encoded in checks.items():
+        if dll.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Library tree-node event-source destination differs")
+    expected_exports = {
+        "?Add@CTreeViewUI@DuiLib@@UAE_NPAVCTreeNodeUI@2@@Z": 0x110b79d0,
+        "?AddAt@CTreeViewUI@DuiLib@@UAEJPAVCTreeNodeUI@2@H@Z": 0x110b7dd0,
+        "?GetFolderButton@CTreeNodeUI@DuiLib@@QBEPAVCCheckBoxUI@2@XZ": 0x11036ca0,
+        "?GetCheckBox@CTreeNodeUI@DuiLib@@QBEPAVCCheckBoxUI@2@XZ": 0x11036c60,
+    }
+    directory = dll.base+dll.u32(dll.u32(0x3c)+24+96)
+    count, names_count, functions, names, ordinals = struct.unpack("<5I", dll.at(directory+20, 20))
+    if not 1 <= names_count <= count <= 65536:
+        raise ValueError("Library registration export directory invalid")
+    found = {}
+    for index in range(names_count):
+        name = dll.at(dll.base+dll.pointer(dll.base+names+index*4), 256).split(b"\0", 1)[0].decode("ascii")
+        if name in expected_exports:
+            ordinal = struct.unpack("<H", dll.at(dll.base+ordinals+index*2, 2))[0]
+            if ordinal >= count or name in found:
+                raise ValueError("Library registration export ordinal invalid")
+            found[name] = dll.base+dll.pointer(dll.base+functions+ordinal*4)
+    if found != expected_exports:
+        raise ValueError("Library registration export targets differ")
+    return {"codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "treeRegistrations": [{"method": "CTreeViewUI.Add", "calls": [hex(a) for a in calls[:3]]},
+                                  {"method": "CTreeViewUI.AddAt", "calls": [hex(a) for a in calls[3:6]]}],
+            "destinations": ["Input tree node +0x38", "Tree-node folder-button +0x38", "Tree-node checkbox +0x38"],
+            "functionCallbackOverload": {"method": "0x1104d710", "nestedDelegateAdd": "0x1104d75f ->0x1104d6a0"},
+            "mainDuiLibOrdinaryOrdinalImports": [item for item in import_review["ordinalImports"] if item["module"].lower() == "duilib.dll"],
+            "mainDelayImportDirectory": import_review["delayImportDirectory"],
+            "hardwareWriteAuthorized": False,
+            "limits": "Pinned named Add/AddAt/overload registrations and current ordinary/declared-delay "
+                      "metadata only. These tree-node destinations are not evidence of target TabLayout "
+                      "registrations. Indirect calls, inline container mutation, cloning, dynamic modules, "
+                      "external users of exported methods and runtime callbacks remain unclassified."}
+
+
 def inspect_control_notify_delegate_boundary(pe, path):
     """Pin control delegate mechanics and inventory ordinary named imports only."""
     expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
@@ -2338,7 +2394,7 @@ def inspect_control_notify_delegate_boundary(pe, path):
     rva, size = struct.unpack("<2I", pe.take(optional+104, 8))
     if rva == 0 or not 20 <= size <= 20*256:
         raise ValueError("Ordinary import directory bounds invalid")
-    named, modules, ordinal_count = [], [], 0
+    named, modules, ordinal_count, ordinal_records = [], [], 0, []
     terminated = False
     for index in range(size//20):
         row = struct.unpack("<5I", pe.at(pe.base+rva+index*20, 20))
@@ -2356,6 +2412,7 @@ def inspect_control_notify_delegate_boundary(pe, path):
                 break
             if value & 0x80000000:
                 ordinal_count += 1
+                ordinal_records.append({"module": module_name, "ordinal": value & 0xffff, "iat": hex(pe.base+iat+item*4)})
                 continue
             name = string_at(pe.base+value+2)
             named.append({"module": module_name, "name": name, "iat": hex(pe.base+iat+item*4)})
@@ -2364,13 +2421,18 @@ def inspect_control_notify_delegate_boundary(pe, path):
     if not terminated:
         raise ValueError("Ordinary import descriptor list unterminated")
     delegate_imports = [item for item in named if "CEventSource" in item["name"] or "CDelegateBase" in item["name"]]
+    delay_directory = None
+    if pe.u32(optional+92) > 13:
+        delay_rva, delay_size = struct.unpack("<2I", pe.take(optional+96+13*8, 8))
+        delay_directory = {"rva": delay_rva, "size": delay_size}
     return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
             "controlSource": "control+0x38 CEventSource initialized by0x11055ae4",
             "freshSource": "Constructor initializes count+4=0; not a lifetime/no-registration claim",
             "dispatch": "0x1104d640 loops nonnull delegates;0x1104d620 invokes delegate virtual+8",
             "falseCallbackResult": "Stops remaining delegates in this source; manager ignores aggregate result and continues notifier loop",
             "ordinaryNamedImportInventory": {"modules": modules, "namedCount": len(named), "ordinalCount": ordinal_count,
-                                              "eventSourceOrDelegateImports": delegate_imports},
+                                              "eventSourceOrDelegateImports": delegate_imports, "ordinalImports": ordinal_records,
+                                              "delayImportDirectory": delay_directory},
             "hardwareWriteAuthorized": False,
             "limits": "Fixed helper bodies and ordinary named PE import inventory only. An empty related "
                       "import list does not exclude inline registration, direct container writes, delay/ordinal "
@@ -4492,7 +4554,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 99,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 100,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4553,6 +4615,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "notifyParentMapMatching": inspect_notify_parent_map_matching(ui_dll) if ui_dll else None,
         "mainWindowMessageMaps": inspect_main_window_message_maps(pe, ui_dll) if ui_dll else None,
         "controlNotifyDelegateBoundary": inspect_control_notify_delegate_boundary(pe, ui_dll) if ui_dll else None,
+        "libraryDelegateRegistrations": inspect_library_delegate_registrations(pe, ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
