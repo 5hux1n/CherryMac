@@ -26,6 +26,43 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
     var adapter=MacroHIDObservationAdapter(),rows:[[String:Any]]=[]
     var lastActivity=0,quietMilliseconds=200,locationID:Int?
     var metadata:[String:Any]=[:]
+    #if CHERRY_MACRO_TEST
+    // Research-only until the final real Report2 acceptance. Public builds
+    // retain their existing rejection of unverified movement output.
+    var observationRegistryID:UInt64?
+    func requireObservationSession(_ callbackDevice:IOHIDDevice?=nil)throws {
+        let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
+        guard devices.count==1,let device=devices.first,let observationRegistryID else{
+            throw HardwareError(message:"停止观察的唯一 USB 连接已失效。")
+        }
+        var currentID:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&currentID)==KERN_SUCCESS,
+              currentID==observationRegistryID,callbackDevice==nil || CFEqual(callbackDevice!,device) else{
+            throw HardwareError(message:"停止观察的 USB 连接或输入来源已变化。")
+        }
+    }
+    // Relative values are activity, never held buttons or screen coordinates.
+    // Metadata comes from the actual IOHIDElement; no raw field reordering or
+    // guessed macro event type is used. Repeated nonzero deltas remain activity.
+    func receiveRelativeAxis(_ element:IOHIDElement,value:Int,at now:Int)throws->Bool {
+        let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element)
+        guard page==1,[UInt32(0x30),0x31,0x38].contains(usage) else{return false}
+        let reportID=IOHIDElementGetReportID(element)
+        let minimum=IOHIDElementGetLogicalMin(element),maximum=IOHIDElementGetLogicalMax(element)
+        guard reportID==2,IOHIDElementIsRelative(element),minimum>=(-32768),minimum<=0,
+              maximum>=0,maximum<=32767,(minimum...maximum).contains(value),now>=lastActivity else{
+            throw HardwareError(message:"停止观察的鼠标轴描述、数值或时间不符，不能继续发送。")
+        }
+        if value==0{return true}
+        guard rows.count<65536 else{throw HardwareError(message:"停止观察记录容量已满。")}
+        rows.append(["page":page,"usage":usage,"value":value,"milliseconds":now,
+            "activityKind":"relativeAxis","reportID":reportID,
+            "logicalMinimum":minimum,"logicalMaximum":maximum,"relative":true])
+        lastActivity=now
+        try save();tick()
+        return true
+    }
+    #endif
     init(request:MacroStopRequest,directory:URL,completion:@escaping(Result<Void,Error>)->Void){
         self.request=request;self.directory=directory;self.completion=completion;super.init()
         quietMilliseconds=max(200,request.requirements.flatMap{$0.repeatingBindings}.map{$0.quietMilliseconds}.max() ?? 200)
@@ -34,6 +71,11 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
     func save()throws {
         var value=metadata
         value["format"]="CherryMacPhysicalMacroStop";value["version"]=1;value["phase"]=request.phase.rawValue
+        #if CHERRY_MACRO_TEST
+        value["version"]=2
+        value["axisActivityScope"]="Descriptor-declared relative Report2 X/Y/wheel callbacks count as activity; no movement execution or internal stop assessment"
+        if let observationRegistryID{value["registryID"]=String(observationRegistryID)}
+        #endif
         value["scope"]="explicit user stop acknowledgement plus USB-filtered observed quiet/release; no firmware stop command or power-off proof"
         value["quietMilliseconds"]=quietMilliseconds;value["lastActivityMilliseconds"]=lastActivity;value["events"]=rows
         if let locationID{value["locationID"]=locationID}
@@ -63,6 +105,11 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
     }
     func tick(){
         guard !finished else{return}
+        #if CHERRY_MACRO_TEST
+        if opened{
+            do{try requireObservationSession()}catch{fail(error.localizedDescription);return}
+        }
+        #endif
         let remaining=max(0,quietMilliseconds-(milliseconds()-lastActivity))
         accept.isEnabled=opened && !pendingAcknowledgement && adapter.allReleased && remaining==0 && window?.isKeyWindow==true
         status.stringValue=adapter.allReleased ? "请先按键盘的方式停止所有持续宏。\n停止输出后还需观察 \(String(format:"%.1f",Double(remaining)/1000)) 秒，再用鼠标确认。":"仍检测到这把键盘输出的按键／鼠标按钮按住。请停止宏并完全松开。"
@@ -78,6 +125,9 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         // mouse macro must not act as the user's confirmation of its own stop.
         DispatchQueue.main.asyncAfter(deadline:.now()+0.25){[weak self] in
             guard let self,!self.finished else{return}
+            #if CHERRY_MACRO_TEST
+            do{try self.requireObservationSession()}catch{self.fail(error.localizedDescription);return}
+            #endif
             guard self.opened,self.rows.count==count,self.lastActivity==activity,self.adapter.allReleased,self.window?.isKeyWindow==true else{
                 self.fail("确认期间检测到键盘输出或窗口状态变化，停止后续发送。");return
             }
@@ -118,8 +168,18 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in
             guard let context else{return};let owner=Unmanaged<MacroPhysicalStopController>.fromOpaque(context).takeUnretainedValue()
+            #if CHERRY_MACRO_TEST
+            guard !owner.finished else{return}
+            #endif
             guard result==0 else{owner.fail("停止观察 HID 回调失败。");return}
             let element=IOHIDValueGetElement(value)
+            #if CHERRY_MACRO_TEST
+            do{
+                try owner.requireObservationSession(IOHIDElementGetDevice(element))
+                if try owner.receiveRelativeAxis(element,value:IOHIDValueGetIntegerValue(value),
+                    at:Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000)){return}
+            }catch{owner.fail(error.localizedDescription);return}
+            #endif
             owner.receive(page:IOHIDElementGetUsagePage(element),usage:IOHIDElementGetUsage(element),value:IOHIDValueGetIntegerValue(value),at:Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000))
         },Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in
@@ -129,7 +189,15 @@ final class MacroPhysicalStopController:NSObject,NSWindowDelegate {
         guard opened else{fail("无法打开只读停止观察，请检查输入监控权限。");return}
         let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
         guard devices.count==1,let device=devices.first,let id=IOHIDDeviceGetProperty(device,kIOHIDLocationIDKey as CFString) as? NSNumber else{fail("无法确认唯一 USB 键盘，停止发送。");return}
-        locationID=id.intValue;tick()
+        locationID=id.intValue
+        #if CHERRY_MACRO_TEST
+        var registryID:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&registryID)==KERN_SUCCESS,registryID != 0 else{
+            fail("无法固定停止观察的 USB 连接标识。");return
+        }
+        observationRegistryID=registryID
+        #endif
+        tick()
         timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){[weak self]_ in self?.tick()}
     }
     static func preview(_ output:URL)throws {
