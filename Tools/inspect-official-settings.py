@@ -2299,6 +2299,85 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_control_notify_delegate_boundary(pe, path):
+    """Pin control delegate mechanics and inventory ordinary named imports only."""
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    data = Path(path).read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Control-delegate DuiLib image differs")
+    dll = PE32(data)
+    bodies = {
+        (0x1104d5f0, 0x1104d61c): "bb0625c46376075839fee815b720838ee49776cc1d95b9a8402c4dab25dc3079",
+        (0x1104d640, 0x1104d69e): "626f821ed2a68f3d4678bd9987a60bad03bd76a011f5c91e1d96dddacbc35da6",
+        (0x1104d620, 0x1104d63e): "3154a8d43ae4fc483668935ab15f3a886beb5069b4d1d95067c8a4154d96f8c8",
+        (0x110263a0, 0x110263b8): "88bc504fc564d07e7da611ad19e907398208d97c91e60cd8a009cf7aeb8ccec2",
+        (0x1104df70, 0x1104dfb6): "967e84357dd0d41f2aecafe20e54506dee9ae310e3b94e7017c18d8f23e1e882",
+        (0x1104f160, 0x1104f171): "31f46434012fd7ba8bbf8b14308e9a805714de8400146ddb80ab47e40c27d964",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(dll.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Control-delegate construction or dispatch differs")
+    checks = {0x11055ae1: "83c138", 0x11055ae4: "e8b708fdff",
+              0x1104df83: "c7410400000000", 0x1104f16a: "8b4004",
+              0x1104d633: "8b4208", 0x1104d636: "ffd0",
+              0x1104d68e: "7504", 0x1104d690: "32c0",
+              0x1106891b: "e8204dfeff", 0x11068920: "c78560ffffff00000000"}
+    for address, encoded in checks.items():
+        if dll.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Control-delegate member or result handling differs")
+    def string_at(address):
+        raw = bytearray()
+        for offset in range(512):
+            value = pe.at(address+offset, 1)
+            if value == b"\0":
+                return raw.decode("ascii")
+            raw.extend(value)
+        raise ValueError("Ordinary import name too long")
+    optional = pe.u32(0x3c)+24
+    rva, size = struct.unpack("<2I", pe.take(optional+104, 8))
+    if rva == 0 or not 20 <= size <= 20*256:
+        raise ValueError("Ordinary import directory bounds invalid")
+    named, modules, ordinal_count = [], [], 0
+    terminated = False
+    for index in range(size//20):
+        row = struct.unpack("<5I", pe.at(pe.base+rva+index*20, 20))
+        if not any(row):
+            terminated = True
+            break
+        lookup, _, _, module, iat = row
+        if module == 0 or iat == 0:
+            raise ValueError("Ordinary import descriptor invalid")
+        module_name = string_at(pe.base+module)
+        modules.append(module_name)
+        for item in range(4096):
+            value = pe.pointer(pe.base+(lookup or iat)+item*4)
+            if value == 0:
+                break
+            if value & 0x80000000:
+                ordinal_count += 1
+                continue
+            name = string_at(pe.base+value+2)
+            named.append({"module": module_name, "name": name, "iat": hex(pe.base+iat+item*4)})
+        else:
+            raise ValueError("Ordinary import thunk list unterminated")
+    if not terminated:
+        raise ValueError("Ordinary import descriptor list unterminated")
+    delegate_imports = [item for item in named if "CEventSource" in item["name"] or "CDelegateBase" in item["name"]]
+    return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "controlSource": "control+0x38 CEventSource initialized by0x11055ae4",
+            "freshSource": "Constructor initializes count+4=0; not a lifetime/no-registration claim",
+            "dispatch": "0x1104d640 loops nonnull delegates;0x1104d620 invokes delegate virtual+8",
+            "falseCallbackResult": "Stops remaining delegates in this source; manager ignores aggregate result and continues notifier loop",
+            "ordinaryNamedImportInventory": {"modules": modules, "namedCount": len(named), "ordinalCount": ordinal_count,
+                                              "eventSourceOrDelegateImports": delegate_imports},
+            "hardwareWriteAuthorized": False,
+            "limits": "Fixed helper bodies and ordinary named PE import inventory only. An empty related "
+                      "import list does not exclude inline registration, direct container writes, delay/ordinal "
+                      "imports, dynamically loaded modules or library-internal registration. Actual target "
+                      "tab delegate contents and runtime lifetime remain unproved; no hardware access."}
+
+
 def inspect_main_window_message_maps(pe, path):
     """Close fixed own/base message tables, while keeping other notify sources separate."""
     parent = inspect_notify_parent_map_matching(path)
@@ -4413,7 +4492,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 98,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 99,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4473,6 +4552,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "mainpageMessageMap": inspect_mainpage_message_map(pe),
         "notifyParentMapMatching": inspect_notify_parent_map_matching(ui_dll) if ui_dll else None,
         "mainWindowMessageMaps": inspect_main_window_message_maps(pe, ui_dll) if ui_dll else None,
+        "controlNotifyDelegateBoundary": inspect_control_notify_delegate_boundary(pe, ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
