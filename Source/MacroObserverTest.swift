@@ -30,6 +30,8 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     var startedMilliseconds=0,lastMilliseconds=0
     var stopMarker:MacroExecutionLog.Stop?,interruptions:[MacroExecutionEvidence.Interruption]=[]
     var rawValues:[[String:Any]]=[]
+    var rawMouseReports:[[String:Any]]=[]
+    var registryID:UInt64?,reportDescriptor:Data?
     var terminalError:String?
     init(directory:URL?=nil){
         if let directory{self.directory=directory}
@@ -40,8 +42,13 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func milliseconds()->Int{Int(ledger.nanoseconds(mach_absolute_time())/1_000_000)}
     func encode<T:Encodable>(_ value:T)throws->Data{let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];return try encoder.encode(value)}
     func persist(at now:Int)throws {
-        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":1,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues]
+        var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":2,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawMouseReports":rawMouseReports,"rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil]
         if let locationID{metadata["locationID"]=locationID}
+        if let registryID{metadata["registryID"]=String(registryID)}
+        if let reportDescriptor{
+            metadata["reportDescriptorHex"]=reportDescriptor.map{String(format:"%02x",$0)}.joined()
+            metadata["reportDescriptorSHA256"]=SHA256.hash(data:reportDescriptor).map{String(format:"%02x",$0)}.joined()
+        }
         if let terminalError{metadata["error"]=terminalError}
         try JSONSerialization.data(withJSONObject:metadata,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("session.json"),options:.atomic)
         if let baseline,!FileManager.default.fileExists(atPath:directory.appendingPathComponent("baseline.json").path){try HardwareProfile(snapshot:baseline).encoded().write(to:directory.appendingPathComponent("baseline.json"),options:.atomic)}
@@ -84,6 +91,24 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             try evidence?.observe(event);lastMilliseconds=max(lastMilliseconds,now)
             do{try persist(at:now)}catch{invalidate(.loggingFailed,"日志保存失败，观察中止：\(error.localizedDescription)")}
         }catch{invalidate(.reportRejected,error.localizedDescription)}
+    }
+    func receiveMouseReport(result:IOReturn,bytes:[UInt8],at now:Int){
+        guard phase=="observing",source == .hid else{return}
+        let current=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
+        var currentID:UInt64=0
+        guard current.count==1,let device=current.first,let registryID,
+              IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&currentID)==KERN_SUCCESS,
+              currentID==registryID else{invalidate(.observerDisconnected,"鼠标原始报告的USB会话变化，观察中止。");return}
+        guard rawMouseReports.count<4096,now>=startedMilliseconds else{
+            invalidate(.loggingFailed,"鼠标原始报告超过范围或时间戳无效，观察中止。");return
+        }
+        rawMouseReports.append(["reportID":2,"result":Int(result),"bytes":bytes,
+            "receivedLength":bytes.count,"milliseconds":now,"registryID":String(registryID)])
+        guard result==0,!bytes.isEmpty else{invalidate(.reportRejected,"鼠标原始报告回调失败或长度无效。");return}
+        // Raw bytes supplement diagnosis only; never manufacture macro events
+        // or replace the existing decoded-value assessment with these bytes.
+        do{try persist(at:max(now,lastMilliseconds))}
+        catch{invalidate(.loggingFailed,"鼠标原始报告保存失败："+error.localizedDescription)}
     }
     func markStop(at now:Int,source:MacroExecutionEvidence.StopSource)throws {
         guard phase=="observing",let evidence,try evidence.assessment(milliseconds:max(now,lastMilliseconds)).completedCycles>=2 else{throw HardwareError(message:"先观察至少两轮完整宏输出，再停止并确认。")}
@@ -135,6 +160,14 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             let element=IOHIDValueGetElement(value)
             owner.receive(page:IOHIDElementGetUsagePage(element),usage:IOHIDElementGetUsage(element),value:IOHIDValueGetIntegerValue(value),at:Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000))
         },Unmanaged.passUnretained(self).toOpaque())
+        IOHIDManagerRegisterInputReportWithTimeStampCallback(manager,{context,result,_,type,id,bytes,count,stamp in
+            guard let context,type==kIOHIDReportTypeInput,id==2 else{return}
+            let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue()
+            guard owner.phase=="observing",owner.source == .hid else{return}
+            guard count>=0,count<=64 else{owner.invalidate(.reportRejected,"鼠标原始报告长度超出记录范围。");return}
+            owner.receiveMouseReport(result:result,bytes:Array(UnsafeBufferPointer(start:bytes,count:count)),
+                at:Int(owner.ledger.nanoseconds(stamp)/1_000_000))
+        },Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue();owner.invalidate(.observerDisconnected,"键盘已断开，观察中止。")},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerScheduleWithRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.defaultMode.rawValue)
         let result=IOHIDManagerOpen(manager,0);opened=result==0
@@ -142,12 +175,17 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
         guard devices.count==1,let device=devices.first,let id=IOHIDDeviceGetProperty(device,kIOHIDLocationIDKey as CFString) as? NSNumber else{invalidate(.observerDisconnected,"需要一把 USB 有线键盘，无法确认设备身份。");return}
         locationID=id.intValue
+        var session:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&session)==KERN_SUCCESS,session != 0 else{invalidate(.observerDisconnected,"无法确认原始报告USB会话。");return}
+        registryID=session
+        if let descriptor=IOHIDDeviceGetProperty(device,"ReportDescriptor" as CFString) as? Data,
+           !descriptor.isEmpty,descriptor.count<=16384{reportDescriptor=descriptor}
         queue.async{[weak self] in
             let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().completeSnapshot()}
             DispatchQueue.main.async{guard let self,self.phase=="prepared" else{return};do{try self.configure(result.get(),source:.hid);self.save()}catch{self.invalidate(.reportRejected,"无法开始观察：\(error.localizedDescription)")}}
         }
     }
-    deinit{timer?.invalidate();if opened{IOHIDManagerUnscheduleFromRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.defaultMode.rawValue);IOHIDManagerClose(manager,0)}}
+    deinit{timer?.invalidate();if opened{IOHIDManagerRegisterInputReportWithTimeStampCallback(manager,{_,_,_,_,_,_,_,_ in},nil);IOHIDManagerUnscheduleFromRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.defaultMode.rawValue);IOHIDManagerClose(manager,0)}}
     func runOfflineTests(){
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent("CherryMacMacroObserver-\(UUID().uuidString)")
         defer{try? FileManager.default.removeItem(at:folder)}
