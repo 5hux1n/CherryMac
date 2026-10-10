@@ -194,7 +194,15 @@ struct MacroExecutionEvidence {
     private var failure:String?
     init(macro:KeyboardMacro,playback:MacroPlayback,source:Source,startedMilliseconds:Int)throws {
         try macro.validate(maximumEvents:762);try playback.validate()
+        #if CHERRY_MACRO_TEST
+        guard !macro.steps.isEmpty else{throw HardwareError(message:"空宏没有可匹配输出，需要独立触发验收。")}
+        guard !macro.steps.contains(where:{$0.isMovement && $0.usage==0 && !$0.pressed}),
+              !macro.steps.contains(where:{$0.isMovement}) || source != .focusedBrowser else{
+            throw HardwareError(message:"零位移或页面坐标不能作为设备位移输出验收，请保留独立诊断。")
+        }
+        #else
         guard !macro.steps.isEmpty,!macro.steps.contains(where:{$0.isMovement}) else{throw HardwareError(message:"空宏或位移宏不能通过当前按键观察判定执行成功，请使用独立触发／位移验收。")}
+        #endif
         guard startedMilliseconds>=0 else{throw HardwareError(message:"执行观察时钟无效。")}
         self.macro=macro;self.playback=playback;self.source=source;lastMilliseconds=startedMilliseconds
         requiredQuietMilliseconds=max(200,macro.steps.reduce(0){$0+$1.delayMilliseconds}+200)
@@ -202,14 +210,21 @@ struct MacroExecutionEvidence {
     private mutating func fail(_ reason:String){if failure==nil{failure=reason}}
     mutating func invalidate(_ reason:Interruption){fail(reason.rawValue)}
     mutating func observe(_ event:Observation)throws {
-        guard event.milliseconds>=lastMilliseconds,(event.kind == .mouse ? [UInt8(1),2,4,8,16].contains(event.usage):(4...231).contains(event.usage)) else {
+        #if CHERRY_MACRO_TEST
+        let movement=event.kind == .mouseX || event.kind == .mouseY
+        #else
+        let movement=false
+        #endif
+        guard event.milliseconds>=lastMilliseconds,(movement ? (event.usage != 0 || event.pressed):(event.kind == .mouse ? [UInt8(1),2,4,8,16].contains(event.usage):(4...231).contains(event.usage))) else {
             fail("invalidObservation");throw HardwareError(message:"执行观察事件或时钟无效。")
         }
         lastMilliseconds=event.milliseconds;observedEvents+=1
         if observations.count<65536{observations.append(event)}else{fail("captureOverflow")}
-        let wasHeld=held.contains(event.identity)
-        if event.pressed ? wasHeld:!wasHeld{fail("unbalancedObservation")}
-        if stopMilliseconds != nil{eventsAfterStop+=1;if event.pressed{fail("pressAfterStop")}}
+        if !movement{
+            let wasHeld=held.contains(event.identity)
+            if event.pressed ? wasHeld:!wasHeld{fail("unbalancedObservation")}
+        }
+        if stopMilliseconds != nil{eventsAfterStop+=1;if movement{fail("movementAfterStop")}else if event.pressed{fail("pressAfterStop")}}
         if failure==nil {
             let expected=macro.steps[matchedEvents % macro.steps.count]
             let matches=expected.usage==event.usage && expected.kind==event.kind && expected.pressed==event.pressed
@@ -220,7 +235,7 @@ struct MacroExecutionEvidence {
             // After a stop marker, a release of an actually held key is allowed
             // even when firmware aborts mid-cycle rather than finishing it.
         }
-        if event.pressed{held.insert(event.identity)}else{held.remove(event.identity)}
+        if !movement{if event.pressed{held.insert(event.identity)}else{held.remove(event.identity)}}
     }
     mutating func requestStop(milliseconds:Int,source:StopSource)throws {
         guard playback.mode != .count,stopMilliseconds==nil,milliseconds>=lastMilliseconds else {

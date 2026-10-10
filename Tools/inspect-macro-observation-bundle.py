@@ -114,7 +114,13 @@ def inspect_context(session, folder, artifacts):
                {'mode': 'count', 'count': binding[2]} if binding[0] == 0x71 and binding[2] >= 2 else None
     require(type(mode) is dict and set(mode) == {'mode', 'count'} and type(mode['count']) is int and
             expected is not None and mode == expected, 'Expected playback differs from baseline binding')
-    diagnostic_only = not macro['steps'] or movement
+    movement_enabled = session.get('movementObservationEnabled', False)
+    require(type(movement_enabled) is bool, 'Movement capability marker invalid')
+    zero_movement = any(step.get('kind') in ('mouseX', 'mouseY') and
+                        step['usage'] == 0 and not step['pressed'] for step in macro['steps'])
+    diagnostic_only = not macro['steps'] or zero_movement or movement and not movement_enabled
+    require(not (movement and movement_enabled and not diagnostic_only) or context['source'] != 'focusedBrowser',
+            'Focused browser coordinates cannot be declared device displacement')
     require(session.get('diagnosticOnly') == diagnostic_only, 'Diagnostic flag differs from expected macro')
     ending = session.get('diagnosticEnd')
     if ending is not None:
@@ -137,6 +143,7 @@ def inspect_context(session, folder, artifacts):
                     'Observation lies outside contextual interval')
     return {'available': True, 'baselineHashMatched': True, 'bindingAndStepsMatched': True,
             'slot': 102, 'eventCount': len(macro['steps']), 'containsMovement': movement,
+            'movementObservationEnabled': movement_enabled,
             'playback': mode, 'source': context['source'], 'started': context['started'],
             'diagnosticEnd': ending, 'physicalTriggerVerified': False, 'hardwareExecutionPassed': False}
 

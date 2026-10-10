@@ -34,6 +34,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     var rawMouseValues:[[String:Any]]=[]
     var registryID:UInt64?,reportDescriptor:Data?
     var diagnosticOnly=false
+    var observesMovement=false
     var baselineLogSHA256:String?
     var diagnosticEndedMilliseconds:Int?
     var observationHasStarted=false
@@ -50,7 +51,8 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     func persist(at now:Int)throws {
         var metadata:[String:Any]=["format":"CherryMacMacroObservationSession","version":3,"phase":phase,"scope":"read-only; existing calculator-slot macro; no writes or power-cycle proof","rawValues":rawValues,"rawValuesScope":"Filtered macro-event projection; not all HID callbacks","rawMouseReports":rawMouseReports,"rawMouseValues":rawMouseValues,"rawMouseValueScope":"All reportID2 value callbacks before macro-event filtering; timestamp buckets do not identify individual packets","rawMouseReportScope":"Only reportID2 while observing; preserve callback bytes without reordering or prepending an ID","descriptorAvailable":reportDescriptor != nil,"logSavePolicy":"Coalesce callback records in memory; timer attempts saves at >=250ms intervals; explicit stop/end/failure saves immediately. Abrupt process termination can lose unflushed records."]
         metadata["diagnosticOnly"]=diagnosticOnly
-        if diagnosticOnly{metadata["diagnosticReason"]="Empty or movement macro; raw capture only, no execution assessment"}
+        metadata["movementObservationEnabled"]=true
+        if diagnosticOnly{metadata["diagnosticReason"]="Empty or zero-displacement macro; raw capture only, no execution assessment"}
         if let locationID{metadata["locationID"]=locationID}
         if let registryID{metadata["registryID"]=String(registryID)}
         if let reportDescriptor{
@@ -110,11 +112,12 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         let library=try CherryMacroCodec.decode(bank),binding=Array(snapshot.keymap[306..<309])
         let mode=try CherryMacroCodec.playback(binding,macroCount:library.count)
         baseline=snapshot;macro=library[Int(binding[1])];playback=mode;self.source=source;phase="ready"
-        diagnosticOnly=macro!.steps.isEmpty || macro!.steps.contains(where:{$0.isMovement})
+        observesMovement=macro!.steps.contains(where:{$0.isMovement})
+        diagnosticOnly=macro!.steps.isEmpty || macro!.steps.contains(where:{$0.isMovement && $0.usage==0 && !$0.pressed})
         startButton.isEnabled=true;stopButton.isHidden = !diagnosticOnly && mode.mode == .count;stopButton.isEnabled=false
         stopButton.title=diagnosticOnly ? "结束诊断观察并保存":"已用键盘停止宏并完全松开"
         status.stringValue="已核对计算器键的宏：\(macro!.name) · \(mode.label)。尚未开始观察。"
-        detail.stringValue=diagnosticOnly ? "本轮只保存空宏／位移宏的原始输出，不能判定执行通过。先停止旧宏并松键，再点击开始。":"先停止旧宏并松开全部键，用鼠标点击开始，再按计算器键。日志会自动保存。"
+        detail.stringValue=diagnosticOnly ? "本轮只保存空宏／零位移宏的原始输出，不能判定执行通过。先停止旧宏并松键，再点击开始。":"先停止旧宏并松开全部键，用鼠标点击开始，再按计算器键。位移按实际 HID 轴值核对，不调整字段顺序；日志会自动保存。"
     }
     func begin(at now:Int)throws {
         guard phase=="ready",adapter.allReleased,let macro,let playback else{throw HardwareError(message:"请先完成读取并松开全部键。")}
@@ -132,11 +135,29 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             if diagnosticOnly,phase=="observing",page==1,[UInt32(0x30),0x31,0x38].contains(usage){return}
             let event=try adapter.receive(page:page,usage:usage,value:value,milliseconds:now)
             guard phase=="observing",let event else{return}
-            guard rawValues.count<65536 else{invalidate(.loggingFailed,"记录容量已满，观察中止。");return}
-            rawValues.append(["page":page,"usage":usage,"value":value,"milliseconds":now])
-            try evidence?.observe(event);lastMilliseconds=max(lastMilliseconds,now)
-            pendingLogSave=true
+            try recordObservedEvent(event,page:page,usage:usage,value:value,at:now)
         }catch{invalidate(.reportRejected,error.localizedDescription)}
+    }
+    func recordObservedEvent(_ event:MacroExecutionEvidence.Observation,page:UInt32,usage:UInt32,value:Int,at now:Int)throws {
+        guard rawValues.count<65536 else{throw HardwareError(message:"记录容量已满，观察中止。")}
+        rawValues.append(["page":page,"usage":usage,"value":value,"milliseconds":now])
+        try evidence?.observe(event);lastMilliseconds=max(lastMilliseconds,now);pendingLogSave=true
+    }
+    func receiveMovement(_ element:IOHIDElement,value:Int,at now:Int)throws->Bool {
+        guard phase=="observing",!diagnosticOnly,observesMovement else{return false}
+        let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element)
+        guard page==1,[UInt32(0x30),0x31].contains(usage) else{return false}
+        let minimum=IOHIDElementGetLogicalMin(element),maximum=IOHIDElementGetLogicalMax(element)
+        guard IOHIDElementGetReportID(element)==2,IOHIDElementIsRelative(element),minimum>=(-32768),minimum<=0,
+              maximum>=0,maximum<=32767,(minimum...maximum).contains(value),now>=startedMilliseconds else{
+            throw HardwareError(message:"位移回调的描述、数值或时间不符，不能核对通过。")
+        }
+        if value==0{return true}
+        guard (-256...255).contains(value) else{throw HardwareError(message:"位移回调超出单步骤范围；不拆分或补造事件。")}
+        let step=try KeyboardMacro.Step.movement(axis:usage==0x30 ? .mouseX:.mouseY,value:value,delayMilliseconds:0)
+        try recordObservedEvent(.init(usage:step.usage,pressed:step.pressed,milliseconds:now,kind:step.kind),
+            page:page,usage:usage,value:value,at:now)
+        return true
     }
     func receiveMouseValue(device:IOHIDDevice,reportID:UInt32,page:UInt32,usage:UInt32,value:Int,at now:Int){
         guard phase=="observing",source == .hid,reportID==2 else{return}
@@ -220,7 +241,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         phase="diagnosticComplete";timer?.invalidate();stopButton.isEnabled=false;pendingLogSave=true
         do{try persist(at:now)}catch{invalidate(.loggingFailed,"诊断最终日志保存失败："+error.localizedDescription);throw error}
         status.stringValue="诊断观察记录已保存，尚未判定宏输出通过。"
-        detail.stringValue="日志包含原始鼠标报告及系统回调。空宏／位移效果和停止行为仍需单独核对。日志：\(directory.path)"
+        detail.stringValue="日志包含原始鼠标报告及系统回调。空宏／零位移的实体触发和停止行为仍需单独核对。日志：\(directory.path)"
     }
     @objc func acknowledgeStop(){
         guard let event=NSApp.currentEvent,event.type == .leftMouseUp,event.modifierFlags.intersection([.control,.option,.command,.shift]).isEmpty else{status.stringValue="停止宏并松键后，请用鼠标点击确认。";return}
@@ -273,6 +294,8 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element),integer=IOHIDValueGetIntegerValue(value)
             owner.receiveMouseValue(device:IOHIDElementGetDevice(element),reportID:IOHIDElementGetReportID(element),page:page,usage:usage,value:integer,at:now)
             guard owner.phase != "failed" else{return}
+            do{if try owner.receiveMovement(element,value:integer,at:now){return}}
+            catch{owner.invalidate(.reportRejected,error.localizedDescription);return}
             owner.receive(page:page,usage:usage,value:integer,at:now)
         },Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterInputReportWithTimeStampCallback(manager,{context,result,_,type,id,bytes,count,stamp in
