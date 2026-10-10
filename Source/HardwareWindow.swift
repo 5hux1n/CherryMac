@@ -173,6 +173,7 @@ final class HostTextEditor:NSWindowController,NSWindowDelegate {
 }
 
 final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
+    var lastReceiverInventoryData:Data?
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
     let connection = NSTextField(labelWithString:"尚未读取键盘")
@@ -416,6 +417,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         let discardResult=button("放弃待核对的灯效结果…",#selector(discardLightingResult));lightingResultDiscardButton=discardResult;discardResult.isHidden=true
         place(discardResult,208,253,300,32,in:device)
         place(button("查看接收器连接",#selector(inspectReceiverConnection)),8,529,260,32,in:device)
+        place(button("导出接收器查询结果…",#selector(exportReceiverConnection)),290,529,260,32,in:device)
         let settings=tabs.tabViewItems.last!.view!
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
@@ -569,7 +571,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                       window?.isVisible==true,hostTextService.stage == .stopped else{
                     throw HardwareError(message:"请先停止文本服务、完成客户端操作，并保持配置窗口开启。")
                 }
+                lastReceiverInventoryData=nil
                 let inventory=try ReceiverUSBInventory.read()
+                lastReceiverInventoryData=try receiverDiagnosticData(inventory)
                 var reply=hostTextBridgeStatus()
                 reply["receiverInventory"]=try JSONSerialization.jsonObject(with:JSONEncoder().encode(inventory))
                 completion(HostTextBridgeRequest.response(origin:origin,object:reply))
@@ -746,8 +750,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     #endif
     @objc func inspectReceiverConnection(){
         guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        lastReceiverInventoryData=nil
         do{
             let inventory=try ReceiverUSBInventory.read()
+            lastReceiverInventoryData=try receiverDiagnosticData(inventory)
             let counts=[("keyboard","键盘"),("receiver","接收器")].map{role,name in
                 let rows=inventory.entries.filter{$0.role==role}
                 if rows.isEmpty{return "\(name)：未发现 USB 连接"}
@@ -761,6 +767,25 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             alert.informativeText=(counts+details+["仅显示本次查询的 USB 描述信息，不代表已配对或配置保持。配对配置尚未开放。"] ).joined(separator:"\n")
             alert.beginSheetModal(for:window)
         }catch{message.stringValue=error.localizedDescription}
+    }
+    func receiverDiagnosticData(_ inventory:ReceiverUSBInventory.Inventory)throws->Data{
+        let report:[String:Any]=["format":"CherryMacUSBReceiverDiagnostic","version":1,
+            "capturedAt":ISO8601DateFormatter().string(from:Date()),
+            "appVersion":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "unknown",
+            "inventory":try JSONSerialization.jsonObject(with:JSONEncoder().encode(inventory)),
+            "pairingVerified":false,"configurationWriteAccepted":false,
+            "scope":"Historical descriptor-only query; not current connection, pairing, configuration or persistence evidence"]
+        return try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys])
+    }
+    @objc func exportReceiverConnection(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        guard let data=lastReceiverInventoryData else{message.stringValue="请先查看接收器连接，再导出查询结果。";return}
+        let panel=NSSavePanel();panel.nameFieldStringValue="CherryMac-接收器查询.json"
+        panel.beginSheetModal(for:window){[weak self] result in
+            guard result == .OK,let url=panel.url else{return}
+            do{try data.write(to:url,options:.atomic);self?.message.stringValue="已导出上次查询的 USB 描述信息；没有重新读取或写入键盘。"}
+            catch{self?.message.stringValue=error.localizedDescription}
+        }
     }
     @objc func openMacSettings(){(NSApp.delegate as? Adapter)?.showSettings()}
     @objc func chooseTab(_ sender:NSButton){

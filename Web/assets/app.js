@@ -31,6 +31,7 @@ const extendedBackupEditor=installExtendedBackupEditor(operation,{capture:async(
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let defaultInspection=null,selectedDefaultLightingFile=null;
+let lastReceiverInventory=null;
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
@@ -489,7 +490,7 @@ $('diagnostics').onclick=()=>operation(async()=>{
   results.forEach((result,i)=>{records[names[i]]=result.status==='fulfilled'?result.value:[];if(result.status==='rejected')storageErrors[names[i]]=result.reason?.message??String(result.reason);});
   if(hid?.loggingError)storageErrors.sessionLogging=hid.loggingError;
   if(pageFailures.some(entry=>entry.persistenceError))storageErrors.pageLogging='部分页面错误未能保存到数据库，现有页面记录已附在 pageFailures。';
-  const evidence={format:'CherryMacWebDiagnostics',version:1,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),...records,sessionLogs:clone(hid?.history??[]),pageFailures:clone(pageFailures),logError:storageErrors.usbLogs??storageErrors.sessionLogging??null,storageErrors,note:'包含可读取的本地备份与操作日志；storageErrors 非空表示对应资料不完整。未自动上传。'};
+  const evidence={format:'CherryMacWebDiagnostics',version:2,webVersion:'0.6.0',capturedAt:new Date().toISOString(),browser:navigator.userAgent,origin:location.origin,baseline:clone(baseline),draft:clone(profile),...records,receiverQuery:clone(lastReceiverInventory),sessionLogs:clone(hid?.history??[]),pageFailures:clone(pageFailures),logError:storageErrors.usbLogs??storageErrors.sessionLogging??null,storageErrors,note:'包含可读取的本地备份与操作日志；receiverQuery 为本页面上次查询的历史信息，未查询时为 null，不代表当前连接或配对。storageErrors 非空表示对应资料不完整。未自动上传。'};
   download(evidence,'CherryMac-diagnostics.json');status(Object.keys(storageErrors).length?'排查资料已下载；部分本地记录无法读取，错误已写入文件，其余日志保留。':'排查资料已下载到本地，未上传。',Object.keys(storageErrors).length>0);
 },{localOnly:true});
 function plan(){requireThat(hid&&!hid.dead&&baseline,'请先连接并读取键盘。');return tab==='macros'&&macroProduct?macroProductPlan(profile,baseline,baselineLightingMapping):makeKeymapPlan(profile.snapshot,baseline);}
@@ -564,8 +565,9 @@ if(textProduct){
     }catch(error){$('usb-identity-summary').textContent='核对失败：'+error.message;throw error;}
   });
   $('receiver-inventory-read').onclick=()=>operation(async()=>{
+    lastReceiverInventory=null;
     $('receiver-inventory-summary').textContent='正在查看接收器连接…';
-    try{const inventory=await textBridge.receiverInventory();$('receiver-inventory-summary').textContent=receiverInventorySummary(inventory);status('已查看键盘与接收器的 USB 描述信息。');}
+    try{const inventory=await textBridge.receiverInventory();const summary=receiverInventorySummary(inventory);lastReceiverInventory={receivedAt:new Date().toISOString(),source:'mac-bridge',inventory:clone(inventory),pairingVerified:false,configurationWriteAccepted:false};$('receiver-inventory-summary').textContent=summary;status('已查看键盘与接收器的 USB 描述信息，可在排查资料中导出。');}
     catch(error){$('receiver-inventory-summary').textContent='查看失败：'+error.message;throw error;}
   });
   $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
