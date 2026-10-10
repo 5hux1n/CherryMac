@@ -270,6 +270,19 @@ struct ReleasedKeyGate {
 // A session owns one run loop and is used only on the hardware serial queue.
 // The keyboard remains available to macOS; no seize/detach options are used.
 final class CherryUSB: CherryHardwareAccess {
+    #if CHERRY_MACRO_TEST
+    // Research-only identity check on the owning USB queue; no HID reports.
+    func requireReadOnlyObservationSession(_ expectedID:UInt64)throws {
+        guard !transportDead,let manager,let device,expectedID != 0,
+              let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>,
+              devices.count==1,let selected=devices.first,CFEqual(selected,device) else{
+            throw HardwareError(message:"宏观察基线的 USB 读取会话已变化。")
+        }
+        var currentID:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&currentID)==KERN_SUCCESS,
+              currentID==expectedID else{throw HardwareError(message:"宏观察基线与输入监听器不是同一 USB 连接。")}
+    }
+    #endif
     private var lightingAuthorization:WindowsProfile.OfficialLightingPlan.CandidateAuthorization?
     private var lightingLog:HardwareOperationLog?
     private var macroAuthorization:MacroWriteAuthorization?

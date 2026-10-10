@@ -105,6 +105,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         status.stringValue=message;detail.stringValue="请停止键盘宏，必要时关闭键盘电源。本窗口没有发送停止或恢复指令。日志：\(directory.path)";save()
     }
     func configure(_ snapshot:HardwareSnapshot,source:MacroExecutionEvidence.Source)throws {
+        if source == .hid{try requireObserverSession()}
         try snapshot.validate();guard let bank=snapshot.macroData else{throw HardwareError(message:"缺少宏区备份。")}
         let library=try CherryMacroCodec.decode(bank),binding=Array(snapshot.keymap[306..<309])
         let mode=try CherryMacroCodec.playback(binding,macroCount:library.count)
@@ -117,6 +118,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func begin(at now:Int)throws {
         guard phase=="ready",adapter.allReleased,let macro,let playback else{throw HardwareError(message:"请先完成读取并松开全部键。")}
+        if source == .hid{try requireObserverSession()}
         evidence=diagnosticOnly ? nil:try MacroExecutionEvidence(macro:macro,playback:playback,source:source,startedMilliseconds:now)
         startedMilliseconds=now;lastMilliseconds=now;observationHasStarted=true;phase="observing";startButton.isEnabled=false
         stopButton.isEnabled=diagnosticOnly
@@ -170,6 +172,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         pendingLogSave=true
     }
     func markStop(at now:Int,source:MacroExecutionEvidence.StopSource)throws {
+        if self.source == .hid{try requireObserverSession()}
         guard phase=="observing",let evidence,try evidence.assessment(milliseconds:max(now,lastMilliseconds)).completedCycles>=2 else{throw HardwareError(message:"先观察至少两轮完整宏输出，再停止并确认。")}
         try self.evidence?.requestStop(milliseconds:now,source:source);stopMarker = .init(milliseconds:now,source:source);lastMilliseconds=max(lastMilliseconds,now)
         stopButton.isEnabled=false;pendingLogSave=true
@@ -177,6 +180,9 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func poll(at now:Int){
         guard phase=="observing" else{return}
+        if source == .hid{
+            do{try requireObserverSession()}catch{invalidate(.observerDisconnected,error.localizedDescription);return}
+        }
         if diagnosticOnly{
             stopButton.isEnabled=adapter.allReleased
             if now-startedMilliseconds>300_000{invalidate(.cancelled,"诊断观察超过五分钟，已中止。请停止键盘宏。");return}
@@ -206,6 +212,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     }
     func finishDiagnostic(at now:Int)throws {
         guard diagnosticOnly,phase=="observing",adapter.allReleased else{throw HardwareError(message:"请先停止输出并松开按键，再结束诊断。")}
+        if source == .hid{try requireObserverSession()}
         // User acknowledgement closes capture, not a successful stop/playback
         // assessment. Keep it distinct from the execution-complete phase.
         guard now>=startedMilliseconds,now>=lastMilliseconds else{throw HardwareError(message:"诊断结束时钟无效。")}
@@ -222,6 +229,21 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
     @objc func finish(){if phase=="observing"{invalidate(.cancelled,"用户结束观察。请确认键盘宏已停止。")}else{save()};NSApp.terminate(nil)}
     func windowShouldClose(_ sender:NSWindow)->Bool{finish();return true}
     func windowDidResignKey(_ notification:Notification){if phase=="observing"{invalidate(.focusLost,"窗口失去焦点，观察中止。请停止键盘宏。")} }
+    func requireObserverSession(device callbackDevice:IOHIDDevice?=nil)throws {
+        let devices=IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
+        guard devices.count==1,let device=devices.first,let registryID else{
+            throw HardwareError(message:"宏观察需要原有且唯一的 USB 连接。")
+        }
+        var currentID:UInt64=0
+        guard IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device),&currentID)==KERN_SUCCESS,
+              currentID==registryID,callbackDevice==nil || CFEqual(callbackDevice!,device) else{
+            throw HardwareError(message:"宏观察 USB 连接或输入来源变化。")
+        }
+        if let reportDescriptor{
+            guard let current=IOHIDDeviceGetProperty(device,"ReportDescriptor" as CFString) as? Data,
+                  current==reportDescriptor else{throw HardwareError(message:"宏观察 HID 描述符发生变化。")}
+        }
+    }
     func applicationDidFinishLaunching(_ notification:Notification){
         do{guard !FileManager.default.fileExists(atPath:directory.path) else{throw HardwareError(message:"测试目录已存在，不能覆盖旧证据。")};try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);try persist(at:milliseconds())}
         catch{fputs(error.localizedDescription+"\n",stderr);NSApp.terminate(nil);return}
@@ -240,8 +262,13 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         IOHIDManagerSetDeviceMatching(manager,[kIOHIDVendorIDKey:1130,kIOHIDProductIDKey:462,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterInputValueCallback(manager,{context,result,_,value in
             guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue()
+            guard ["prepared","ready","observing"].contains(owner.phase) else{return}
             guard result==0 else{owner.invalidate(.reportRejected,"HID 观察回调失败。");return}
             let element=IOHIDValueGetElement(value)
+            if owner.phase=="ready" || owner.phase=="observing"{
+                do{try owner.requireObserverSession(device:IOHIDElementGetDevice(element))}
+                catch{owner.invalidate(.observerDisconnected,error.localizedDescription);return}
+            }
             let now=Int(owner.ledger.nanoseconds(IOHIDValueGetTimeStamp(value))/1_000_000)
             let page=IOHIDElementGetUsagePage(element),usage=IOHIDElementGetUsage(element),integer=IOHIDValueGetIntegerValue(value)
             owner.receiveMouseValue(device:IOHIDElementGetDevice(element),reportID:IOHIDElementGetReportID(element),page:page,usage:usage,value:integer,at:now)
@@ -256,7 +283,7 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
             owner.receiveMouseReport(result:result,bytes:Array(UnsafeBufferPointer(start:bytes,count:count)),
                 at:Int(owner.ledger.nanoseconds(stamp)/1_000_000))
         },Unmanaged.passUnretained(self).toOpaque())
-        IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue();owner.invalidate(.observerDisconnected,"键盘已断开，观察中止。")},Unmanaged.passUnretained(self).toOpaque())
+        IOHIDManagerRegisterDeviceRemovalCallback(manager,{context,_,_,_ in guard let context else{return};let owner=Unmanaged<MacroObserverTestController>.fromOpaque(context).takeUnretainedValue();guard ["prepared","ready","observing"].contains(owner.phase) else{return};owner.invalidate(.observerDisconnected,"键盘已断开，观察中止。")},Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerScheduleWithRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.defaultMode.rawValue)
         let result=IOHIDManagerOpen(manager,0);opened=result==0
         guard opened else{invalidate(.observerDisconnected,"无法打开只读观察，请检查输入监控权限。") ;return}
@@ -268,8 +295,15 @@ final class MacroObserverTestController:NSObject,NSApplicationDelegate,NSWindowD
         registryID=session
         if let descriptor=IOHIDDeviceGetProperty(device,"ReportDescriptor" as CFString) as? Data,
            !descriptor.isEmpty,descriptor.count<=16384{reportDescriptor=descriptor}
+        let expectedSession=session
         queue.async{[weak self] in
-            let result:Result<HardwareSnapshot,Error>=Result{try CherryUSB().completeSnapshot()}
+            let result:Result<HardwareSnapshot,Error>=Result{
+                let usb=try CherryUSB()
+                try usb.requireReadOnlyObservationSession(expectedSession)
+                let snapshot=try usb.completeSnapshot()
+                try usb.requireReadOnlyObservationSession(expectedSession)
+                return snapshot
+            }
             DispatchQueue.main.async{guard let self,self.phase=="prepared" else{return};do{try self.configure(result.get(),source:.hid);self.save()}catch{self.invalidate(.reportRejected,"无法开始观察：\(error.localizedDescription)")}}
         }
     }
