@@ -45,7 +45,7 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     static let playback=MacroPlayback(count:2)
     static let testMacro=KeyboardMacro(name:"CherryMac 实体测试 AB",steps:[.init(usage:4,pressed:true,delayMilliseconds:0),.init(usage:4,pressed:false,delayMilliseconds:80),.init(usage:5,pressed:true,delayMilliseconds:80),.init(usage:5,pressed:false,delayMilliseconds:80)])
     enum Scenario:String,CaseIterable {
-        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",modifier="modifier"
+        case abTwice="ab-twice",abOnce="ab-once",abThree="ab-three",maximumCount="ab-255",modifier="modifier",extended="keyboard-300"
         case mouseLeft="mouse-left",mouseRight="mouse-right",mouse="mouse",mouseBack="mouse-back",mouseForward="mouse-forward"
         case held="held",toggle="toggle"
         var isMouse:Bool{[Self.mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward].contains(self)}
@@ -55,15 +55,18 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         var mouseName:String{
             switch self{case .mouseLeft:return "鼠标左键";case .mouseRight:return "鼠标右键";case .mouseBack:return "鼠标后退";case .mouseForward:return "鼠标前进";default:return "鼠标中键"}
         }
-        var playback:MacroPlayback{MacroPlayback(mode:self == .held ? .held:self == .toggle ? .toggle:.count,count:self == .abTwice ? 2:self == .abThree ? 3:1)}
+        var playback:MacroPlayback{MacroPlayback(mode:self == .held ? .held:self == .toggle ? .toggle:.count,count:self == .maximumCount ? 255:self == .abTwice ? 2:self == .abThree ? 3:1)}
         var macro:KeyboardMacro{
             switch self {
-            case .abTwice,.abOnce,.abThree,.held,.toggle:return MacroHardwareTestController.testMacro
+            case .abTwice,.abOnce,.abThree,.maximumCount,.held,.toggle:return MacroHardwareTestController.testMacro
             case .modifier:return KeyboardMacro(name:"CherryMac 修饰键测试",steps:[
                 .init(usage:225,pressed:true,delayMilliseconds:0),
                 .init(usage:4,pressed:true,delayMilliseconds:80),
                 .init(usage:4,pressed:false,delayMilliseconds:80),
                 .init(usage:225,pressed:false,delayMilliseconds:80)])
+            case .extended:return KeyboardMacro(name:"CherryMac 300步容量测试",steps:(0..<150).flatMap{_ in [
+                KeyboardMacro.Step(usage:4,pressed:true,delayMilliseconds:20),
+                KeyboardMacro.Step(usage:4,pressed:false,delayMilliseconds:20)]})
             case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return KeyboardMacro(name:"CherryMac \(mouseName)测试",steps:[
                 .init(usage:mouseCode,pressed:true,delayMilliseconds:0,kind:.mouse),
                 .init(usage:mouseCode,pressed:false,delayMilliseconds:80,kind:.mouse)])
@@ -74,7 +77,9 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             case .abTwice:return "AB 两次"
             case .abOnce:return "AB 一次"
             case .abThree:return "AB 三次"
+            case .maximumCount:return "AB 255 次（次数上限）"
             case .modifier:return "Shift+A 一次（全部释放）"
+            case .extended:return "300 步键盘宏（150 次 A，单次触发）"
             case .mouse,.mouseLeft,.mouseRight,.mouseBack,.mouseForward:return "\(mouseName)一次（按下并释放）"
             case .held:return "AB 按住持续、松开停止"
             case .toggle:return "AB 开关、再次按键停止"
@@ -84,6 +89,8 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
             if self == .held{return "按住计算器键约两秒，看到至少两轮 AB 后松开；再用鼠标点击「已停止，核对输出」。"}
             if self == .toggle{return "按一下并松开计算器键启动，约两秒后再次按一下并松开停止；再点击「已停止，核对输出」。"}
             if isMouse{return "先把鼠标指针移到窗口空白处，避开按钮和输入框，再按下并完全松开计算器键一次；预期 \(label)，共两个鼠标按钮事件。不要用实际鼠标代替键盘触发。"}
+            if self == .extended{return "只按下并松开计算器键一次，等待300个按下／松开事件及静默核对。每步设定等待20ms，总等待量约6秒，不代表实际固件时序已验证。"}
+            if self == .maximumCount{return "只按下并松开计算器键一次，等候255轮AB、共1020个事件。设定等待总量约61秒；不要重复触发，完成后按提示恢复。"}
             return "请按下并完全松开计算器键一次；预期 \(label)，共 \(macro.steps.count*playback.count) 个按下／松开事件。"
         }
     }
@@ -94,7 +101,14 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
     static func plan(_ baseline:HardwareSnapshot,scenario:Scenario = .abTwice)throws->MacroWriteAuthorization {
         try baseline.validate()
         guard Array(baseline.keymap[306..<309])==[0x30,0x92,0x01],let bank=baseline.macroData else{throw HardwareError(message:"本轮需要原始计算器键和完整宏备份，未授权写入。")}
-        var library=try CherryMacroCodec.decode(bank);guard library.count<32 else{throw HardwareError(message:"宏库已满，测试不会覆盖现有宏。")}
+        var library=try CherryMacroCodec.decode(bank)
+        if scenario == .extended{
+            let (targetBank,index)=try appendExtendedRecord(bank,macro:scenario.macro)
+            var target=baseline;target.macroData=targetBank
+            target.keymap.replaceSubrange(306..<309,with:[0x70,index,0])
+            return try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:true)
+        }
+        guard library.count<32 else{throw HardwareError(message:"宏库已满，测试不会覆盖现有宏。")}
         let index=library.count;library.append(scenario.macro)
         let headerReserved=bank[0]==0xaa && bank[1]==0x55 ? Array(bank[6..<16]):[]
         let encoded=try CherryMacroCodec.encode(library,headerReserved:headerReserved)
@@ -103,6 +117,37 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
         var target=baseline;target.macroData=targetBank
         target.keymap.replaceSubrange(306..<309,with:try CherryMacroCodec.binding(index,playback:scenario.playback))
         return try MacroWriteAuthorization(baseline:baseline,target:target,allowUnbounded:true)
+    }
+    static func appendExtendedRecord(_ bank:[UInt8],macro:KeyboardMacro)throws->([UInt8],UInt8){
+        let old=try CherryMacroCodec.decode(bank,maximumRecords:126,maximumEvents:762)
+        guard old.count<126 else{throw HardwareError(message:"宏记录已满，容量测试不删除现有宏。")}
+        let events=try CherryMacroCodec.encodeEvents(macro,maximumEvents:762)
+        let recognized=bank[0]==0xaa && bank[1]==0x55
+        let oldUsed=recognized ? Int(bank[2]) | Int(bank[3])<<8:16
+        let oldTableEnd=16+old.count*2,newTableEnd=oldTableEnd+2,newStart=oldUsed+2
+        let used=newStart+4+events.count
+        guard used<=CherryMacroCodec.accessibleSize else{throw HardwareError(message:"剩余宏容量不足以追加300步；保留现有宏，未准备写入。")}
+        var result=bank
+        if !recognized{result.replaceSubrange(0..<16,with:Array(repeating:UInt8(0),count:16))}
+        result[0]=0xaa;result[1]=0x55
+        func word(_ offset:Int,_ value:Int){result[offset]=UInt8(value&255);result[offset+1]=UInt8(value>>8)}
+        // Make room for one extra offset-table entry. Existing record bytes,
+        // opaque gaps and reservations move together; no old events are re-encoded.
+        result.replaceSubrange(newTableEnd..<newStart,with:bank[oldTableEnd..<oldUsed])
+        for index in 0..<old.count{
+            let position=16+index*2,offset=Int(bank[position]) | Int(bank[position+1])<<8
+            word(position,offset+2)
+        }
+        word(oldTableEnd,newStart);word(newStart,macro.steps.count)
+        result[newStart+2]=0;result[newStart+3]=0
+        result.replaceSubrange(newStart+4..<used,with:events)
+        word(2,used);word(4,old.count+1)
+        let decoded=try CherryMacroCodec.decode(result,maximumRecords:126,maximumEvents:762)
+        guard decoded.count==old.count+1,decoded.last?.steps==macro.steps,
+              zip(old,decoded).allSatisfy({$0.steps==$1.steps && $0.hardwareReserved==$1.hardwareReserved}) else{
+            throw HardwareError(message:"容量测试目标未保持现有宏事件与保留数据。")
+        }
+        return (result,UInt8(old.count))
     }
     static func resumePlan(directory:URL,current:HardwareSnapshot)throws->MacroWriteAuthorization {
         let before=try HardwareProfile.decode(Data(contentsOf:directory.appendingPathComponent("original.json"))).snapshot
@@ -385,11 +430,12 @@ final class MacroHardwareTestController:NSObject,NSApplicationDelegate,NSWindowD
                 try evidence.observe(.init(usage:step.usage,pressed:step.pressed,milliseconds:cycle*400+index*80,kind:step.kind))
             }}
             if scenario.playback.mode != .count{try evidence.requestStop(milliseconds:1500,source:.userAcknowledged)}
-            let assessment=try evidence.assessment(milliseconds:3000)
+            let assessed=max(3000,(evidence.observations.last?.milliseconds ?? 0)+evidence.requiredQuietMilliseconds+100)
+            let assessment=try evidence.assessment(milliseconds:assessed)
             precondition(assessment.passed && assessment.held.isEmpty && assessment.completedCycles==cycles && assessment.observedEvents==scenario.macro.steps.count*cycles)
             // An additional event must invalidate a completed finite macro.
-            try evidence.observe(.init(usage:scenario.macro.steps[0].usage,pressed:true,milliseconds:3100,kind:scenario.macro.steps[0].kind))
-            precondition(!(try! evidence.assessment(milliseconds:4000)).passed)
+            try evidence.observe(.init(usage:scenario.macro.steps[0].usage,pressed:true,milliseconds:assessed+100,kind:scenario.macro.steps[0].kind))
+            precondition(!(try! evidence.assessment(milliseconds:assessed+1000)).passed)
             if scenario == .mouse{
                 var wrong=try MacroExecutionEvidence(macro:scenario.macro,playback:scenario.playback,source:.simulation,startedMilliseconds:0)
                 try wrong.observe(.init(usage:4,pressed:true,milliseconds:1))
