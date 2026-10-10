@@ -2298,6 +2298,64 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_main_window_message_maps(pe, path):
+    """Close fixed own/base message tables, while keeping other notify sources separate."""
+    parent = inspect_notify_parent_map_matching(path)
+    dll = PE32(Path(path).read_bytes())
+    exe_bodies = {
+        (0x414b90, 0x414dac): "7e141fa9c610f44fbac8d9aa9dd401348114629980ba468a68db80e05d15b7ff",
+        (0x418030, 0x41803a): "52f1dd25aa3441fa9e2cb4f183bb4afaf076a943809ff1a27b337608c6c123a1",
+    }
+    dll_bodies = {
+        (0x11001320, 0x1100144f): "31d8068879a8b1ad0f18bab61d53c8d48782c475c190f639582173ad8d138993",
+        (0x1104ab90, 0x1104ab9a): "8c52fac9a4b458386b3d3534c46133c4b0b3120d8f07d393dfb701d558a0d7ca",
+    }
+    for reader, bodies in [(pe, exe_bodies), (dll, dll_bodies)]:
+        for (start, end), digest in bodies.items():
+            if hashlib.sha256(reader.at(start, end-start)).hexdigest() != digest:
+                raise ValueError("Main-window message-map initialization differs")
+    if struct.unpack("<2I", pe.at(0x77eaa0, 8)) != (0x418030, 0x842f28):
+        raise ValueError("Main-window own map header differs")
+    rows = [("itemactivate", 0x75a10c, 0x414bb7, 0x414be0, 0x843030),
+            ("setfocus", 0x75a12c, 0x414c31, 0x414c57, 0x843150),
+            ("textchanged", 0x75a144, 0x414ca6, 0x414ccc, 0x843270)]
+    for name, address, push, signature_store, destination in rows:
+        encoded = (name+"\0").encode("utf-16-le")
+        if pe.at(address, len(encoded)) != encoded or pe.at(push, 5) != b"\x68"+struct.pack("<I", address):
+            raise ValueError("Main-window message-map event differs")
+        if pe.at(signature_store, 10) != b"\xc7\x05"+struct.pack("<II", destination, 2):
+            raise ValueError("Main-window message-map event signature differs")
+    if pe.at(0x414d41, 10) != bytes.fromhex("c7059033840000000000"):
+        raise ValueError("Main-window own map terminator differs")
+    imported = "?messageMap@WindowImplBase@DuiLib@@1UDUI_MSGMAP@2@B"
+    if pe.at(pe.base+pe.pointer(0x6eb1a8)+2, len(imported)+1) != (imported+"\0").encode("ascii"):
+        raise ValueError("Main-window parent data import differs")
+    if struct.unpack("<2I", dll.at(0x11119674, 8)) != (0x1104ab90, 0x11166048):
+        raise ValueError("WindowImplBase message-map header differs")
+    checks = {0x11001347: "6830fc1011", 0x1100134c: "b948601611",
+              0x1100136e: "c7055061161102000000",
+              0x110013e3: "c7057062161100000000", 0x1104ab93: "b820981111"}
+    for address, encoded in checks.items():
+        if dll.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("WindowImplBase parent event or terminator differs")
+    if dll.at(0x1110fc30, 12) != "click\0".encode("utf-16-le"):
+        raise ValueError("WindowImplBase parent event name differs")
+    return {"dllSHA256": parent["dllSHA256"],
+            "executableCodeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in exe_bodies.items()},
+            "dllCodeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in dll_bodies.items()},
+            "ownMap": {"address": "0x77eaa0", "initializer": "0x414b90",
+                       "events": [row[0] for row in rows], "terminatorSignature": 0},
+            "baseMap": {"address": "0x11119674", "initializer": "0x11001320", "events": ["click"],
+                        "terminatorSignature": 0, "nextMap": parent["parentMap"]},
+            "tabselectMatchesTheseFixedMapEntries": False,
+            "hardwareWriteAuthorized": False,
+            "limits": "Only fixed initialized main-window/WindowImplBase/CNotifyPump tables under the "
+                      "previously audited exact event-type matcher. Not absence of all application reports: "
+                      "control delegates, other listeners, runtime routing/table/class changes and earlier "
+                      "sender virtual calls remain independent. No keyboard write or persistence evidence."}
+
+
 def inspect_notify_parent_map_matching(path):
     """Pin the terminal parent map and exact event-type matching semantics."""
     data = Path(path).read_bytes()
@@ -4355,7 +4413,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 97,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 98,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4414,6 +4472,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "virtualWindowNameSources": inspect_virtual_window_name_sources(pe, ui_dll) if ui_dll else None,
         "mainpageMessageMap": inspect_mainpage_message_map(pe),
         "notifyParentMapMatching": inspect_notify_parent_map_matching(ui_dll) if ui_dll else None,
+        "mainWindowMessageMaps": inspect_main_window_message_maps(pe, ui_dll) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
