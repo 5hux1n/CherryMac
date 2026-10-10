@@ -2302,6 +2302,70 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+def inspect_xml_standard_control_creation(path, skin):
+    """Pin the normal XML creation branch and its null-only fallback callbacks."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("XML creation DuiLib image differs")
+    pe = PE32(data)
+    start, end = 0x1105d11c, 0x1105d284
+    digest = "ff0e412b56d28dfc3abf03c621a988606c90ab8d12d135a95bfb2ada1bd0be36"
+    if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+        raise ValueError("Normal XML control creation block differs")
+    checks = {
+        0x1105d12e: "8b8530f2ffff", 0x1105d135: "68aca71111",
+        0x1105d141: "e83a1effff", 0x1105d179: "e87213fcff",
+        0x1105d184: "e89712fcff", 0x1105d195: "898d34f2ffff",
+        0x1105d19b: "83bd34f2ffff00", 0x1105d1a2: "0f8587000000",
+        0x1105d1a8: "e8f3400000", 0x1105d1de: "e87d1fffff",
+        0x1105d1f8: "e8e31dffff", 0x1105d20c: "8b8d30f2ffff",
+        0x1105d213: "ff950cf2ffff", 0x1105d222: "83bd34f2ffff00",
+        0x1105d229: "7402", 0x1105d22b: "eb02",
+        0x1105d22f: "83bd34f2ffff00", 0x1105d236: "753a",
+        0x1105d23e: "83ba4001000000", 0x1105d245: "742b",
+        0x1105d247: "8b8530f2ffff", 0x1105d262: "8b8840010000",
+        0x1105d26a: "ffd0", 0x1105d26c: "898534f2ffff",
+    }
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("XML creation format, factory or null fallback instruction differs")
+    literal = "C%sUI"
+    if pe.at(0x1111a7ac, len((literal+"\0").encode("utf-16-le"))) != (literal+"\0").encode("utf-16-le"):
+        raise ValueError("XML factory class format differs")
+    resource = None
+    if skin:
+        target = Path(skin)/"XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+        raw = target.read_bytes()
+        nodes = [node for node in ET.fromstring(raw.lstrip()).iter()
+                 if node.attrib.get("name") == "device_light_mode_switch"]
+        if len(nodes) != 1 or nodes[0].tag != "TabLayout" or len(nodes[0]) != 3:
+            raise ValueError("XML target mode switch class or child count differs")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(),
+                    "name": "device_light_mode_switch", "tag": nodes[0].tag,
+                    "standardFactoryKey": "CTabLayoutUI", "directChildCount": 3}
+    return {
+        "dllSHA256": expected, "codeSHA256": {f"{start:#x}..{end:#x}": digest},
+        "resource": resource,
+        "format": {"literal": literal, "literalAddress": "0x1111a7ac",
+                   "call": "0x1105d141 ->0x1104ef80", "sourceLocal": "ebp-0xdd0",
+                   "formattedLocal": "ebp-0x864"},
+        "standardFactoryFirst": "0x1105d184 ->0x1101e420 using formatted class key",
+        "nonNullFactorySkipsGlobalCallbacks": "0x1105d1a2 ->0x1105d22f",
+        "globalCallbacks": {"onlyWhenResultNull": True, "collectionGetter": "0x110612a0",
+                            "call": "0x1105d213", "argument": "original unformatted name",
+                            "firstNonNullResultEndsLoop": True},
+        "builderCallback": {"onlyWhenResultStillNull": True, "member": "builder+0x140",
+                            "call": "0x1105d26a virtual+0", "argument": "original unformatted name"},
+        "hardwareWriteAuthorized": False,
+        "limits": "Normal XML construction block only, not the preceding nested-resource branch. "
+                  "Combined with the fixed standard registration, TabLayout resolves to the fresh standard "
+                  "creator when that registry entry succeeds. Registry overrides, allocation failure, later "
+                  "attributes/initialization, delegate registration and the active runtime tree remain separate. "
+                  "This is not a whole-application no-report or physical write/persistence proof."
+    }
+
+
 def inspect_standard_tab_factory(path):
     """Pin fresh standard-class construction separately from XML factory selection."""
     data = Path(path).read_bytes()
@@ -4613,7 +4677,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 101,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 102,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4676,6 +4740,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "controlNotifyDelegateBoundary": inspect_control_notify_delegate_boundary(pe, ui_dll) if ui_dll else None,
         "libraryDelegateRegistrations": inspect_library_delegate_registrations(pe, ui_dll) if ui_dll else None,
         "standardTabFactory": inspect_standard_tab_factory(ui_dll) if ui_dll else None,
+        "xmlStandardControlCreation": inspect_xml_standard_control_creation(ui_dll, skin) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
