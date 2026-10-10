@@ -955,6 +955,54 @@ def inspect_pairing_endpoint_commands(image):
 
 
 
+
+def inspect_feature_configuration_channel(image):
+    """Pin actual report9 transport evidence and upstream format correspondence."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or size<0 or offset+size>len(image):
+            raise ValueError("Feature configuration evidence exceeds image bounds")
+        return image[offset:offset+size]
+    bodies={
+        (0x27e40,0x27e8a):"33d83b1d00e62d2a656a5b6370eca9978af9e4d1832f8f5866ca65f552061a36",
+        (0x27e8c,0x27ed0):"4a413dda68e6fecc058fdb2dadc8638a333b7130895cef01aaa22b338b3414b5",
+        (0x27ed0,0x27ef6):"866a3fd67b0eeee74e53f90fc818fe1cf207ecf3df0f51cb1a08085c4c0f241c",
+        (0x27f20,0x27fae):"36b01b8e31d2b729e0f610ac256569e47230b57145c5755366259707aeb7e785",
+        (0x27fbc,0x2801e):"902cbc142efb68ba538132f5b2261a010842e66f7f4fecad56d50c4ec11482f5",
+    }
+    for (a,b),digest in bodies.items():
+        if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
+            raise ValueError("Feature configuration transport body differs")
+    names=['PENDING','GET_MAX_MOD_ID','GET_HWID','GET_BOARD_NAME','INDEX_PEERS','GET_PEER',
+           'SET','FETCH','SUCCESS','TIMEOUT','REJECT','WRITE_FAIL','DISCONNECTED']
+    addresses=[0x4c794,0x4c79c,0x4c7ac,0x4c7b8,0x4c7c8,0x4c7d4,0x4c7e0,
+               0x4c7e4,0x4c7ec,0x4c7f4,0x4c7fc,0x4c804,0x4c4b0]
+    for index,(name,address) in enumerate(zip(names,addresses)):
+        if struct.unpack('<I',at(0x4c810+4*index,4))[0]!=address or at(address,len(name)+1)!=name.encode()+b'\0':
+            raise ValueError("Feature configuration status table differs")
+    if struct.unpack('<I',at(0x52678,4))[0]!=0x4c784 or at(0x4c784,13)!=b'config_event\0':
+        raise ValueError("Configuration event metadata differs")
+    return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "frame":{"reportID":9,"bodyBytesMaximum":29,"headerBytes":4,"dataBytesMaximum":25,
+                "bodyFields":["recipient","eventID","status","dataLength"],
+                "decoder":"0x27e40 verifies length4..29, payload<=25 and payload<=bodyLength-4, copies data into event+0x14",
+                "eventOffsets":{"eventID":11,"recipient":12,"status":13,"dataLength":16,"data":20}},
+            "statusTable":{"address":"0x4c810","entries":[{"value":i,"name":n} for i,n in enumerate(names)]},
+            "requestLifecycle":{"entry":"0x27f20", "busyState":2,"busyResult":-16,
+                "decode":"0x27e40", "eventType":"config_event at0x52678",
+                "publish":"0x3737c; transportID copied toevent+8, isRequest=1 at+10",
+                "pending":"Clear four-byte response header, status0, dataLength4 and transport state2",
+                "response":"0x27fbc requires matching transportID; formats atobject+0x36, state3 and cancels scheduled work",
+                "unhandled":"Request remaining unhandled gets status12 and zero data"},
+            "upstreamCorrespondence":{"project":"nrfconnect/sdk-nrf nRF Desktop",
+                "referenceTag":"v2.0.0",
+                "transportSource":"https://github.com/nrfconnect/sdk-nrf/blob/v2.0.0/applications/nrf_desktop/src/util/config_channel_transport.c",
+                "eventSource":"https://github.com/nrfconnect/sdk-nrf/blob/v2.0.0/applications/nrf_desktop/src/events/config_event.h",
+                "match":"Four-byte format, exact13 status names/order, event fields and named pending/response lifecycle",
+                "notProved":"Exact compiler/SDK release, all upstream code equivalence, model-specific subscribers/options or current0102 implementation"},
+            "limits":"Names and transport identify a separate configuration-channel lineage; they do not prove keymap/lighting queries, generic memory reads, complete backup, receiver routing or safe Feature writes. No requests built or sent; no SDK code copied into product."}
+
+
 def inspect_control_report_read_sources(image):
     """Pin control-style GET_REPORT alternatives; no feature probe or guesses."""
     def at(address,size):
@@ -1272,7 +1320,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 27,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 28,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1308,6 +1356,7 @@ def inspect(path):
             'nonreadingControlBranches': inspect_nonreading_control_branches(image),
             'hidCallbackReadSources': inspect_hid_callback_read_sources(image),
             'controlReportReadSources': inspect_control_report_read_sources(image),
+            'featureConfigurationChannel': inspect_feature_configuration_channel(image),
             'hardwareReady': False, 'firmwareUpgradeImplemented': False,
             'limits': 'The package contains two different images/configurations under different resource languages. The neutral resource has target identity and its image contains the target USB descriptor and model strings; updater runtime resource selection is not proved. No claim about installed firmware, name-to-bank capacity, command decoding, flash persistence or blackout cause. Storage names and pointer anchors guide further firmware analysis only.'}
 
