@@ -510,6 +510,50 @@ def inspect_report_reply_cache(image):
 
 
 
+def inspect_parameter_write_side_effects(image):
+    """Pin command06's actual copy and local side effects, not field semantics."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):raise ValueError("Parameter-write audit exceeds image")
+        return image[offset:offset+size]
+    start,end=0x2f250,0x2f28a
+    digest='a165bb2be7023662178def9154583695885f8a66990d594ee88a665c46a6b721'
+    if hashlib.sha256(at(start,end-start)).hexdigest()!=digest:
+        raise ValueError("Parameter-write side-effect body differs")
+    checks={0x2f250:'b8f13f0f',0x2f25a:'3f2b',0x2f264:'1970',
+            0x2f268:'04eb0800',0x2f26e:'0af009ff',0x2f274:'6378',
+            0x2f276:'5278',0x2f278:'9a42',0x2f27a:'01d0',
+            0x2f27c:'fcf79aff',0x2f286:'0b70',0x2f288:'1370'}
+    for address,encoded in checks.items():
+        if at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError("Parameter-write side-effect instruction differs")
+    literals={0x2f2d4:0x20009b23,0x2f2d8:0x20000cd8,
+              0x2f2dc:0x20006f2c,0x2f2e0:0x20009ac3,0x2f2e4:0x20009aa8}
+    for address,value in literals.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError("Parameter-write side-effect literal differs")
+    table=0x2f0f4
+    if table+2*struct.unpack('<H',at(table+2*(6-3),2))[0]!=start:
+        raise ValueError("Command06 no longer enters audited parameter writer")
+    return {'command':6,'entry':hex(start),'endExclusive':hex(end),'codeSHA256':digest,
+            'copy':{'call':'0x2f26e ->0x3a084','destination':'0x20000cd8 + unsigned request offset',
+                    'source':'incoming payload','length':'incoming count',
+                    'guards':'offset <=63 and offset+count <=63; last bank byte is excluded for positive lengths',
+                    'offset53And54InsidePositiveCopyRange':True,
+                    'fieldNamesProved':False},
+            'beforeCopy':{'address':'0x20009b23','storedValue':1},
+            'conditionalCall':{'compare':'parameter byte1 after copy versus byte1 at0x20006f2c',
+                               'differentTarget':'0x2c1b4','equalSkipsTo':'0x2f280',
+                               'calleeFullEffectsClassifiedHere':False},
+            'afterCopy':[{'address':'0x20009ac3','storedValue':1},
+                         {'address':'0x20009aa8','storedValue':1}],
+            'hardwareWriteAuthorized':False,
+            'limits':'Fixed packaged0104 command06 branch only. Copy permission is not polling meaning, '
+                     'official01CE application sending, current0102 equivalence, flash completion, '
+                     'successful reply or blackout causation. Flag consumers and callee effects are not '
+                     'closed by this audit. No candidate reports generated, execution or hardware access.'}
+
+
 def inspect_parameter_consumers(image):
     """Locate declared base loads and pin two actual consumers; no emulation."""
     def at(address, size):
@@ -1619,7 +1663,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 35,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 36,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1639,6 +1683,7 @@ def inspect(path):
             'flashCompletion': inspect_flash_completion(image),
             'reportReplyCache': inspect_report_reply_cache(image),
             'parameterConsumers': inspect_parameter_consumers(image),
+            'parameterWriteSideEffects': inspect_parameter_write_side_effects(image),
             'lightFlagCallback': inspect_light_flag_callback(image),
             'customLightingOutput': inspect_custom_lighting_output(image),
             'macroBlockSaving': inspect_macro_block_saving(image),
