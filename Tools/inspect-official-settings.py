@@ -2289,6 +2289,57 @@ def inspect_basic_apply_transport_chain(pe):
 
 
 
+
+def inspect_light_mode_tab_selection(path, skin):
+    """Resolve the actual resource class and its programmatic tab notification."""
+    data = Path(path).read_bytes()
+    expected = "aff70e5182c4d3e5d592db39f7edf17721f86b37ef3f801ed7f7108c9f79c90b"
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Tab-selection DuiLib image differs")
+    pe = PE32(data)
+    if pe.class_name(0x111115b8) != ".?AVCTabLayoutUI@DuiLib@@" or pe.pointer(0x111115b8+0x230) != 0x1108af40:
+        raise ValueError("Tab-selection virtual differs")
+    bodies = {
+        (0x1108abb0, 0x1108abe9): "2f5a7aa0834eb1cf440802c6195590988bb1d579932311abe00f1d6f66d557e5",
+        (0x1108af40, 0x1108b0da): "d02718040a6287cf7ef333c29827806afea1ecb481ba2dcde31f2a4ae9618649",
+    }
+    for (start, end), digest in bodies.items():
+        if hashlib.sha256(pe.at(start, end-start)).hexdigest() != digest:
+            raise ValueError("Tab-selection body differs")
+    checks = {0x1108abc2: "c700b8151111", 0x1108abd8: "c78240080000ffffffff",
+              0x1108af6f: "3b8840080000", 0x1108af75: "7507",
+              0x1108af90: "899140080000", 0x1108b09b: "83794400",
+              0x1108b0ae: "6a00", 0x1108b0be: "68d8071111",
+              0x1108b0cd: "e8fed9fdff"}
+    for address, encoded in checks.items():
+        if pe.at(address, len(bytes.fromhex(encoded))) != bytes.fromhex(encoded):
+            raise ValueError("Tab-selection notify instruction differs")
+    word = "tabselect"
+    if pe.at(0x111107d8, len((word+"\0").encode("utf-16-le"))) != (word+"\0").encode("utf-16-le"):
+        raise ValueError("Tab-selection notification name differs")
+    resource = None
+    if skin:
+        target = Path(skin)/"XML/DeviceXml/keyboarddevice_MX_3_0S_FL_RGB_WIRELESS_POKEMON.xml"
+        raw = target.read_bytes()
+        tree = ET.fromstring(raw.lstrip())
+        nodes = [node for node in tree.iter() if node.attrib.get("name") == "device_light_mode_switch"]
+        if len(nodes) != 1 or nodes[0].tag != "TabLayout":
+            raise ValueError("Target mode-switch resource class differs")
+        resource = {"sha256": hashlib.sha256(raw).hexdigest(), "controlClass": "TabLayout",
+                    "directChildCount": len(nodes[0])}
+    return {"dllSHA256": expected, "codeSHA256": {f"{a:#x}..{b:#x}": h for (a,b),h in bodies.items()},
+            "control": "device_light_mode_switch", "virtual": "CTabLayoutUI+0x230 ->0x1108af40",
+            "initialSelection": -1, "sameIndex": "Return true before changing children or notifying",
+            "differentIndex": "Store selection, show selected child, hide others, request layout update",
+            "notification": {"managerRequired": True, "name": word, "call": "0x1108b0cd ->0x11068ad0",
+                             "wParam": "new selected index", "lParam": "previous selected index",
+                             "lastArgument": 0},
+            "resource": resource, "hardwareWriteAuthorized": False,
+            "limits": "Fixed target XML and base-class implementation only. Valid changed-index selection "
+                      "can notify; not evidence of a keyboard report. Receiver callbacks, child virtual calls, "
+                      "runtime subclasses and manager scheduling remain separately unclassified."}
+
+
 def inspect_basic_apply_light_setter(pe):
     """Resolve the earlier +324 call and host-cache/UI leaves separately."""
     bodies = {
@@ -3791,7 +3842,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 88,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 89,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -3840,6 +3891,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "basicApplyTransportChain": inspect_basic_apply_transport_chain(pe),
         "pollingApplyDestination": inspect_polling_apply_destination(pe),
         "basicApplyLightSetter": inspect_basic_apply_light_setter(pe),
+        "lightModeTabSelection": inspect_light_mode_tab_selection(ui_dll, skin) if ui_dll else None,
         "basicRefreshModeHelpers": inspect_basic_refresh_mode_helpers(pe),
         "basicRefreshColorRead": inspect_basic_refresh_color_read(pe),
         "refreshColorGroupSelection": inspect_refresh_color_group_selection(pe),
