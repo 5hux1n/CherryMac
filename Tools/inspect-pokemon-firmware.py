@@ -643,6 +643,35 @@ def inspect_parameter_protocol_state_flag(image):
                      'cause. No reports generated, firmware execution or hardware access.'}
 
 
+def inspect_low_command_rejection(image):
+    """Pin low-command rejection after state prelude; no live equivalence."""
+    def at(address,size):
+        offset=address-0x10000
+        if offset<0 or offset+size>len(image):raise ValueError('Low command audit exceeds image')
+        return image[offset:offset+size]
+    bodies={(0x2f094,0x2f0f4):'437df5aeb884ae1c9e779ca7413291e14832580e875d318e6bda80afa4189257',
+            (0x2f2b8,0x2f2be):'a9859aaae1615603ec45704596c7caa40c96644055da1047b05945b4201a4ae9',
+            (0x2f2be,0x2f2c6):'94e8268778a82a304aed7dcf3b4c7efb231fdfd0294328ab69894723011319e1'}
+    for (start,end),digest in bodies.items():
+        if hashlib.sha256(at(start,end-start)).hexdigest()!=digest:
+            raise ValueError('Low command rejection body differs')
+    for address,value in {0x2f2d0:0x20009acc,0x2f2f8:0x20009ac6,0x2f2fc:0x20009b2b}.items():
+        if struct.unpack('<I',at(address,4))[0]!=value:
+            raise ValueError('Low command state literal differs')
+    return {'codeSHA256':{f'{a:#x}..{b:#x}':h for (a,b),h in bodies.items()},
+            'reportIDGuard':4,'commands':[0,1,2],
+            'comparison':'0x2f0e2/0x2f0e4 unsigned command<=2 ->0x2f2b8',
+            'rejection':'storeFF at copied reply+7 then branch0x2f28a common tail',
+            'prelude':{'stateRAM':'0x20009b2b',
+                       'state2':'0x2f2be sets0x20009ac6 to1 before command dispatch',
+                       'state3':'0x2f0d6 sets0x20009acc to1 before command dispatch'},
+            'sideEffectFreeRejectionProved':False,'hardwareReady':False,
+            'limits':'Fixed0104 dispatcher branch only. Copied caches, state flags and common '
+                     'tail precede/follow rejection, so rejected commands are not assumed harmless. '
+                     'Actual host reply delivery, current0102 code, macro preservation and flash '
+                     'acceptance remain unproved. No command generation, execution or hardware access.'}
+
+
 def inspect_parameter_consumers(image):
     """Locate declared base loads and pin two actual consumers; no emulation."""
     def at(address, size):
@@ -1752,7 +1781,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 38,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 39,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
@@ -1775,6 +1804,7 @@ def inspect(path):
             'parameterWriteSideEffects': inspect_parameter_write_side_effects(image),
             'parameterWriteCommonTail': inspect_parameter_write_common_tail(image),
             'parameterProtocolStateFlag': inspect_parameter_protocol_state_flag(image),
+            'lowCommandRejection': inspect_low_command_rejection(image),
             'lightFlagCallback': inspect_light_flag_callback(image),
             'customLightingOutput': inspect_custom_lighting_output(image),
             'macroBlockSaving': inspect_macro_block_saving(image),

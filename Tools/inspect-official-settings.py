@@ -876,6 +876,40 @@ def inspect_default_outer_dispatch(pe):
             "limits":"Fixed name comparison and string-operation sites. The literal default_btn prefix differs from all three shared-tail action prefixes. This narrows the named default click, not callbacks, mutations of a live sender name, all notification types or firmware implicit behavior. No runtime execution or global no-write assertion."}
 
 
+def inspect_default_key_finish(pe):
+    """Pin the key sender's finish report and wrapper return handling."""
+    digest='76d96208dbb795004e037c1a85a3a3228a325c4c60d2a43e7321f044e3f42752'
+    if hashlib.sha256(pe.at(0x4da0e0,0x4da315-0x4da0e0)).hexdigest()!=digest:
+        raise ValueError('Key finish method differs')
+    checks={0x4da115:'c64415bc04',0x4da120:'0fb74844',0x4da131:'c64405bc82',
+            0x4da140:'c64415bc02',0x4da256:'6a0a',0x4da258:'ff15f4bc6e00',
+            0x4da28b:'e8f0f0ffff',0x4da2b1:'ffd0',0x4da2b3:'83bd5cffffff01',
+            0x4da2d4:'3dff000000',0x4da2db:'b89affffff',0x4da2f2:'3dfe000000',
+            0x4da2f9:'b899ffffff',0x4da300:'b801000000',
+            0x4ff6b5:'e826aafdff',0x4ff6ba:'c78520fdffff01000000'}
+    for address,encoded in checks.items():
+        if pe.at(address,len(bytes.fromhex(encoded)))!=bytes.fromhex(encoded):
+            raise ValueError('Key finish instruction differs')
+    if pe.at(pe.base+pe.pointer(0x6ebcf4)+2,len(b'Sleep\0'))!=b'Sleep\0':
+        raise ValueError('Key finish Sleep import differs')
+    return {'method':'0x4da0e0','endExclusive':'0x4da315','functionSHA256':digest,
+            'request':{'reportID':4,'selectorOffset':'transport+0x44',
+                       'selectorOneCommand':130,'otherCommand':2,
+                       'count':0,'offset':0,'statusByte':0,
+                       'macroPayloadSerializedHere':False},
+            'beforeExchange':{'sleepArgument':10,'import':'Sleep','notPersistenceBarrier':True},
+            'exchange':'0x4da28b ->0x4d9380','followingVirtual':'transport+0x644 object virtual+0x14',
+            'return':{'exchangeResultNotOne':'return that result',
+                      'replyByte7FF':-102,'replyByte7FE':-103,'otherStatus':1},
+            'keySenderCaller':{'call':'0x4ff6b5','argument':1,
+                               'afterCall':'0x4ff6ba stores1 in its return local without checking finish result'},
+            'hardwareWriteAuthorized':False,
+            'limits':'Fixed finish method and immediate caller only. Selector assignment, '
+                     'exchange/virtual side effects, installed firmware, implicit macro changes '
+                     'and flash retention remain unproved. Wrapper success is not finish or '
+                     'persistence acceptance. No Windows execution or report generation.'}
+
+
 def inspect_default_macro_dispatch(pe, skin=None):
     """Bound the direct default-button dispatch and alternate key wrappers."""
     checks = {
@@ -4677,7 +4711,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
     if pe.pointer(0x4A0A10) != 0x4A04C6:
         raise ValueError("Unexpected raw connection dispatch table")
     result = {
-        "format": "CherryMacOfficialSettingsStaticAudit", "version": 102,
+        "format": "CherryMacOfficialSettingsStaticAudit", "version": 103,
         "executableSHA256": digest, "method": "PE32 pointer and RTTI inspection; no execution or HID",
         "deviceClass": pe.class_name(device), "profileClass": pe.class_name(profile),
         "deviceVirtualTargets": {hex(k): hex(v) for k, v in expected.items()},
@@ -4703,6 +4737,7 @@ def inspect(path, skin=None, macro_ui=False, ui_dll=None, osconf_dll=None, defau
         "lightingNormalApply": inspect_lighting_normal_apply(pe),
         "lightingSenderReturnStatus": inspect_lighting_sender_return_status(pe),
         "defaultMacroDispatch": inspect_default_macro_dispatch(pe, skin),
+        "defaultKeyFinish": inspect_default_key_finish(pe),
         "defaultOuterDispatch": inspect_default_outer_dispatch(pe),
         "defaultKeyActionBranch": inspect_default_key_action_branch(pe),
         "settingsExternalPropertyBinding": inspect_external_property_binding(pe, osconf_dll),
