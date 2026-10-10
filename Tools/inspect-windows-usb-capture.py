@@ -23,7 +23,8 @@ def require(condition, message):
 
 def inspect(path, bus, device):
     require(1 <= bus <= 65535 and 1 <= device <= 127, "需要明确的 USB bus 和设备地址。")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # Reject FIFOs/devices after opening without waiting for a writer.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as handle:
         initial = os.fstat(handle.fileno())
         require(stat.S_ISREG(initial.st_mode) and 24 <= initial.st_size <= 256_000_000,
@@ -55,6 +56,10 @@ def inspect(path, bus, device):
         completion_counts = collections.Counter()
 
         def register_out(irp, record):
+            if irp == 0:
+                record['usbCompletionAssociation'] = 'unusable-zero-IRP'
+                completion_counts['submissions-with-zero-IRP'] += 1
+                return
             active = pending_out.setdefault(irp, [])
             if active:
                 record['usbCompletionAssociation'] = 'ambiguous-active-IRP'
@@ -181,7 +186,7 @@ def inspect(path, bus, device):
         final = os.fstat(handle.fileno())
         require((initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns), "分析期间抓包文件发生变化。")
-    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 2,
+    return {"format": "CherryMacWindowsUSBCaptureInspection", "version": 3,
             "captureSHA256": digest.hexdigest(), "bus": bus, "deviceAddress": device,
             "packets": packets, "selectedDevicePackets": selected, "report4Frames": frames,
             "commandCounts": dict(sorted(counts.items())), "issues": issues,
