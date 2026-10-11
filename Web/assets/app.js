@@ -3,10 +3,10 @@ import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
 import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {mergePollingEditorDraft,hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
-import {saveLightingEditorDraft,loadLightingEditorDraft,loadLightingColorLibrary,saveLightingColorLibrary,rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
+import {savePollingEditorDraft,loadPollingEditorDraft,saveLightingEditorDraft,loadLightingEditorDraft,loadLightingColorLibrary,saveLightingColorLibrary,rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
 import {WRITE_BLOCK_REASON} from './safety.js?v=0.6.0';
 import {applyMacroWithStop,recoverMacroWithStop} from './macro-session.js?v=0.6.0';
 import {saveMacroEditorDraft,loadMacroEditorDraft,mergeMacroRecoveryDraft,macroProductPlan,rememberMacroProfile,rememberMacroProfileIfMatching,recalledMacroProfile,rememberMacroTransaction,lastMacroTransaction,macroLocalRecords,restoredMacroTransactionProfile} from './product-macros.js?v=0.6.0';
@@ -73,7 +73,7 @@ function render(){
   $('inspect-default-transaction').disabled=busy;
   $('export-default-backup').disabled=busy||!defaultInspection;$('export-default-inspection').disabled=busy||!defaultInspection;
   $('export-default-recorded-recovery').disabled=busy||!defaultInspection?.recoveryPlan;
-  $('save-polling-draft').disabled=busy||!pollingWords;
+  $('save-polling-draft').disabled=busy||!pollingWords;$('load-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
@@ -251,11 +251,16 @@ $('clear-palette').onclick=()=>act(()=>{
   profile=clearCustomLightingDraft(profile);syncLights();status('全部逐键配色已清空，尚未写入。');
 });
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;
-$('save-polling-draft').onclick=()=>act(()=>{
-  requireThat(typeof profile.windowsTemplateJSON==='string','请先导入包含设备设置的 Windows 官方 JSON。');
+$('save-polling-draft').onclick=()=>operation(async()=>{
   const value=$('polling-draft').value;requireThat(value!=='','请选择回报率，或保留原草稿。');
-  const output=officialPollingDraft(JSON.parse(profile.windowsTemplateJSON),Number(value));profile.windowsTemplateJSON=JSON.stringify(output);validateProfile(profile);status('回报率已保存到官方配置草稿，尚未写入键盘。请在配置与备份导出。');
-});
+  const saved={format:'CherryMacPollingEditorDraft',version:1,model:47,index:Number(value)},next=mergePollingEditorDraft(profile,saved);
+  await savePollingEditorDraft(saved);profile=next;status('回报率已保存到本机并合并到官方草稿，尚未写入。重要版本请导出配置。');
+},{localOnly:true});
+$('load-polling-draft').onclick=()=>operation(async()=>{
+  const saved=await loadPollingEditorDraft(),next=mergePollingEditorDraft(profile,saved);
+  if(!confirm(`将当前官方草稿的 USB 回报率改为${[125,250,500,1000][saved.index]} Hz？其他设备设置、键位、宏、灯效和文本保留，不会写入键盘。`))return;
+  profile=next;$('polling-draft').value=String(saved.index);status('本机回报率已合并到官方草稿，其他设置保留，尚未写入。');
+},{localOnly:true});
 function closeLightingReturnChannel(){if(lightingReturnChannel)lightingReturnChannel.onmessage=null;lightingReturnChannel?.close();lightingReturnChannel=null;clearTimeout(lightingReturnTimer);lightingReturnTimer=null;}
 function prepareLightingReturnChannel(id,review,{defaultPlan=false,draftSnapshot=null}={}){
   closeLightingReturnChannel();requireThat(typeof BroadcastChannel==='function','浏览器不支持编辑器结果回传。');

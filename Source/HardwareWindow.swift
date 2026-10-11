@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 
 // Local editing only: no HID handle, global input hooks or permission requests.
 final class MacroStepEditor:NSWindowController,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSWindowDelegate {
@@ -422,7 +423,8 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
         place(label("先导入 Windows 官方 JSON，再编辑 USB 回报率。修改会保存在配置与备份文件中；目前尚未写入键盘。无线回报率、Win 锁、键模式与重复设置保留原模板值，发送接口仍在核对。",13),8,109,850,70,in:settings)
-        place(button("编辑官方回报率草稿…",#selector(editPollingDraft)),8,198,260,32,in:settings)
+        place(button("编辑并保存回报率草稿…",#selector(editPollingDraft)),8,198,260,32,in:settings)
+        place(button("载入本机回报率草稿…",#selector(loadPollingEditorDraft)),290,198,260,32,in:settings)
         place(label("Mac 端适配",17,.semibold),8,272,850,28,in:settings)
         place(label("F5 刷新等 Mac 端适配需要软件持续运行，默认暂停。它们不会保存到键盘；需要实体 F5 输出 ⌘R 时，可在按键页设置并写入。",13),8,312,850,60,in:settings)
         place(button("打开 Mac 端适配设置",#selector(openMacSettings)),8,397,260,32,in:settings)
@@ -1391,17 +1393,39 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     @objc func clearMacros(){guard !busy,var p=profile,let restoreDefault=chooseMacroRemoval(slots:Array((p.macroBindings ?? [:]).keys)) else{return};do{try p.clearMacros(restoreDefault:restoreDefault);profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏库已清空，原绑定键已\(restoreDefault ? "恢复默认功能":"设为禁用")；尚未写入。"}catch{message.stringValue=error.localizedDescription}}
     @objc func unassignMacro(){guard !busy,var p=profile,let key=keyboardLayout().first(where:{$0.id==selected}),let slot=CherryMatrix.slot(key),p.macroBindings?[slot] != nil,let restoreDefault=chooseMacroRemoval(slots:[slot]) else{return};do{try p.unassignMacro(from:slot,restoreDefault:restoreDefault);profile=p;loadSelectedAssignment();update();try persistMacroEditorDraft();message.stringValue="已解除 \(key.label) 的宏绑定并\(restoreDefault ? "恢复默认功能":"设为禁用")；宏库保留，尚未写入。"}catch{message.stringValue=error.localizedDescription}}
     @objc func deleteMacro(){guard !busy,var p=profile,macroPicker.indexOfSelectedItem>0 else{return};let name=p.macros[macroPicker.indexOfSelectedItem-1].name;guard let restoreDefault=chooseMacroRemoval(slots:(p.macroBindings ?? [:]).filter{$0.value==name}.map{$0.key}) else{return};do{try p.removeMacro(named:name,restoreDefault:restoreDefault);profile=p;refreshMacroPicker();chooseMacro();update();try persistMacroEditorDraft();message.stringValue="宏已删除，关联键已\(restoreDefault ? "恢复默认功能":"设为禁用")；尚未写入。"}catch{message.stringValue=error.localizedDescription}}
+    var pollingEditorDraftURL:URL{FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/EditorDrafts/LatestPollingDraft.json")}
+    func savePollingEditorDraft(_ saved:WindowsProfile.PollingEditorDraft)throws{
+        try saved.validate();let data=try JSONEncoder().encode(saved),url=pollingEditorDraftURL,folder=url.deletingLastPathComponent()
+        var missing:[URL]=[],cursor=folder
+        while !FileManager.default.fileExists(atPath:cursor.path){missing.append(cursor);let parent=cursor.deletingLastPathComponent();guard parent != cursor else{throw HardwareError(message:"回报率草稿目录无效。")};cursor=parent}
+        func sync(_ directory:URL)throws{let fd=Darwin.open(directory.path,O_RDONLY|O_NOFOLLOW);guard fd>=0 else{throw HardwareError(message:"无法同步回报率草稿目录。")};defer{Darwin.close(fd)};var info=stat();guard fstat(fd,&info)==0,(info.st_mode & S_IFMT)==S_IFDIR,fsync(fd)==0 else{throw HardwareError(message:"回报率草稿目录同步失败。")}}
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        for created in missing.reversed(){try sync(created);try sync(created.deletingLastPathComponent())}
+        try data.write(to:url,options:.atomic);let handle=try FileHandle(forWritingTo:url);defer{try? handle.close()};try handle.synchronize();try sync(folder)
+        guard try Data(contentsOf:url)==data else{throw HardwareError(message:"本机回报率草稿保存核对失败。")}
+    }
     @objc func editPollingDraft(){
         guard !busy else{return}
         do{
-            guard var draft=profile,let template=draft.windowsTemplateJSON,let words=try WindowsProfile.systemStageWords(WindowsProfile.templateRoot(Data(template.utf8)))else{throw HardwareError(message:"请先导入包含设备设置的 Windows 官方 JSON。")}
+            guard let original=profile,let template=original.windowsTemplateJSON,let words=try WindowsProfile.systemStageWords(WindowsProfile.templateRoot(Data(template.utf8)))else{throw HardwareError(message:"请先导入包含设备设置的 Windows 官方 JSON。")}
             let picker=NSPopUpButton(frame:NSRect(x:0,y:0,width:300,height:28));picker.addItems(withTitles:["125 Hz","250 Hz","500 Hz","1000 Hz"])
             if words[3]<=3{picker.selectItem(at:Int(words[3]))}else{picker.addItem(withTitle:"保留原值（\(words[3])）");picker.selectItem(at:4)}
-            let alert=NSAlert();alert.messageText="官方回报率草稿";alert.informativeText="只修改官方配置文件里的 USB 回报率。保存后可在配置与备份导出；尚未写入键盘。无线回报率及其他设备设置沿用模板。";alert.accessoryView=picker;alert.addButton(withTitle:"保存草稿");alert.addButton(withTitle:"取消")
+            let alert=NSAlert();alert.messageText="官方回报率草稿";alert.informativeText="保存到本机并合并到当前官方配置草稿。这里只修改文件；不会写入键盘。其他设置保留，重要版本请导出配置。";alert.accessoryView=picker;alert.addButton(withTitle:"保存到本机与编辑区");alert.addButton(withTitle:"取消")
             guard alert.runModal()==NSApplication.ModalResponse.alertFirstButtonReturn,picker.indexOfSelectedItem<4 else{return}
-            let data=try WindowsProfile.encodePollingDraft(Data(template.utf8),index:picker.indexOfSelectedItem);draft.windowsTemplateJSON=String(decoding:data,as:UTF8.self);try draft.validate();profile=draft
-            message.stringValue="回报率已保存到官方配置草稿，尚未写入键盘。";update()
-        }catch{message.stringValue=error.localizedDescription}
+            guard !busy,profile==original else{throw HardwareError(message:"编辑区已改变，请重新选择回报率。")}
+            let saved=WindowsProfile.PollingEditorDraft(index:picker.indexOfSelectedItem),next=try saved.merged(into:original)
+            try savePollingEditorDraft(saved);profile=next;update();message.stringValue="回报率已保存到本机并合并到官方草稿，尚未写入键盘。"
+        }catch{message.stringValue="回报率草稿未更新："+error.localizedDescription}
+    }
+    @objc func loadPollingEditorDraft(){
+        guard !busy,let original=profile else{return}
+        do{
+            let url=pollingEditorDraftURL;guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=4096 else{throw HardwareError(message:"本机回报率草稿文件超过范围。")}
+            let saved=try JSONDecoder().decode(WindowsProfile.PollingEditorDraft.self,from:Data(contentsOf:url)),next=try saved.merged(into:original)
+            let alert=NSAlert();alert.messageText="载入本机回报率草稿？";alert.informativeText="将当前官方草稿的USB回报率改为\([125,250,500,1000][saved.index]) Hz。其他设备设置、键位、宏、灯效和文本保留，不会写入键盘。";alert.addButton(withTitle:"取消");alert.addButton(withTitle:"载入")
+            guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return};guard !busy,profile==original else{throw HardwareError(message:"编辑区已改变，请重新载入。")}
+            profile=next;update();message.stringValue="本机回报率已合并到官方草稿，其他设置保留，尚未写入。"
+        }catch{message.stringValue="本机回报率草稿未载入："+error.localizedDescription}
     }
     @objc func exportWindowsProfile(){
         guard !busy,let p=profile else{message.stringValue="请先读取或导入配置。";return}

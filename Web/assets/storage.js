@@ -1,4 +1,4 @@
-import {makeLightingEditorDraft,validateLightingEditorDraft,defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
+import {validatePollingEditorDraft,makeLightingEditorDraft,validateLightingEditorDraft,defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,validateDefaultTransactionContinuation,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 import {databaseOpener,strictWriteTransaction} from './database.js?v=0.6.0';
@@ -216,5 +216,22 @@ export async function loadLightingEditorDraft(){
     const t=database.transaction('drafts','readonly'),request=t.objectStore('drafts').get('latest');let value;
     request.onsuccess=()=>{value=request.result?.value;};t.oncomplete=()=>{try{validateLightingEditorDraft(value);resolve(clone(value));}catch(error){reject(error);}};
     t.onerror=()=>reject(t.error??new Error('灯效草稿读取失败。'));t.onabort=()=>reject(t.error??new Error('灯效草稿读取已中止。'));
+  });
+}
+
+const pollingDB=databaseOpener('CherryMacPollingEditorDraft',1,value=>value.createObjectStore('drafts',{keyPath:'id'}),'回报率草稿数据库被其他页面占用。');
+export async function savePollingEditorDraft(saved){
+  validatePollingEditorDraft(saved);const value={id:'latest',draft:clone(saved)},database=await pollingDB();
+  await new Promise((resolve,reject)=>{
+    const transaction=strictWriteTransaction(database,'drafts'),store=transaction.objectStore('drafts');let verified=false;
+    store.put(value).onsuccess=()=>{store.get('latest').onsuccess=event=>{if(!equal(event.target.result,value)){transaction.abort();return;}verified=true;};};
+    transaction.oncomplete=()=>verified?resolve():reject(new Error('回报率草稿未核对。'));transaction.onerror=()=>reject(transaction.error);transaction.onabort=()=>reject(transaction.error??new Error('回报率草稿保存已中止。'));
+  });
+}
+export async function loadPollingEditorDraft(){
+  const database=await pollingDB();return new Promise((resolve,reject)=>{
+    const transaction=database.transaction('drafts','readonly'),request=transaction.objectStore('drafts').get('latest');let value;
+    request.onsuccess=()=>value=request.result;transaction.oncomplete=()=>{try{requireThat(value?.id==='latest','没有已保存的本机回报率草稿。');validatePollingEditorDraft(value.draft);resolve(clone(value.draft));}catch(error){reject(error);}};
+    transaction.onerror=()=>reject(transaction.error);transaction.onabort=()=>reject(transaction.error??new Error('回报率草稿读取已中止。'));
   });
 }

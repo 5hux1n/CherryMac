@@ -243,6 +243,18 @@ enum WindowsProfile {
         let output=try JSONSerialization.data(withJSONObject:root,options:[.prettyPrinted,.sortedKeys])
         guard output.count<=1_000_000 else{throw HardwareError(message:"官方配置草稿超过 1 MB。")};return output
     }
+    struct PollingEditorDraft:Codable,Equatable {
+        var format="CherryMacPollingEditorDraft"
+        var version=1
+        var model=47
+        let index:Int
+        func validate()throws{guard format=="CherryMacPollingEditorDraft",version==1,model==47,(0...3).contains(index) else{throw HardwareError(message:"本机回报率草稿格式或档位无效。")}}
+        func merged(into profile:HardwareProfile)throws->HardwareProfile {
+            try validate();try profile.validate()
+            guard let template=profile.windowsTemplateJSON else{throw HardwareError(message:"请先导入本型号官方配置。")}
+            var result=profile;result.windowsTemplateJSON=String(decoding:try WindowsProfile.encodePollingDraft(Data(template.utf8),index:index),as:UTF8.self);try result.validate();return result
+        }
+    }
     struct Imported {
         let profile:HardwareProfile
         let keyCount:Int

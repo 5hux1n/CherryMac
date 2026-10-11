@@ -437,6 +437,13 @@ export function exportWindowsKeysMacrosAndText(profile,template,textConfiguratio
 }
 // File-only conversion; unknown light fields and unmapped colors survive.
 // A profile-aware export preserves the distinction between raw and stored RGB.
+export function validatePollingEditorDraft(saved){
+  requireThat(saved?.format==='CherryMacPollingEditorDraft'&&saved.version===1&&saved.model===47&&Number.isInteger(saved.index)&&saved.index>=0&&saved.index<=3,'本机回报率草稿格式或档位无效。');return saved;
+}
+export function mergePollingEditorDraft(profile,saved){
+  validatePollingEditorDraft(saved);validateProfile(profile);requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号官方配置。');const next=clone(profile);
+  next.windowsTemplateJSON=JSON.stringify(officialPollingDraft(JSON.parse(next.windowsTemplateJSON),saved.index));validateProfile(next);return next;
+}
 export function officialPollingDraft(template,index){
   const root=clone(template);validateWindowsTemplate(root,new TextEncoder().encode(JSON.stringify(root)).length);requireThat(Number.isInteger(index)&&index>=0&&index<=3,'本型号官方草稿回报率只支持 125、250、500、1000 Hz。');
   requireThat(officialSystemStageWords(root)!=null,'请先导入包含设备设置的 Windows 官方 JSON。');root.SystemStages.ReportSelectItem=index;
