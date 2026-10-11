@@ -681,6 +681,7 @@ def inspect_parameter_consumers(image):
         return image[offset:offset + size]
 
     bodies = {
+        (0x23cf4,0x23d5a):'60afd43bfb5186e6dfb11a136970770d0e1253d8379299eaecd26cea73831cbd',
         (0x2811C,0x28158):'cabe5cce3799deb5f9c41c538030c04ef075b013686f76788b6987e0265e4d38',
         (0x28D48,0x28D9E):'0b35b4103991ad40ccbaabadffeed625a8f4a564a68f98c1572d04fdc3f535f5',
     }
@@ -689,9 +690,20 @@ def inspect_parameter_consumers(image):
             raise ValueError("Parameter-consumer body differs")
     for address, expected in {0x28158:0x20009AD4,0x2815C:0x20009AC8,
                               0x28160:0x20004B60,0x28164:0x20000CD8,
-                              0x28DA0:0x20000CD8,0x28DA4:0x20009AEA}.items():
+                              0x28DA0:0x20000CD8,0x28DA4:0x20009AEA,
+                              0x23d60:0x52448,0x23d64:0x20009a8c,
+                              0x23d68:0x20000cd8,0x23d6c:0x20009a89,
+                              0x23d70:0x20003edc,0x52448:0x4c410}.items():
         if struct.unpack('<I',at(address,4))[0] != expected:
             raise ValueError("Parameter-consumer literal differs")
+    event_name=b'ble_peer_operation_event\0'
+    if at(0x4c410,len(event_name))!=event_name:
+        raise ValueError('Parameter peer event type differs')
+    for address,encoded in {0x23cfc:'0c21',0x23d0e:'1649',0x23d1a:'0b7c',
+                            0x23d26:'6372',0x23d32:'1170',0x23d40:'d35c',
+                            0x23d42:'a372',0x23d48:'13f018bb'}.items():
+        raw=bytes.fromhex(encoded)
+        if at(address,len(raw))!=raw:raise ValueError('Parameter peer event instruction differs')
     loads = []
     # Byte-pattern candidates, not a linear code disassembly: pools may look like instructions.
     for offset in range(0,len(image)-3,2):
@@ -718,6 +730,21 @@ def inspect_parameter_consumers(image):
         'codeSHA256':{f'{start:#x}..{end:#x}':digest for (start,end),digest in bodies.items()},
         'parameterBaseRAM':'0x20000cd8','baseLoadCandidates':loads,
         'candidateScanLimits':'Only PC-relative Thumb literal-load encodings. Candidates may occur in data or inside wide instructions; not a complete reference/data-flow census or proof that another field has no consumer',
+        'peerOperationConsumer':{
+            'entry':'0x23cf4','endExclusive':'0x23d5a','eventType':'ble_peer_operation_event',
+            'eventDescriptor':'0x52448','allocationBytes':12,'parameterIndex':16,
+            'eventByte8':'5 when shared state0x20009a8c equals5, otherwise7',
+            'eventByte9':'3 when parameter16 equals2, otherwise byte at0x20009a89',
+            'eventByte10':'byte atRAM0x20003edc indexed by the same chosen value',
+            'stateEffect':'Store2 at0x20009a8c before publishing',
+            'publish':'tail-call0x3737c',
+            'allocationFailure':'print OOM and call nonreturning0x34754',
+            'pollingFieldIdentified':False,
+            'limits':'Complete named producer only. Byte meanings, table lifetime/bounds, '
+                     'event delivery and all consumers remain unproved; the index is not '
+                     'transport+0x44 or a verified hardware peer selection. No pairing/read '
+                     'interface, parameters53/54 mapping or installed0102 equivalence.',
+        },
         'bitMaskConsumer':{'entry':'0x2811c','stateByteRAM':'0x20004b60',
                            'condition':'On the nonzero event-state branch, parameter byte22 is nonzero and byte39 is zero',
                            'operation':'Merge the input mask, then AND the state byte with 0x77, clearing bits 3 and 7',
@@ -1797,7 +1824,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 40,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 41,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
