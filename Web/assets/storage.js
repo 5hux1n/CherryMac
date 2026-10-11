@@ -1,6 +1,6 @@
 import {makeLightingEditorDraft,validateLightingEditorDraft,defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
-import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
+import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,validateDefaultTransactionContinuation,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
 import {databaseOpener,strictWriteTransaction} from './database.js?v=0.6.0';
 const db=databaseOpener('CherryMacWeb',1,value=>value.createObjectStore('backups',{keyPath:'id'}),'备份数据库被其他页面占用。');
 function transaction(database,mode,action){return new Promise((resolve,reject)=>{const t=database.transaction('backups',mode),request=action(t.objectStore('backups'));let result;request.onsuccess=()=>{result=request.result;};t.oncomplete=()=>resolve(result);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error??new Error('备份存储失败。'));});}
@@ -59,10 +59,26 @@ export function reviewLightingEditorResult(record,review){
 }
 
 // Separate append-only records: retain pending entries even after later replies.
-const defaultDB=databaseOpener('CherryMacDefaultTransactions',1,value=>{
-  value.createObjectStore('backups',{keyPath:'operationID'});
-  value.createObjectStore('records',{keyPath:'sequence',autoIncrement:true});
+const defaultDB=databaseOpener('CherryMacDefaultTransactions',2,(value,transaction)=>{
+  if(!value.objectStoreNames.contains('backups'))value.createObjectStore('backups',{keyPath:'operationID'});
+  const records=value.objectStoreNames.contains('records')?transaction.objectStore('records'):value.createObjectStore('records',{keyPath:'sequence',autoIncrement:true});
+  if(!records.indexNames.contains('operationID'))records.createIndex('operationID','operationID');
 },'默认恢复数据库被其他页面占用。');
+
+function readDefaultHistory(store,id,complete,fail){
+  let previous=null,revision=0,total=0,lastSequence=0;
+  const request=store.index('operationID').openCursor(IDBKeyRange.only(id));
+  request.onsuccess=()=>{
+    try{
+      const cursor=request.result;if(!cursor){complete(previous,revision,total);return;}
+      const row=cursor.value;
+      requireThat(row.operationID===id&&row.record?.operationID===id&&Number.isSafeInteger(row.sequence)&&row.sequence>lastSequence,'默认恢复日志归属或序号无效。');
+      revision++;total+=new TextEncoder().encode(JSON.stringify(row.record)).length;
+      requireThat(revision<=4096&&total<=64_000_000&&(row.revision==null||row.revision===revision),'默认恢复日志数量、大小或连续性无效。');
+      validateDefaultTransactionContinuation(previous,row.record);previous=row.record;lastSequence=row.sequence;cursor.continue();
+    }catch(error){fail(error);}
+  };
+}
 export async function saveDefaultBackup(operationID,snapshot){
   requireThat(typeof operationID==='string'&&/^[A-Za-z0-9_.-]{1,128}$/.test(operationID),'默认恢复存储标识无效。');validateSnapshot(snapshot,true);
   const value={operationID,snapshot:clone(snapshot)},database=await defaultDB();
@@ -93,8 +109,13 @@ export async function saveDefaultTransaction(input){
         store.put(expected).onsuccess=()=>{const check=store.get(record.operationID);check.onsuccess=()=>{if(!equal(check.result,expected))fail(new Error('默认恢复来源记录读回校验失败。'));else bindingVerified=true;};};
       }else bindingVerified=true;
 
-      const store=transaction.objectStore('records'),value={operationID:record.operationID,date:new Date().toISOString(),record},added=store.add(value);
-      added.onsuccess=()=>{saved={...value,sequence:added.result};const check=store.get(added.result);check.onsuccess=()=>{if(!equal(check.result,saved))fail(new Error('默认恢复日志读回校验失败。'));else recordVerified=true;};};
+      const store=transaction.objectStore('records');
+      readDefaultHistory(store,record.operationID,(previous,revision,total)=>{
+        validateDefaultTransactionContinuation(previous,record);
+        requireThat(revision<4096&&total+new TextEncoder().encode(JSON.stringify(record)).length<=64_000_000,'默认恢复整组日志超过保存范围。');
+        const value={operationID:record.operationID,revision:revision+1,date:new Date().toISOString(),record},added=store.add(value);
+        added.onsuccess=()=>{saved={...value,sequence:added.result};const check=store.get(added.result);check.onsuccess=()=>{if(!equal(check.result,saved))fail(new Error('默认恢复日志读回校验失败。'));else recordVerified=true;};};
+      },fail);
     };
     transaction.oncomplete=()=>recordVerified&&bindingVerified?resolve(clone(saved)):reject(new Error('默认恢复日志或来源尚未核对。'));transaction.onerror=()=>reject(failure??transaction.error);transaction.onabort=()=>reject(failure??transaction.error??new Error('默认恢复日志保存失败。'));
   });
@@ -104,7 +125,18 @@ export async function listDefaultTransactions(){
   return new Promise((resolve,reject)=>{
     const transaction=database.transaction('records','readonly'),request=transaction.objectStore('records').getAll();let rows=[];
     request.onsuccess=()=>{rows=request.result;};transaction.oncomplete=()=>{
-      try{for(const row of rows){assessDefaultTransactionRecord(row.record);requireThat(row.operationID===row.record.operationID,'默认恢复日志归属无效。');}resolve(rows.sort((a,b)=>a.sequence-b.sequence));}catch(error){reject(error);}
+      try{
+        requireThat(rows.length<=100_000,'默认恢复日志数量超过读取范围。');
+        rows.sort((a,b)=>a.sequence-b.sequence);const history=new Map();let lastSequence=0,total=0;
+        for(const row of rows){
+          requireThat(row.operationID===row.record?.operationID&&Number.isSafeInteger(row.sequence)&&row.sequence>lastSequence,'默认恢复日志归属或序号无效。');lastSequence=row.sequence;
+          const previous=history.get(row.operationID)??{record:null,revision:0};
+          requireThat(previous.revision<4096&&(row.revision==null||row.revision===previous.revision+1),'默认恢复日志连续性无效。');
+          total+=new TextEncoder().encode(JSON.stringify(row.record)).length;requireThat(total<=64_000_000,'默认恢复整组日志超过 64 MB。');
+          validateDefaultTransactionContinuation(previous.record,row.record);history.set(row.operationID,{record:row.record,revision:previous.revision+1});
+        }
+        resolve(rows);
+      }catch(error){reject(error);}
     };
     transaction.onerror=()=>reject(transaction.error);transaction.onabort=()=>reject(transaction.error??new Error('默认恢复日志读取失败。'));
   });

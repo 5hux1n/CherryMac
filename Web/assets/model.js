@@ -711,6 +711,26 @@ export function assessDefaultTransactionRecord(record){
   const status=record.failure||traceReview.status==='failed'?'failed':traceReview.status!=='complete'?'incomplete':record.current==null?'readbackMissing':readbackMatches?'readbackMatched':'readbackMismatch';
   return {format:'CherryMacDefaultTransactionAssessment',version:1,hardwareReady:false,operationID:record.operationID,direction:record.direction,status,traceReview,readbackMatches,recoveryStatus,matchedDataPrefixes};
 }
+// Retained progression only; this does not grant a send or recovery.
+export function validateDefaultTransactionContinuation(previous,next){
+  assessDefaultTransactionRecord(next);
+  if(previous==null){requireThat(next.trace.entries.length===0&&next.current==null&&next.failure==='','默认恢复历史缺少起始记录。');return;}
+  const assessment=assessDefaultTransactionRecord(previous);
+  if(equal(previous,next))return;
+  requireThat(previous.operationID===next.operationID&&previous.direction===next.direction&&equal(previous.started,next.started)&&previous.trace.source===next.trace.source&&equal(previous.sourceReview,next.sourceReview)&&equal(previous.recovery??null,next.recovery??null)&&previous.current==null&&previous.failure==='','默认恢复历史来源已改变或流程已经结束。');
+  const a=previous.trace.entries,b=next.trace.entries;
+  requireThat(b.length===a.length||b.length===a.length+1,'默认恢复历史跳过或删除了请求记录。');
+  for(let index=0;index<a.length;index++){
+    const entry=a[index];
+    if(entry.endedMilliseconds==null){
+      requireThat(index===a.length-1&&b.length===a.length&&equal(b[index].request,entry.request)&&b[index].sentMilliseconds===entry.sentMilliseconds&&b[index].endedMilliseconds!=null&&next.current==null&&next.failure==='','默认恢复待回复记录被改写或跳过。');
+    }else requireThat(equal(b[index],entry),'默认恢复已完成的请求记录被改写。');
+  }
+  if(b.length>a.length){
+    const last=b.at(-1);
+    requireThat(assessment.traceReview.status!=='failed'&&last.endedMilliseconds==null&&last.reply==null&&last.error==null&&next.current==null&&next.failure==='','默认恢复历史缺少本次发送前记录，或失败后继续发送。');
+  }
+}
 // Inspect retained files without USB; a recorded readback is not a current read.
 export function inspectDefaultTransaction(record){
   const assessment=assessDefaultTransactionRecord(record);

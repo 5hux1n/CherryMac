@@ -547,7 +547,7 @@ enum WindowsProfile {
             var matchedWritePrefixes:[Int];var requiresRecovery:Bool;var restoreData:[Write]
         }
         struct Trace:Codable {
-            struct Entry:Codable {var request:[UInt8];var sentMilliseconds:Int;var endedMilliseconds:Int?;var reply:[UInt8]?;var error:String?}
+            struct Entry:Codable,Equatable {var request:[UInt8];var sentMilliseconds:Int;var endedMilliseconds:Int?;var reply:[UInt8]?;var error:String?}
             var format:String;var version:Int;var source:String;var entries:[Entry]
         }
         struct TraceReview:Codable,Equatable {
@@ -1136,6 +1136,35 @@ enum WindowsProfile {
             return .init(operationID:operationID,direction:direction,status:status,traceReview:reviewed,readbackMatches:matches,recoveryStatus:recoveryStatus,matchedDataPrefixes:prefixes)
         }
     }
+    // Validates retained progression, never grants a physical send or recovery.
+    static func validateDefaultTransactionContinuation(_ previous:DefaultTransactionRecord?,_ next:DefaultTransactionRecord)throws {
+        _ = try next.assess()
+        guard let previous else {
+            guard next.trace.entries.isEmpty,next.current==nil,next.failure.isEmpty else{throw HardwareError(message:"默认恢复历史缺少起始记录。")};return
+        }
+        let assessment=try previous.assess(),encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        let old=try encoder.encode(previous),new=try encoder.encode(next)
+        if old==new{return}
+        guard previous.operationID==next.operationID,previous.direction==next.direction,
+              previous.started==next.started,previous.trace.source==next.trace.source,
+              try encoder.encode(previous.sourceReview)==encoder.encode(next.sourceReview),
+              try encoder.encode(previous.recovery)==encoder.encode(next.recovery),
+              previous.current==nil,previous.failure.isEmpty else{throw HardwareError(message:"默认恢复历史来源已改变或流程已经结束。")}
+        let a=previous.trace.entries,b=next.trace.entries
+        guard b.count==a.count || b.count==a.count+1 else{throw HardwareError(message:"默认恢复历史跳过或删除了请求记录。")}
+        for (index,entry) in a.enumerated() {
+            if entry.endedMilliseconds==nil {
+                guard index==a.count-1,b.count==a.count,b[index].request==entry.request,
+                      b[index].sentMilliseconds==entry.sentMilliseconds,b[index].endedMilliseconds != nil,
+                      next.current==nil,next.failure.isEmpty else{throw HardwareError(message:"默认恢复待回复记录被改写或跳过。")}
+            }else{guard b[index]==entry else{throw HardwareError(message:"默认恢复已完成的请求记录被改写。")}}
+        }
+        if b.count>a.count {
+            guard assessment.traceReview.status != "failed",let last=b.last,
+                  last.endedMilliseconds==nil,last.reply==nil,last.error==nil,
+                  next.current==nil,next.failure.isEmpty else{throw HardwareError(message:"默认恢复历史缺少本次发送前记录，或失败后继续发送。")}
+        }
+    }
     // File inspection only: recorded readback is never a fresh device read.
     struct DefaultTransactionInspection:Codable {
         var format="CherryMacDefaultTransactionInspection";var version=1;var hardwareReady=false
@@ -1286,11 +1315,10 @@ enum WindowsProfile {
                 if FileManager.default.fileExists(atPath:bindingURL.path){guard try read(bindingURL)==bindingData else{throw HardwareError(message:"默认恢复事务来源已改变，不混用记录。")};try syncExisting(bindingURL)}
                 else{try writeNew(bindingData,to:bindingURL)}
 
-                let existing=try FileManager.default.contentsOfDirectory(atPath:directory.path).filter{$0.hasPrefix("event-") && $0.hasSuffix(".json")}
-                let positions=try existing.map{name->Int in
-                    guard let field=name.split(separator:"-").dropFirst().first,let value=Int(field),value>=1,value<Int.max else{throw HardwareError(message:"默认恢复日志序号无效。")};return value
-                }
-                let sequence=(positions.max() ?? 0)+1
+                let previous=try readRecords(before:before,reservedBytes:data.count)
+                guard previous.count<4096 else{throw HardwareError(message:"默认恢复日志数量超出保存范围。")}
+                try WindowsProfile.validateDefaultTransactionContinuation(previous.last,record)
+                let sequence=previous.count+1
                 let digits=String(sequence)
                 let url=directory.appendingPathComponent("event-"+String(repeating:"0",count:max(0,20-digits.count))+digits+"-"+UUID().uuidString+".json")
                 try writeNew(data,to:url)
@@ -1318,12 +1346,28 @@ enum WindowsProfile {
             try locked(create:false) {
                 let before=try JSONDecoder().decode(HardwareSnapshot.self,from:read(directory.appendingPathComponent("before.json")))
                 try before.validate();guard before.colors != nil,before.macroData != nil else{throw HardwareError(message:"默认恢复备份不完整。")}
-                let urls=try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:[.creationDateKey]).filter{$0.lastPathComponent.hasPrefix("event-") && $0.pathExtension=="json"}
-                return try urls.sorted{$0.lastPathComponent<$1.lastPathComponent}.map{url in
-                    let record=try JSONDecoder().decode(DefaultTransactionRecord.self,from:read(url));_ = try record.assess()
-                    guard record.operationID==operationID,record.started==before,try encode(Binding(record))==read(directory.appendingPathComponent("binding.json")) else{throw HardwareError(message:"默认恢复日志归属、来源或备份无效。")};return record
-                }
+                return try readRecords(before:before)
             }
+        }
+        private func readRecords(before:HardwareSnapshot,reservedBytes:Int=0)throws->[DefaultTransactionRecord] {
+            let urls=try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:nil)
+                .filter{$0.lastPathComponent.hasPrefix("event-") && $0.pathExtension=="json"}
+                .sorted{$0.lastPathComponent<$1.lastPathComponent}
+            guard urls.count<=4096 else{throw HardwareError(message:"默认恢复日志数量超出读取范围。")}
+            var records:[DefaultTransactionRecord]=[],total=0
+            for (index,url) in urls.enumerated() {
+                let name=url.lastPathComponent,digits=String(index+1)
+                let prefix="event-"+String(repeating:"0",count:20-digits.count)+digits+"-"
+                guard name.hasPrefix(prefix),let uuid=UUID(uuidString:String(name.dropFirst(prefix.count).dropLast(5))),
+                      name==prefix+uuid.uuidString+".json" else{throw HardwareError(message:"默认恢复日志文件名、序号或连续性无效。")}
+                let data=try read(url);total+=data.count
+                guard total<=64_000_000-reservedBytes else{throw HardwareError(message:"默认恢复整组日志超过 64 MB。")}
+                let record=try JSONDecoder().decode(DefaultTransactionRecord.self,from:data)
+                guard record.operationID==operationID,record.started==before,
+                      try encode(Binding(record))==read(directory.appendingPathComponent("binding.json")) else{throw HardwareError(message:"默认恢复日志归属、来源或备份无效。")}
+                try WindowsProfile.validateDefaultTransactionContinuation(records.last,record);records.append(record)
+            }
+            return records
         }
     }
     private static func sameDefaultConfiguration(_ a:HardwareSnapshot,_ b:HardwareSnapshot)->Bool {

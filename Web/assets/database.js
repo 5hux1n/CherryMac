@@ -9,7 +9,7 @@ export function databaseOpener(name,version,upgrade,blockedMessage){
       const request=indexedDB.open(name,version);let abandoned=false;
       const fail=error=>{abandoned=true;reject(error);};
       request.onupgradeneeded=()=>{
-        try{upgrade(request.result);}catch(error){request.transaction?.abort();fail(error);}
+        try{upgrade(request.result,request.transaction);}catch(error){request.transaction?.abort();fail(error);}
       };
       request.onsuccess=()=>{
         const database=request.result;
