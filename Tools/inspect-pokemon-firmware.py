@@ -1505,13 +1505,17 @@ def inspect_hid_callback_read_sources(image):
 
 
 def inspect_nonreading_control_branches(image):
-    """Keep adjacent allocation-failure code distinct from command27 flag writes."""
+    """Separate state controls and event publication from configuration reads."""
     def at(address,size):
         offset=address-0x10000
         if offset<0 or size<0 or offset+size>len(image):
             raise ValueError("Control classification exceeds image bounds")
         return image[offset:offset+size]
     bodies={
+        (0x2f094,0x2f0f4):"437df5aeb884ae1c9e779ca7413291e14832580e875d318e6bda80afa4189257",
+        (0x2f2be,0x2f2c6):"94e8268778a82a304aed7dcf3b4c7efb231fdfd0294328ab69894723011319e1",
+        (0x2f538,0x2f556):"a0c6d2a7790e6c6e402cd48faebddb0e560f12ec1c9d0d03a3e875e00f543314",
+        (0x2f594,0x2f59c):"7f3ed15b289942cd9712587453041c907fae96f46d303d0f4bce39755377bb23",
         (0x2f56a,0x2f598):"c014257e66969c737fa905b707e30ca8b96aab9a4b44ec744cb716ff9ccbd58f",
         (0x2f372,0x2f3a2):"280e6095c66ea36b3218bff509f0c09fa3487147487de503558aa05634b6055b",
         (0x2f59c,0x2f5d8):"9ebf5356d43d65bbe06e6330966142b102477a417d0e6a5b2b53ad7983fe7d3a",
@@ -1521,11 +1525,13 @@ def inspect_nonreading_control_branches(image):
         if hashlib.sha256(at(a,b-a)).hexdigest()!=digest:
             raise ValueError("Nonreading control body differs")
     table=0x2f0f4
-    targets={0x27:0x2f572,0xb0:0x2f372}
+    targets={0x25:0x2f538,0x26:0x2f54a,0x27:0x2f572,0xb0:0x2f372}
     for command,target in targets.items():
         if table+2*struct.unpack("<H",at(table+2*(command-3),2))[0]!=target:
             raise ValueError("Nonreading control dispatch differs")
     literals={0x2f650:0x20009ace,0x2f658:0x20009ab7,
+              0x2f2f8:0x20009ac6,0x2f2fc:0x20009b2b,
+              0x2f638:0x20009ac4,0x2f63c:0x20009acc,0x2f640:0x20009ac6,
               0x2f654:0x4c098,0x34780:0x4f900}
     for address,value in literals.items():
         if struct.unpack("<I",at(address,4))[0]!=value:
@@ -1536,6 +1542,16 @@ def inspect_nonreading_control_branches(image):
         if at(address,len(value))!=value:
             raise ValueError("Failure-path message differs")
     return {"codeSHA256":{f"{a:#x}..{b:#x}":h for (a,b),h in bodies.items()},
+            "command25":{"target":"0x2f538",
+                "stateSource":"r2 loaded from sharedRAM0x20009b2b in fixed dispatch prelude",
+                "state2":"0x2f594 stores1 at0x20009ac6",
+                "state3":"0x2f546 stores1 at0x20009acc",
+                "otherState":"branch directly to0x2f28a",
+                "prelude":"State2/3 already sets the same corresponding flag before command dispatch",
+                "configurationSourceSelected":False,"readOnly":False},
+            "command26":{"target":"0x2f54a",
+                "effects":["0x2f550 stores0 at0x20009acc","0x2f552 stores0 at0x20009ac6"],
+                "return":"0x2f28a shared tail", "configurationSourceSelected":False,"readOnly":False},
             "command27":{"target":"0x2f572","payloadByte":8,
                 "zeroBranch":"0x2f574 CBZ targets0x2f58c, not adjacent0x2f57e",
                 "zeroEffect":"Store1 atRAM0x20009ab7",
@@ -1781,7 +1797,7 @@ def inspect(path):
             raise ValueError("Missing candidate link-base pointer anchor")
         anchors.append({'name': text, 'offset': hex(offset), 'candidateAddress': hex(offset + 0x10000),
                         'alignedPointerOffsets': [hex(value) for value in references]})
-    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 39,
+    return {'format': 'CherryMacOfficialPokemonFirmwareStaticAudit', 'version': 40,
             'updaterSHA256': digest, 'updaterMD5': hashlib.md5(data).hexdigest(),
             'method': 'Read-only PE32 resource parsing and fixed-byte inspection; no execution, emulation or hardware access',
             'resources': [{'id': identifier, 'language': language, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
