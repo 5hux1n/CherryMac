@@ -5,7 +5,7 @@ import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
 import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
 import {lightingOptions,keys,modes,mediaActions,usageNames,describe,demoSnapshot,editableSlots} from './layout.js?v=0.6.0';
-import {mergePollingEditorDraft,hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
+import {jsonDataEqual,mergePollingEditorDraft,hslColor,colorHSL,captureRawLightingMetadata,mergeLightingEditorDraft,parseLightingColorLibrary,portableProfile,paintLightingProfile,officialColorPresets,clearCustomLightingDraft,reviewDefaultLighting,decodeMacroStepFile,encodeMacroStepFile,macroStepIsMovement,macroStepMovementValue,setMacroMovementValue,inspectDefaultTransaction,assessDefaultTransactionRecord,defaultRecoveryPlan,reviewDefaultRecoveryProgress,reviewDefaultConfiguration,extractOfficialDefaultTemplate,importWindowsLightingDraft,newCustomLightingDraft,lightingRestorePlanFromRecord,officialSystemStageWords,officialPollingDraft,reviewLightingDraft,assessLightingRestoreAttempt,assessLightingRecoveryRecord,lightingColorSlot,clone,equal,requireThat,duplicateMacro,clearMacros,removeMacro,unassignMacro,macroWriteReview,macroStorageUsage,fromHardware,validateProfile,resolveMacros,parseProfile,validateMacro,MacroRecorder,validatePlayback,rgb,hex,paint,validateHostTextDefinition,exportWindowsKeysAndMacros,exportWindowsKeysMacrosAndText,exportProfileWindowsLightingDraft,prepareHostTextBindings,officialHostTextPlan,resolveHostTextTrigger,editHostText} from './model.js?v=0.6.0';
 import {requestHIDSelection,CherryHID,PageReleaseGate} from './hid.js?v=0.6.0';
 import {applyConfiguration,applyHostTextInstallation,restoreHostTextInstallation,makeKeymapPlan,sameSnapshot} from './writer.js?v=0.6.0';
 import {savePollingEditorDraft,loadPollingEditorDraft,saveLightingEditorDraft,loadLightingEditorDraft,loadLightingColorLibrary,saveLightingColorLibrary,rememberRawLightingMetadata,recalledRawLightingMetadata,listRawLightingMetadata,listDefaultTransactions,lightingResultChannelName,reviewLightingEditorResult,saveLightingHandoff,backupConfiguration,saveBackup,listBackups,download} from './storage.js?v=0.6.0';
@@ -199,7 +199,7 @@ async function read(){
   if(keepLightingDraft&&!sameSnapshot(s,lightingReconnectSnapshot)){
     baseline=null;throw new Error('新读回与返回的灯效结果不同；编辑区草稿保留，未写入。请保存草稿并核对键盘配置。');
   }
-  if(keepLightingDraft&&profile.lightingMapping&&(!mapping||!equal(mapping,profile.lightingMapping))){
+  if(keepLightingDraft&&profile.lightingMapping&&(!mapping||!jsonDataEqual(mapping,profile.lightingMapping))){
     baseline=null;baselineLightingMapping=null;throw new Error('返回结果需要重新取得一致的实际灯光映射；草稿保留，未写入。请重新读取或先导出草稿。');
   }
   baseline=clone(s);baselineLightingMapping=clone(mapping);
@@ -249,7 +249,7 @@ $('color').oninput=()=>setColor(rgb($('color').value));$('hex').onchange=()=>act
 ['red','green','blue'].forEach(id=>$(id).onchange=()=>act(()=>{const b=['red','green','blue'].map(id=>$(id).value===''?NaN:Number($(id).value));requireThat(b.every(v=>Number.isInteger(v)&&v>=0&&v<=255),'RGB 必须是 0–255 的整数。');setColor(b);}));
 $('strength').oninput=()=>{const b=rgb($('color').value),peak=Math.max(...b),scale=Number($('strength').value)*255/100;setColor(b.map(v=>Math.round(peak?v/peak*scale:scale)));};
 function matchingLightingMetadata(){
-  if(!baseline||lightingReconnectSnapshot!==null||!baselineLightingMapping||!equal(profile.lightingMapping,baselineLightingMapping))return null;
+  if(!baseline||lightingReconnectSnapshot!==null||!baselineLightingMapping||!jsonDataEqual(profile.lightingMapping,baselineLightingMapping))return null;
   try{return captureRawLightingMetadata(profile,baseline);}catch{return null;}
 }
 $('save-local-lighting').onclick=()=>operation(async()=>{
@@ -302,7 +302,7 @@ function prepareLightingReturnChannel(id,review,{defaultPlan=false,draftSnapshot
       requireThat(!hid||hid.dead,'编辑器已有 USB 会话，请先断开再返回结果。');
       requireThat(equal(baseline,review.original),'编辑器读回基线已改变，请重新准备。');
       if(defaultPlan)requireThat(equal(profile,draftSnapshot),'准备默认灯效后草稿已改变；结果未覆盖编辑区。');
-      else requireThat(equal(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
+      else requireThat(jsonDataEqual(reviewLightingDraft(profile,review.original).plan,review.plan),'灯效草稿已改变；结果未覆盖编辑区。');
       // Keep all drafts, including official raw RGB. A new USB read is still
       // required before adopting this evidence as a connected baseline.
       lightingReconnectSnapshot=current;acceptedRecord=clone(value.record);accepted=true;

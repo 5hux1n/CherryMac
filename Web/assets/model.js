@@ -1258,7 +1258,7 @@ export function captureRawLightingMetadata(profile,current){
 }
 export function adoptRawLightingMetadata(profile,value){
   validateRawLightingMetadata(value);validateProfile(profile);
-  if(!equal(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
+  if(!jsonDataEqual(profile.lightingMapping,value.lightingMapping)||!['deviceInfo','parameters','colors'].every(field=>equal(profile.snapshot[field],value.snapshot[field])))return null;
   const next=clone(profile);next.snapshot.colors=clone(value.rawColors);next.lightingColorEncoding=value.version===1?'officialRGB':'hardwareRGB';if(value.version===2){next.lightingRawSlots=clone(value.rawSlots);next.version=2;}else delete next.lightingRawSlots;validateProfile(next);return next;
 }
 
@@ -1386,7 +1386,7 @@ export function validateLightingEditorDraft(value){
 }
 export function mergeLightingEditorDraft(value,current){
   validateLightingEditorDraft(value);validateProfile(current);const saved=value.profile;
-  requireThat(equal(saved.snapshot.deviceInfo,current.snapshot.deviceInfo)&&equal(saved.lightingMapping??null,current.lightingMapping??null),'灯效草稿与当前型号或映射不同，请先读取同一键盘再载入。');
+  requireThat(equal(saved.snapshot.deviceInfo,current.snapshot.deviceInfo)&&jsonDataEqual(saved.lightingMapping??null,current.lightingMapping??null),'灯效草稿与当前型号或映射不同，请先读取同一键盘再载入。');
   const next=clone(current);for(const offset of [1,2,3,4,5,6,7,8,21])next.snapshot.parameters[offset]=saved.snapshot.parameters[offset];
   next.snapshot.colors=clone(saved.snapshot.colors);
   for(const field of ['lightingColorEncoding','lightingRawSlots']){if(saved[field]!=null)next[field]=clone(saved[field]);else delete next[field];}

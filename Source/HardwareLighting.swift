@@ -651,13 +651,14 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
             let root=try JSONSerialization.jsonObject(with:data) as? [String:Any]
             if root?["format"] as? String=="CherryMacLightingDraftReview" {
                 let value=try JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:data)
-                guard value.version==1,!value.hardwareReady,try value.plan.expectedReadback(from:value.original)==value.target else{throw HardwareError(message:"灯效核对目标与计划不一致。")}
+                try value.target.validate()
+                guard value.version==1,!value.hardwareReady,try value.plan.expectedReadback(from:value.original).hasSameConfiguration(as:value.target) else{throw HardwareError(message:"灯效核对目标与计划不一致。")}
                 _ = try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(plan:value.plan,baseline:value.original)
                 if (value.target.parameters[1]==8 || value.plan.defaultColorData != nil),value.lightingMapping==nil{throw HardwareError(message:"逐键计划缺少 LED 映射，请从主编辑器重新准备计划。旧恢复记录仍可载入。")}
                 _ = try value.lightingMapping?.slots(for:value.original)
                 if let metadata=value.rawLightingMetadata{
                     try metadata.validate()
-                    guard metadata.snapshot==value.target,metadata.lightingMapping==value.lightingMapping else{throw HardwareError(message:"原始配色资料与灯效目标／映射不一致。")}
+                    guard metadata.snapshot.hasSameConfiguration(as:value.target),metadata.lightingMapping==value.lightingMapping else{throw HardwareError(message:"原始配色资料与灯效目标／映射不一致。")}
                 }
                 review=value;summary.stringValue="\(value.plan.defaultColorData != nil ? "默认配色 → 参数；":"")模式 \(value.target.parameters[1]) · 亮度 \(value.target.parameters[2])/4。按键与宏保持备份，尚未写入。"
                 if value.target.parameters[1]==8,value.rawLightingMetadata==nil{summary.stringValue += "\n旧计划未含原始 RGB；可恢复硬件数据，但不能从编码颜色还原原色。"}
