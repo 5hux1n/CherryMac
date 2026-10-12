@@ -31,13 +31,17 @@ commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=Tr
 if info.get('CherryMacSourceCommit') != commit:
     raise SystemExit('App source commit differs; rebuild with the preview build script')
 architectures = subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True).split()
+if sorted(architectures) != ['arm64', 'x86_64']:
+    raise SystemExit('Preview must contain both Apple Silicon and Intel architectures')
 files = {path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
          for path in sorted(app.rglob('*')) if path.is_file()}
-symbols = subprocess.check_output(['nm', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True)
-if 'LightingAcceptanceWindow' not in symbols:
-    raise SystemExit('App lighting acceptance compilation differs from requested package type')
-if 'applyDefaultCandidate' in symbols:
-    raise SystemExit('Default research USB entry must remain disabled in preview packages')
+for architecture in architectures:
+    symbols = subprocess.check_output(['nm', '-arch', architecture, str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True)
+    if 'LightingAcceptanceWindow' not in symbols:
+        raise SystemExit(f'{architecture}: app lighting compilation differs from requested package type')
+    if 'applyDefaultCandidate' in symbols:
+        raise SystemExit(f'{architecture}: default research USB entry must remain disabled')
+
 manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance else 'CherryMacNativeMacroPreview', 'version': version,
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
@@ -65,7 +69,7 @@ readme = '''# CherryMac 宏与文本预览
 
 在“配置与备份”可选择官方 DefaultData0～4.json 载入默认草稿，或核对并导出默认恢复计划。也可选择之前的计划／事务记录，核对并导出原始数据撤回计划。需要先读取完整配置和默认键位／LED 映射；文件核对不写入键盘。计划包含原始配置与宏，请保留原文件。完整恢复默认尚未开放，设备设置与宏存储默认语义仍在分析。
 
-适用于 Apple Silicon Mac，macOS 13 或更新版本。此包用于宏与文本模块统一验收，尚未通过完整成品验收，也尚未经过 Apple 公证。
+包含 Apple Silicon 与 Intel 两种架构，最低 macOS 13；两种架构均已编译，运行与硬件验收仍后置。此包用于宏与文本模块统一验收，尚未通过完整成品验收，也尚未经过 Apple 公证。
 
 解压后将 CherryMacMacroPreview.app 放入应用程序，退出其他 CherryMac 再打开。本次打包不会打开 App、申请权限或连接键盘；请等统一验收安排后再进行写入。
 
@@ -100,7 +104,7 @@ readme += "\n设备与诊断新增选择配对设备窗口。窗口打开时不�
 if lighting_acceptance:
     readme = '''# CherryMac 灯效独立验收版
 
-适用于 Apple Silicon、macOS 13 及更新版本，使用临时签名，尚未 Apple 公证。此包用于统一灯效实机验收，尚未验证灯光外观与断电保存，不是完整成品。
+包含 Apple Silicon 与 Intel 两种架构，最低 macOS 13；运行与硬件验收仍后置，使用临时签名，尚未 Apple 公证。此包用于统一灯效实机验收，尚未验证灯光外观与断电保存，不是完整成品。
 
 解压得到 CherryMacLightingAcceptance.app，退出其他 CherryMac 和键盘配置程序后打开。本次打包不打开 App、不申请权限、不访问键盘；请按统一验收安排使用。它使用独立名称和标识，不替换已安装的宏预览 App。
 

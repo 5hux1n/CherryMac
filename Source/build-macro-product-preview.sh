@@ -17,8 +17,8 @@ TASK_PREVIEW_APP_NAME="CherryMacMacroPreview.app"
 TASK_PREVIEW_IDENTIFIER="local.cherrymac.macro-product-preview"
 TASK_PREVIEW_DISPLAY="CherryMac Macro & Text Preview"
 TASK_PREVIEW_BUNDLE_NAME="CherryMac Macro Preview"
-TASK_PREVIEW_VERSION="0.109.0"
-TASK_PREVIEW_BUILD="111"
+TASK_PREVIEW_VERSION="0.110.0"
+TASK_PREVIEW_BUILD="112"
 TASK_PREVIEW_FLAGS=(-D CHERRY_MACRO_PRODUCT -D CHERRY_LIGHTING_PRODUCT)
 if [[ $# -eq 2 ]]; then
     TASK_PREVIEW_APP_NAME="CherryMacLightingAcceptance.app"
@@ -34,7 +34,7 @@ if [[ -e "$TASK_PREVIEW_APP" ]]; then
     echo "Refusing to replace an existing preview app; choose a new output directory." >&2
     exit 1
 fi
-TASK_PREVIEW_ARCH="$(uname -m)"
+TASK_PREVIEW_ARCHITECTURES=(arm64 x86_64)
 TASK_PREVIEW_STAGE="$(mktemp -d "$TASK_PREVIEW_DIR/.macro-preview.XXXXXX")"
 trap 'rm -rf "$TASK_PREVIEW_STAGE"' EXIT
 mkdir -p "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/MacOS"
@@ -42,10 +42,17 @@ TASK_PREVIEW_SOURCES=()
 for TASK_PREVIEW_NAME in main InputRouter CherryHardware CalculatorKeyTest KeymapWrite CalculatorHardwareTestController CherryMacro HardwareProfile WindowsProfile LightingModel HardwareWindow HardwareLighting HardwareExtendedBackup ExtendedHardwareBackup ExtendedHardwareBackupStore ExtendedHardwareCapture ExtendedHardwareReadFrames ExtendedCaptureJournal ExtendedHardwareUSB ExtendedUSBRegistryIdentity ReceiverUSBInventory ReceiverPairingReports ReceiverPairingSelection ReceiverPairingDiscovery ReceiverPairingDevices ReceiverPairingWindow CalculatorService HardwareTests MacroPhysicalStop; do
     TASK_PREVIEW_SOURCES+=("$TASK_SOURCE_DIR/$TASK_PREVIEW_NAME.swift")
 done
-xcrun swiftc "${TASK_PREVIEW_FLAGS[@]}" "${TASK_PREVIEW_SOURCES[@]}" \
-    -o "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/MacOS/CherryMac" \
-    -framework Cocoa -framework IOKit -framework ApplicationServices \
-    -target "$TASK_PREVIEW_ARCH-apple-macos13.0"
+TASK_PREVIEW_BINARIES=()
+for TASK_PREVIEW_ARCH in "${TASK_PREVIEW_ARCHITECTURES[@]}"; do
+    TASK_PREVIEW_BINARY="$TASK_PREVIEW_STAGE/CherryMac-$TASK_PREVIEW_ARCH"
+    xcrun swiftc "${TASK_PREVIEW_FLAGS[@]}" "${TASK_PREVIEW_SOURCES[@]}" \
+        -o "$TASK_PREVIEW_BINARY" \
+        -framework Cocoa -framework IOKit -framework ApplicationServices \
+        -target "$TASK_PREVIEW_ARCH-apple-macos13.0"
+    TASK_PREVIEW_BINARIES+=("$TASK_PREVIEW_BINARY")
+done
+xcrun lipo -create "${TASK_PREVIEW_BINARIES[@]}" \
+    -output "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/MacOS/CherryMac"
 cp "$TASK_SOURCE_DIR/Info.plist" "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/Info.plist"
 TASK_PREVIEW_PLIST="$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $TASK_PREVIEW_IDENTIFIER" "$TASK_PREVIEW_PLIST"
