@@ -2,7 +2,7 @@
 
 为 **CHERRY MX 3.0S 宝可梦无线键盘**提供 Mac 客户端和网页版。点选键盘图，设置按键、编辑宏与配色，备份和迁移配置。
 
-[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.114.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.114.0) · [PHP 0.114.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.114.0)
+[打开在线配置](https://cherrymac.goforit.si/app/) · [项目官网](https://cherrymac.goforit.si/) · [Mac 0.115.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/v0.115.0) · [PHP 0.115.0 预览版](https://github.com/5hux1n/CherryMac/releases/tag/web-v0.115.0)
 
 **当前是开发预览，完整复刻仍未完成。** USB 有线模式下提供按键、宏和文本触发键的独立写入、备份与读回核对。灯效可以编辑、保存和导出计划，普通版未开放灯效发送。新版两端仍待统一真机验收；旧网页灯效故障根因尚未确认。[各功能的实际验收范围](docs/当前功能与验收状态.md)
 
@@ -20,7 +20,7 @@
 CHERRY_MACRO_PRODUCT=1 CHERRY_TEXT_PRODUCT=1 php -S 127.0.0.1:8770 -t .
 ```
 
-网页版本页完成按键写入后，可在“配置与备份 → 按键断电检查”记录拔线、关电确认和重连，再只读核对保留情况。无需再次写入，记录可直接导出；这个新流程尚待统一验收，Mac 主产品入口仍在补齐。
+网页版本页完成按键写入后，可在“配置与备份 → 按键断电检查”记录拔线、关电确认和重连，再只读核对保留情况。无需再次写入，记录可直接导出；这个新流程尚待统一验收，Mac 在“配置与备份”也提供“检查最近按键写入的断电保留”。打开后需要显式开始，不自动访问设备。
 
 网页版在“配置与备份”查看本机备份后，可选“仅载入按键”，保留其他模块草稿；再到按键页核对并确认写入。遇到设备信息或宏绑定冲突会停止，原草稿保留。“导入完整配置”会按完整配置替换编辑区，载入本身不写入键盘。
 

@@ -260,6 +260,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     var extendedCaptureCancelled=false
     var extendedCaptureCancelButton:NSButton?
     let extendedCaptureProgress=NSTextField(wrappingLabelWithString:"读取按钮通过 USB 获取两遍扩展前缀并核对保存；文件检查可导出副本。显示未覆盖字节，不写入键盘。")
+    #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+    var lastKeyRetentionTarget:(before:HardwareSnapshot,target:HardwareSnapshot)?
+    var keyRetentionSheet:KeyRetentionWindow?
+    #endif
     var busy=false
     var lastKeyBackup:URL?{UserDefaults.standard.string(forKey:"hardware.lastKeyBackup").map{URL(fileURLWithPath:$0)}}
     var controls:[NSControl]=[]
@@ -379,7 +383,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #else
         place(button("导出 Windows 配置草稿…",#selector(exportWindowsProfile)),408,94,280,32,in:files)
         #endif
-        place(label("备份与撤销",17,.semibold),8,160,850,27,in:files)
+        place(label("备份与撤销",17,.semibold),8,160,450,27,in:files)
         place(button("打开自动备份",#selector(openBackups)),8,205,180,32,in:files)
         place(button("撤销编辑区修改",#selector(discardDraft)),208,205,210,32,in:files)
         place(button("恢复最近按键备份",#selector(restoreLastKeys)),438,205,222,32,in:files)
@@ -421,6 +425,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(button("查看接收器连接",#selector(inspectReceiverConnection)),8,529,260,32,in:device)
         place(button("导出接收器查询结果…",#selector(exportReceiverConnection)),290,529,260,32,in:device)
         place(button("选择配对设备…",#selector(prepareReceiverPairing)),570,529,260,32,in:device)
+        #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+        let keyRetentionButton=button("检查最近按键写入的断电保留…",#selector(openKeyRetention))
+        keyRetentionButton.toolTip="成功写入后可开始本轮拔插与关电记录，只读核对，不再次写入或恢复。"
+        place(keyRetentionButton,526,155,350,32,in:files)
+        #endif
         let settings=tabs.tabViewItems.last!.view!
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
@@ -1061,6 +1070,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 switch result{
                 case .success(let snapshot):
                     self.baseline=snapshot;var remaining=draft;remaining.snapshot.keymap=snapshot.keymap;self.profile=remaining
+                    #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+                    self.lastKeyRetentionTarget=(baseline,snapshot)
+                    #endif
                     self.message.stringValue="键位已写入，读回校验通过。备份和操作日志已自动保存。计算器键保留已验证，其他映射以实际测试为准。"
                 case .failure(let error):self.baseline=nil;self.connection.stringValue="需要重新读取键盘";self.message.stringValue=error.localizedDescription+(log.map{"\n日志：\($0.url.path)"} ?? "")
                 }
@@ -1631,6 +1643,19 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             }catch{self.message.stringValue=error.localizedDescription}
         }
     }
+    #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+    @objc func openKeyRetention(){
+        do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
+        guard !busy,let owner=window,let latest=lastKeyRetentionTarget else{message.stringValue="请先在本窗口成功写入按键并完成读回核对。";return}
+        do{let sheet=try KeyRetentionWindow(before:latest.before,target:latest.target,queue:queue)
+            suspendHostTextForConfiguration();keyRetentionSheet=sheet;busy=true;controls.forEach{$0.isEnabled=false};update()
+            owner.beginSheet(sheet.window!){[weak self] _ in
+                guard let self else{return};if sheet.deviceAccessAttempted{self.baseline=nil;self.baselineWasRead=false;self.message.stringValue="断电检查已结束，编辑草稿保留；继续配置前请重新读取并核对。"}
+                self.keyRetentionSheet=nil;self.busy=false;self.controls.forEach{$0.isEnabled=true};self.update()
+            }
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    #endif
     @objc func openBackups(){do{try FileManager.default.createDirectory(at:backupDirectory,withIntermediateDirectories:true);NSWorkspace.shared.open(backupDirectory)}catch{message.stringValue=error.localizedDescription}}
     @objc func restoreLastKeys(){
         do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return}
