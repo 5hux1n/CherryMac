@@ -32,7 +32,7 @@ const extendedBackupEditor=installExtendedBackupEditor(operation,{capture:async(
 }});
 const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。'],receiver:['接收器','选择有线键盘与 2.4G 接收器，核对连接。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
-let defaultInspection=null,selectedDefaultLightingFile=null;
+let defaultInspection=null,selectedDefaultLightingFile=null,pollingDraftSource=null;
 let receiverPage=null;
 let lastReceiverInventory=null;
 function renderReceiverPairingChoices(){
@@ -84,12 +84,18 @@ function render(){
   $('draft-note').textContent=tab==='lights'?($('open-lighting-acceptance')?'先准备灯效计划，再进入独立页面重新读取、备份和确认；本页不会直接发送。':'仅核对并导出灯效计划；普通版尚未开放灯效发送。'):tab==='macros'&&macroProduct?(keyError??'只更新宏库与宏绑定键；灯效和设备参数保留。普通键草稿保留，可在按键页面另行写入。'):tab!=='keys'?WRITE_BLOCK_REASON:keyError??'只写入键位表。灯效、颜色与宏草稿保留在编辑区，不随按键发送。';
   document.querySelectorAll('main button,main input,main select,dialog button').forEach(e=>e.disabled=busy);
   let pollingWords=null;try{if(profile.windowsTemplateJSON)pollingWords=officialSystemStageWords(JSON.parse(profile.windowsTemplateJSON));}catch{}
+  const pollingSource=profile.windowsTemplateJSON??null;
+  if(pollingDraftSource!==pollingSource){
+    pollingDraftSource=pollingSource;
+    $('polling-draft').value=pollingWords&&pollingWords[3]<=3?String(pollingWords[3]):'';
+  }
+  $('polling-draft').disabled=busy||!pollingWords;
   $('polling-draft-summary').textContent=pollingWords?`当前官方草稿：${[125,250,500,1000][pollingWords[3]]?`${[125,250,500,1000][pollingWords[3]]} Hz`:`原始索引 ${pollingWords[3]}（尚未核对）`}；尚未写入键盘。`:'请先导入包含设备设置的官方配置。';
   $('inspect-default-transaction').disabled=busy;
   $('export-default-backup').disabled=busy||!defaultInspection;$('export-default-inspection').disabled=busy||!defaultInspection;
   $('export-default-recorded-recovery').disabled=busy||!defaultInspection?.recoveryPlan;
   renderReceiverPairingChoices();receiverPage?.render();
-  $('save-polling-draft').disabled=busy||!pollingWords;$('load-polling-draft').disabled=busy||!pollingWords;
+  $('save-polling-draft').disabled=busy||!pollingWords||$('polling-draft').value==='';$('load-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
@@ -271,6 +277,7 @@ $('clear-palette').onclick=()=>act(()=>{
   profile=clearCustomLightingDraft(profile);syncLights();status('全部逐键配色已清空，尚未写入。');
 });
 $('brightness').oninput=()=>$('brightness-label').textContent=$('brightness').value;
+$('polling-draft').onchange=()=>render();
 $('save-polling-draft').onclick=()=>operation(async()=>{
   const value=$('polling-draft').value;requireThat(value!=='','请选择回报率，或保留原草稿。');
   const saved={format:'CherryMacPollingEditorDraft',version:1,model:47,index:Number(value)},next=mergePollingEditorDraft(profile,saved);
