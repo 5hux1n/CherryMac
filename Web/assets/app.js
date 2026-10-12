@@ -93,6 +93,8 @@ function render(){
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
   $('review-lighting').disabled=busy||!baseline;
+  if($('open-lighting-workflow'))$('open-lighting-workflow').disabled=busy||!baseline||lightingReconnectSnapshot!==null;
+  if($('open-default-lighting-workflow'))$('open-default-lighting-workflow').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null;
   $('review-default-lighting').disabled=$('review-default-lighting-file').disabled=busy||!baseline||!profile.lightingMapping;
   if($('open-default-lighting-acceptance'))$('open-default-lighting-acceptance').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null;
   if($('open-selected-default-lighting-acceptance'))$('open-selected-default-lighting-acceptance').disabled=busy||!baseline||!profile.lightingMapping||lightingReconnectSnapshot!==null||selectedDefaultLightingFile===null;

@@ -6,6 +6,8 @@ import {saveRawLightingMetadata,lightingResultChannelName,reviewLightingEditorRe
 import {saveLog,saveVerifiedLog,latestLightingRecoveryLog} from './logs.js?v=0.6.0';
 // Only the explicit research ZIP transforms this literal; product writes remain closed.
 const lightingWriteEnabled=false;
+// Even a research bundle keeps the product page read-only.
+const lightingWritesPermitted=lightingWriteEnabled&&document.documentElement.dataset.lightingResearch==='true';
 const $=id=>document.getElementById(id),gate=new PageReleaseGate(),runID=crypto.randomUUID();
 const artifacts={format:'CherryMacLightingAcceptanceSession',version:1,hardwareReady:false,runID,startedAt:new Date().toISOString(),backups:[],records:[],usb:[],observations:[]};
 let editorRecord=null,pendingEditorRecord=null,pendingWriteTarget=null,editorReview=null,connectionRevision=0,returnChannel=null;
@@ -41,8 +43,8 @@ function render(){
   $('lighting-return').disabled=busy||!returnChannel||!editorRecord||!online;
   $('lighting-connect').disabled=busy||!isSecureContext||!('hid' in navigator);
   $('lighting-close').disabled=busy||!online;
-  $('lighting-write').disabled=!lightingWriteEnabled||busy||!online||input?.kind!=='write'||writeAttempted;
-  $('lighting-restore').disabled=!lightingWriteEnabled||busy||!online||!latestRecord;
+  $('lighting-write').disabled=!lightingWritesPermitted||busy||!online||input?.kind!=='write'||writeAttempted;
+  $('lighting-restore').disabled=!lightingWritesPermitted||busy||!online||!latestRecord;
   $('lighting-stop').disabled=!abort||abort.signal.aborted;
   $('lighting-download-record').disabled=busy||!latestRecord;
   $('lighting-power-off').disabled=busy||!powerStorageReady()||!writtenTarget||powerCycle?.disconnectedAt==null||online||powerCycle?.returnedAt!=null;
@@ -128,7 +130,7 @@ $('lighting-connect').onclick=()=>{
   if(busy)return;
   return selectLightingDevice(operation,()=>navigator.hid.requestDevice({filters:[{vendorId:1130,productId:462,usagePage:0xff1c,usage:0x92}]}),async device=>{
   if(hid)await hid.close();
-  const session=new CherryHID(device,{lightingResearch:lightingWriteEnabled,log:async entry=>{
+  const session=new CherryHID(device,{lightingResearch:lightingWritesPermitted,log:async entry=>{
     await saveLog(entry);artifacts.usb.push(clone(entry));
   },progress:message=>status(message),onDisconnect:error=>{connectionRevision++;editorRecord=null;gate.invalidate();status(error.message,true);render();}});
   hid=session;await session.open();const snapshot=await session.snapshot();
@@ -153,7 +155,7 @@ navigator.hid?.addEventListener('connect',event=>{
   persistPowerObservation({kind:'usbReconnected',at:new Date().toISOString(),deviceToken:token(event.device)},powerCycle);render();
 });
 $('lighting-write').onclick=event=>operation('write',async()=>{
-  requireThat(lightingWriteEnabled,'主产品灯效写入和恢复发送尚未开放，请等待统一实机验收。');
+  requireThat(lightingWritesPermitted,'主产品灯效写入和恢复发送尚未开放，请等待统一实机验收。');
   requireThat(input?.kind==='write'&&!writeAttempted,'请先载入新的写入核对文件。');
   requireThat(confirm('本研究入口将实际写入灯效。请确认已保存恢复资料、松开全部按键，并保持页面前台。是否继续？'),'已取消，未写入。');
   gate.acknowledge(event);abort=new AbortController();writeAttempted=true;powerCycle=null;writtenTarget=null;render();
@@ -163,7 +165,7 @@ $('lighting-write').onclick=event=>operation('write',async()=>{
   else throw new Error(`本次写入未通过：${result.failure}。请保留记录，重新连接后核对恢复。`);
 });
 $('lighting-restore').onclick=event=>operation('restore',async()=>{
-  requireThat(lightingWriteEnabled,'主产品灯效写入和恢复发送尚未开放，请等待统一实机验收。');
+  requireThat(lightingWritesPermitted,'主产品灯效写入和恢复发送尚未开放，请等待统一实机验收。');
   requireThat(latestRecord,'尚无恢复记录。');
   requireThat(confirm('将从原始备份恢复灯效数据，颜色不再缩放。恢复前会重新读取并检查范围；请松开全部键。是否继续？'),'已取消，未恢复。');
   gate.acknowledge(event);abort=new AbortController();writtenTarget=null;powerCycle=null;render();
