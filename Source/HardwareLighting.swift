@@ -777,7 +777,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         }){usb,log in
             guard try usb.lightingRegistryID()==selectedID else{throw HardwareError(message:"写入会话与此前读取设备不同，请重新读取。")}
             if let metadata=review.rawLightingMetadata{
-                try metadata.validate();guard metadata.snapshot==review.target,metadata.lightingMapping==review.lightingMapping else{throw HardwareError(message:"计划原始配色资料不匹配。")}
+                try metadata.validate();guard metadata.snapshot.hasSameConfiguration(as:review.target),metadata.lightingMapping==review.lightingMapping else{throw HardwareError(message:"计划原始配色资料不匹配。")}
                 let cache=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareBackups")
                 do{try saveLightingRawMetadata(metadata,to:cache)}catch{throw HardwareError(message:"原始配色资料未保存，本次尚未进入灯效发送："+error.localizedDescription+" 请修复本机存储后重新载入计划并读取键盘。")}
             }
