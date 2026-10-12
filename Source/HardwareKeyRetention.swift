@@ -41,7 +41,7 @@ final class KeyRetentionWindow:NSWindowController,NSWindowDelegate {
         IOHIDManagerUnscheduleFromRunLoop(manager,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue);IOHIDManagerClose(manager,0);self.manager=nil
     }
     private func startMonitor()throws {
-        stopMonitor();deviceAccessAttempted=true
+        stopMonitor();registryID=nil;cycle=nil;deviceAccessAttempted=true
         let m=IOHIDManagerCreate(kCFAllocatorDefault,0),context=Unmanaged.passUnretained(self).toOpaque()
         IOHIDManagerSetDeviceMatching(m,[kIOHIDVendorIDKey:0x046A,kIOHIDProductIDKey:0x01CE,kIOHIDTransportKey:"USB"] as CFDictionary)
         IOHIDManagerRegisterDeviceRemovalCallback(m,{context,_,_,device in
