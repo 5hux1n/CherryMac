@@ -122,7 +122,7 @@ if lighting_acceptance:
 '''.encode()
 readme += '\n灯效页可使用“仅导入官方灯效”，单独载入本型号官方 JSON 的灯效和原始配色，保留已有键位、宏、文本及设备设置草稿。此前没有模板时，不载入该文件的设备设置。LightOpenFlag 已在导入、草稿和导出之间同步；尚未确定其物理开关含义，没有新增开／关控件。此版本只编译与打包，未运行测试或访问键盘。\n'.encode()
 readme += '\n按键页增加官方默认可见的 11 项多媒体功能，以及计算器、Finder、邮件、音乐启动组合键。点击“安装并设置 Mac 启动”才会安装系统快捷操作并保存键位草稿，仍需单独确认写入；安装与实体触发尚待验收。\n'.encode()
-readme += ('\n灯效主按钮在研究版进入独立备份、写入、读回与恢复流程，关闭时接回与原计划匹配的有效结果，保留所有未发送草稿及原始 RGB。拔线、取消或计划不符时须重新读取；USB 标识仅核对当前会话，不能证明断电后物理身份。\n' if lighting_acceptance else '\n灯效主按钮仅核对并导出计划，不发送灯效；已移除主入口对旧灯效发送方法的调用。\n').encode()
+readme += ('\n灯效主按钮在研究版进入独立备份、写入、读回与恢复流程，关闭时接回与原计划匹配的有效结果，保留所有未发送草稿及原始 RGB。拔线、取消或计划不符时须重新读取；USB 标识仅核对当前会话，不能证明断电后物理身份。\n' if lighting_acceptance else '\n灯效菜单已接入操作与恢复页面，可准备当前／默认灯效计划、手动读取和载入恢复资料。主产品的写入与恢复发送仍关闭，实际灯效及断电验收后才开放。\n').encode()
 
 with tempfile.TemporaryDirectory(prefix='.native-preview-', dir=output_dir) as temp:
     package = pathlib.Path(temp) / prefix

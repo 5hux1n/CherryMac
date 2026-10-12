@@ -68,11 +68,11 @@ async function applyAuthorizedKeymap(hid,authorization,{gate,backup,progress},en
   return await hid[entry](authorization,gate,async()=>{
     const startingWrites=hid.keyWritesSent;
     const send=async map=>{for(let offset=0;offset<378;offset+=54)await hid.exchange(authorization.packet(map,offset));};
+    let after;
     try{
       await phase('正在写入键位');await send(wanted.keymap);
-      await phase('正在完整读回核对');const after=await hid.snapshot();
+      await phase('正在完整读回核对');after=await hid.snapshot();
       requireThat(sameSnapshot(after,wanted),'键位写后读取不一致，或其他配置发生变化。');
-      await phase('键位写入完成');return after;
     }catch(error){
       const reason=error.message;
       if(hid.keyWritesSent===startingWrites)throw new Error(`${reason} 未发送键位写包，原配置没有修改。`);
@@ -84,6 +84,11 @@ async function applyAuthorizedKeymap(hid,authorization,{gate,backup,progress},en
       }catch(recovery){throw new Error(`${reason} 自动恢复未完成：${recovery.message}。备份已保存；请松开全部按键，重新连接读取后核对恢复。`);}
       throw new Error(`${reason} 已恢复写入前的键位，备份和日志已保存。`);
     }
+    // A verified write is not a failed hardware transaction when final log
+    // persistence fails. Keep the result distinct and do not enter recovery.
+    try{await phase('键位写入完成');}
+    catch(error){throw new Error(`键位已写入并完整读回一致，但操作收尾失败：${error.message}。请保留备份，重新读取核对；未自动恢复键位。`);}
+    return after;
   });
   }finally{hid.operationId=previousOperationId;}
 }
