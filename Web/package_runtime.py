@@ -20,7 +20,7 @@ def preview_versions(root: pathlib.Path):
 
 RUNTIME_NAMES = ['index.php', 'lighting.php', 'lighting-test.php', 'README.md', 'start.command'] + [
     'assets/' + name for name in [
-        'app.js', 'lighting-test-entry.js', 'lighting-test-plan.js', 'pokemon-default.js', 'hid.js', 'layout.js', 'logs.js', 'model.js', 'safety.js',
+        'app.js', 'product-key-retention.js', 'lighting-test-entry.js', 'lighting-test-plan.js', 'pokemon-default.js', 'hid.js', 'layout.js', 'logs.js', 'model.js', 'safety.js',
         'page-operation.js', 'storage.js', 'style.css', 'tables.js', 'writer.js', 'macro-session.js',
         'macro-stop.js', 'product-macros.js', 'product-text.js', 'text-bridge.js', 'receiver-inventory.js', 'receiver-pairing-selection.js', 'receiver-pairing-discovery.js', 'receiver-pairing-devices.js', 'product-receiver.js', 'database.js', 'extended-backup-editor.js', 'extended-hardware-backup.js', 'extended-hardware-backup-store.js', 'extended-capture-journal.js', 'extended-hardware-capture.js', 'extended-hardware-read-frames.js', 'extended-hardware-regions.js',
     ]

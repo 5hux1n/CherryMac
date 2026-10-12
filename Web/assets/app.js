@@ -1,3 +1,4 @@
+import {installKeyRetention} from './product-key-retention.js?v=0.6.0';
 import {officialPokemonDefaultFile} from './pokemon-default.js?v=0.6.0';
 import {installReceiverPage} from './product-receiver.js?v=0.6.0';
 import {receiverInventorySummary,reviewReceiverInventorySelection} from './receiver-inventory.js?v=0.6.0';
@@ -49,6 +50,7 @@ function renderReceiverPairingChoices(){
 }
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
+const keyRetention=installKeyRetention(operation,{getHID:()=>hid,isBusy:()=>busy});
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
 const textProduct=document.documentElement.dataset.textProduct==='true',textStore=new HostTextStore();
 let bridgeStorage=null;if(textProduct)try{bridgeStorage=sessionStorage;}catch{}
@@ -132,6 +134,7 @@ if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!b
   if(lightingReconnectSnapshot!==null){for(const id of ['write','recover-macro','discard','text-install','text-restore'])if($(id))$(id).disabled=true;}
   updateLightingOptions();
   renderMacroSummary();
+  keyRetention.render();
 }
 function paletteEditable(){return ['officialRGB','hardwareRGB'].includes(profile.lightingColorEncoding)&&profile.lightingMapping!=null&&profile.snapshot.colors!=null;}
 function requireEditablePalette(){requireThat(paletteEditable(),'请先读取完整配置和 LED 映射，或导入已知来源的配色。');}
@@ -549,7 +552,7 @@ $('write').onclick=()=>{
 };
 $('cancel-write').onclick=()=>{$('confirm').close();pending=null;};
 $('confirm-write').onclick=e=>{let wanted;try{requireLightingResultReconciled();gate.acknowledge(e);wanted=pending;requireThat(wanted,'没有待写入配置。');requireThat(equal(profile,wanted.draft)&&sameSnapshot(baseline,wanted.before),'编辑区或读取基线已变化，请重新确认。');}catch(error){status(error.message,true);return;}$('confirm').close();pending=null;void operation(async()=>{
-  let after;
+  let after;const writeDevice=hid.device;
   if(wanted.kind==='macro'){macroAbort=new AbortController();render();}
   try{const options={signal:macroAbort?.signal,gate,backup:async snapshot=>{await saveBackup(snapshot);status('写入前备份已保存。');},progress:message=>status(message+'…')};
     if(wanted.kind==='macro'){await rememberMacroTransaction(wanted.before,wanted.wanted,baselineLightingMapping);after=await applyMacroWithStop(hid,wanted.wanted,wanted.before,options);}
@@ -558,6 +561,7 @@ $('confirm-write').onclick=e=>{let wanted;try{requireLightingResultReconciled();
   finally{macroAbort=null;}
   baseline=clone(after);if(wanted.kind==='macro'){for(let slot=0;slot<126;slot++){const offset=slot*3;if(!equal(wanted.before.keymap.slice(offset,offset+3),after.keymap.slice(offset,offset+3)))profile.snapshot.keymap.splice(offset,3,...after.keymap.slice(offset,offset+3));}}else profile.snapshot.keymap=clone(after.keymap);
   if(wanted.kind==='macro'){profile.snapshot.macroData=clone(after.macroData);try{await rememberMacroProfile(profile,after,wanted.before);}catch(error){status('宏已写入并读回一致，但本地名称保存失败：'+error.message,true);return;}}
+  if(wanted.kind==='key')keyRetention.setTarget(wanted.before,after,writeDevice);
   syncLights();status((wanted.kind==='macro'?'宏与绑定键':'按键')+'写入完成，完整读回一致。备份和日志已自动保存；其他草稿尚未写入。');
 });};
 $('recover-macro').onclick=e=>{if(busy||!macroProduct)return;try{requireLightingResultReconciled();gate.acknowledge(e);}catch(error){status(error.message,true);return;}void operation(async()=>{
