@@ -270,6 +270,18 @@ export function resolveMacros(p){
   s.macroData=encodeBank(p.macros,header);for(const [slot,name] of Object.entries(p.macroBindings))s.keymap.splice(Number(slot)*3,3,...macroBinding(p.macros.findIndex(m=>sameMacroName(m.name,name)),p.macroModes?.[slot]));return s;
 }
 export function portableProfile(profile){validateProfile(profile);const output=clone(profile);if(output.lightingRawSlots!=null)output.version=2;return output;}
+// Prepare only backed-up key records; unrelated editor data stays intact.
+export function mergeKeymapBackupDraft(profile,snapshot){
+  validateProfile(profile);validateSnapshot(snapshot,true);
+  requireThat(equal(profile.snapshot.deviceInfo,snapshot.deviceInfo),'按键备份来自不同设备／固件，请先读取并核对配置。');
+  for(let slot=0;slot<126;slot++){
+    const offset=slot*3,old=profile.snapshot.keymap.slice(offset,offset+3),next=snapshot.keymap.slice(offset,offset+3);
+    if(Object.hasOwn(profile.macroBindings??{},slot)||[0x70,0x71].includes(old[0])||[0x70,0x71].includes(next[0]))
+      requireThat(equal(old,next),'按键备份与当前宏绑定冲突；请保留草稿并使用宏恢复入口处理。');
+  }
+  const result=clone(profile);result.snapshot.keymap=clone(snapshot.keymap);validateProfile(result);return result;
+}
+
 export function parseProfile(text,baseline,options={}){
   requireThat(new TextEncoder().encode(text).length<=3_000_000,'配置文件超过 3 MB。');const data=JSON.parse(text);
   if(data?.KeyList||data?.DeviceBasicInfo){requireThat(baseline,'导入 Windows 配置前请连接并读取键盘。');requireThat(new TextEncoder().encode(text).length<=1_000_000,'Windows 配置文件超过 1 MB。');return importWindows(data,baseline,options);}

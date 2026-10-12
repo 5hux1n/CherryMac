@@ -1648,6 +1648,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
                 _ = try KeymapWriteAuthorization(baseline:current,keymap:saved.keymap)
                 guard var draft=self.profile else{return}
                 guard draft.snapshot.deviceInfo==current.deviceInfo else{throw HardwareError(message:"当前草稿来自不同设备／固件；草稿保留，请先导出再重新读取。")}
+                try draft.validate()
                 for slot in (draft.macroBindings ?? [:]).keys{
                     let range=slot*3..<slot*3+3
                     guard draft.snapshot.keymap[range]==saved.keymap[range] else{throw HardwareError(message:"恢复键位与当前宏绑定草稿冲突；草稿保留，请先导出或处理该宏绑定后再恢复。")}
