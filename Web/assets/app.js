@@ -1,4 +1,4 @@
-import {receiverInventorySummary} from './receiver-inventory.js?v=0.6.0';
+import {receiverInventorySummary,reviewReceiverInventorySelection} from './receiver-inventory.js?v=0.6.0';
 import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
 import {installExtendedBackupEditor} from './extended-backup-editor.js?v=0.6.0';
@@ -32,6 +32,18 @@ const pages={keys:['按键功能','点选一个按键，设置你习惯的功能
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let defaultInspection=null,selectedDefaultLightingFile=null;
 let lastReceiverInventory=null;
+function renderReceiverPairingChoices(){
+  if(!textProduct)return;
+  const entries=lastReceiverInventory?.inventory?.entries.filter(entry=>entry.configurationReportSupported)??[];
+  for(const [role,id] of [['keyboard','pairing-keyboard'],['receiver','pairing-receiver']]){
+    const picker=$(id),selected=picker.value,rows=entries.filter(entry=>entry.role===role);
+    picker.replaceChildren(new Option(rows.length?'请选择设备':'未发现可用接口',''));
+    for(const entry of rows)picker.add(new Option(`${entry.vendorID.toString(16).padStart(4,'0').toUpperCase()}:${entry.productID.toString(16).padStart(4,'0').toUpperCase()} · USB ${entry.usbRevision.toString(16).padStart(4,'0').toUpperCase()} · 接口 ${entry.sessionToken}`,entry.sessionToken));
+    if(rows.some(entry=>entry.sessionToken===selected))picker.value=selected;else if(rows.length===1)picker.value=rows[0].sessionToken;
+    picker.disabled=busy||!rows.length;
+  }
+  $('pairing-review').disabled=busy||!lastReceiverInventory||!$('pairing-keyboard').value||!$('pairing-receiver').value;
+}
 let recorder=null,recordingPreference=null,macroAbort=null,lightingRecordForPlan=null;
 let profile=fromHardware(demo),baseline=null,baselineLightingMapping=null,hid=null,busy=false,tab='keys',lightTab='builtins',selected='calculator',selection=new Set([selected]),steps=[],pending=null;
 const macroProduct=document.documentElement.dataset.macroProduct==='true';
@@ -73,6 +85,7 @@ function render(){
   $('inspect-default-transaction').disabled=busy;
   $('export-default-backup').disabled=busy||!defaultInspection;$('export-default-inspection').disabled=busy||!defaultInspection;
   $('export-default-recorded-recovery').disabled=busy||!defaultInspection?.recoveryPlan;
+  renderReceiverPairingChoices();
   $('save-polling-draft').disabled=busy||!pollingWords;$('load-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
@@ -570,10 +583,23 @@ if(textProduct){
     }catch(error){$('usb-identity-summary').textContent='核对失败：'+error.message;throw error;}
   });
   $('receiver-inventory-read').onclick=()=>operation(async()=>{
-    lastReceiverInventory=null;
+    lastReceiverInventory=null;renderReceiverPairingChoices();
+    $('pairing-review-summary').textContent='选择设备仅用于准备。配对发送尚未开放。';
     $('receiver-inventory-summary').textContent='正在查看接收器连接…';
     try{const inventory=await textBridge.receiverInventory();const summary=receiverInventorySummary(inventory);lastReceiverInventory={receivedAt:new Date().toISOString(),source:'mac-bridge',inventory:clone(inventory),pairingVerified:false,configurationWriteAccepted:false};$('receiver-inventory-summary').textContent=summary;status('已查看键盘与接收器的 USB 描述信息，可在排查资料中导出。');}
     catch(error){$('receiver-inventory-summary').textContent='查看失败：'+error.message;throw error;}
+  });
+  for(const id of ['pairing-keyboard','pairing-receiver'])$(id).onchange=()=>{renderReceiverPairingChoices();$('pairing-review-summary').textContent='所选设备已变化，请重新核对连接。尚未配对。';};
+  $('pairing-review').onclick=()=>operation(async()=>{
+    requireThat(lastReceiverInventory,'请先查看接收器连接。');
+    const previous=clone(lastReceiverInventory.inventory),keyboardToken=$('pairing-keyboard').value,receiverToken=$('pairing-receiver').value;
+    $('pairing-review-summary').textContent='正在重新核对所选连接…';
+    try{
+      const current=await textBridge.receiverInventory();
+      const selected=reviewReceiverInventorySelection(previous,current,keyboardToken,receiverToken);
+      $('pairing-review-summary').textContent=`键盘接口 ${selected.keyboard.token} 与接收器接口 ${selected.receiver.token} 已核对。尚未发送配对命令，实际配对功能仍待完成。`;
+      status('所选连接已核对，尚未配对。');
+    }catch(error){lastReceiverInventory=null;renderReceiverPairingChoices();$('pairing-review-summary').textContent='核对失败：'+error.message;throw error;}
   });
   $('text-bridge-pair').onclick=()=>operation(async()=>{await textBridge.pair($('text-bridge-code').value);$('text-bridge-code').value='';status('Mac 已联动。启用文本服务前请先安装并保存相同的文本配置。');});
   $('text-bridge-start').onclick=()=>operation(async()=>{

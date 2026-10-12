@@ -68,6 +68,8 @@ struct ReceiverPairingSelection: Codable, Equatable {
             }
             return eligible[0]
         }
-        return try Self(keyboard: choose(.keyboard, keyboardToken), receiver: choose(.receiver, receiverToken))
+        let selection = try Self(keyboard: choose(.keyboard, keyboardToken), receiver: choose(.receiver, receiverToken))
+        try selection.validate()
+        return selection
     }
 }

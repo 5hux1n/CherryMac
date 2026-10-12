@@ -1,3 +1,4 @@
+import {resolveReceiverPairingSelection,checkedReceiverPairingSelection} from './receiver-pairing-selection.js?v=0.6.0';
 // Checks authenticated companion metadata only; no navigator/device opening.
 export function checkedReceiverInventory(value){
   const fail=()=>{throw new Error('Mac 接收器描述信息不完整或无效。');};
@@ -17,4 +18,14 @@ export function receiverInventorySummary(value){
     return rows.length?`${name}：发现 ${rows.length} 个 USB 接口，其中 ${rows.filter(entry=>entry.configurationReportSupported).length} 个具备配置报告接口`:`${name}：未发现 USB 连接`;
   });
   return counts.join('；')+'。仅本次查询有效，不代表已配对或配置保持。';
+}
+
+export function receiverInventoryCandidates(value){
+  return checkedReceiverInventory(value).entries.filter(entry=>entry.configurationReportSupported).map(entry=>({token:entry.sessionToken,vendorID:entry.vendorID,productID:entry.productID,usagePage:0xff1c,usage:0x92}));
+}
+export function reviewReceiverInventorySelection(previous,current,keyboardToken,receiverToken){
+  previous=checkedReceiverInventory(previous);current=checkedReceiverInventory(current);
+  const entries=value=>Array.from(value.entries).sort((a,b)=>a.sessionToken.localeCompare(b.sessionToken));
+  if(JSON.stringify(entries(previous))!==JSON.stringify(entries(current)))throw new Error('USB 连接已变化，请重新查看并选择设备。');
+  return checkedReceiverPairingSelection(resolveReceiverPairingSelection(receiverInventoryCandidates(current),{keyboardToken,receiverToken}));
 }

@@ -419,6 +419,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         place(discardResult,208,253,300,32,in:device)
         place(button("查看接收器连接",#selector(inspectReceiverConnection)),8,529,260,32,in:device)
         place(button("导出接收器查询结果…",#selector(exportReceiverConnection)),290,529,260,32,in:device)
+        place(button("选择配对设备…",#selector(prepareReceiverPairing)),570,529,260,32,in:device)
         let settings=tabs.tabViewItems.last!.view!
         place(label("设备设置",20,.semibold),8,12,850,30,in:settings)
         place(label("官方配置草稿",17,.semibold),8,69,850,28,in:settings)
@@ -768,6 +769,45 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             let alert=NSAlert();alert.messageText="键盘与接收器连接"
             alert.informativeText=(counts+details+["仅显示本次查询的 USB 描述信息，不代表已配对或配置保持。配对配置尚未开放。"] ).joined(separator:"\n")
             alert.beginSheetModal(for:window)
+        }catch{message.stringValue=error.localizedDescription}
+    }
+    @objc func prepareReceiverPairing(){
+        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        do{
+            let inventory=try ReceiverUSBInventory.read()
+            let eligible=inventory.entries.filter(\.configurationReportSupported)
+            let keyboards=eligible.filter{$0.role=="keyboard"},receivers=eligible.filter{$0.role=="receiver"}
+            guard !keyboards.isEmpty else{throw ReceiverPairingSelection.SelectionError.missingKeyboard}
+            guard !receivers.isEmpty else{throw ReceiverPairingSelection.SelectionError.missingReceiver}
+            let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:540,height:146))
+            let keyboard=NSPopUpButton(),receiver=NSPopUpButton()
+            func title(_ entry:ReceiverUSBInventory.Entry)->String{
+                "\(String(format:"%04X:%04X",entry.vendorID,entry.productID)) · USB \(String(format:"%04X",entry.usbRevision)) · 接口 \(entry.sessionToken)"
+            }
+            for (name,picker,entries,y) in [("USB 有线键盘",keyboard,keyboards,CGFloat(8)),("2.4G 接收器",receiver,receivers,CGFloat(64))]{
+                place(label(name),0,y,140,24,in:view);place(picker,145,y,390,28,in:view)
+                picker.addItem(withTitle:"请选择设备");picker.addItems(withTitles:entries.map(title))
+                if entries.count==1{picker.selectItem(at:1)}
+                picker.setAccessibilityLabel(name)
+            }
+            place(label("选择仅用于准备；接口断开或变化后需要重新选择。",12),0,112,535,28,in:view)
+            let alert=NSAlert();alert.messageText="选择键盘与接收器"
+            alert.informativeText="分别选择要配对的两个设备。下一步会重新核对连接；目前尚未开放配对发送。"
+            alert.accessoryView=view;alert.addButton(withTitle:"核对所选连接");alert.addButton(withTitle:"取消")
+            alert.beginSheetModal(for:window){[weak self] response in
+                guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
+                do{
+                    guard keyboards.indices.contains(keyboard.indexOfSelectedItem-1),receivers.indices.contains(receiver.indexOfSelectedItem-1) else{throw HardwareError(message:"请分别选择键盘和接收器。")}
+                    let current=try ReceiverUSBInventory.read()
+                    guard current==inventory else{throw ReceiverPairingSelection.SelectionError.staleSelection}
+                    func candidate(_ entry:ReceiverUSBInventory.Entry)->ReceiverPairingCandidate{
+                        .init(token:entry.sessionToken,vendorID:entry.vendorID,productID:entry.productID,usagePage:0xff1c,usage:0x92)
+                    }
+                    let selection=try ReceiverPairingSelection.resolve(eligible.map(candidate),keyboardToken:keyboards[keyboard.indexOfSelectedItem-1].sessionToken,receiverToken:receivers[receiver.indexOfSelectedItem-1].sessionToken)
+                    try selection.validate()
+                    self.message.stringValue="所选键盘与接收器连接已核对。尚未发送配对命令；实际配对功能仍待完成。"
+                }catch{self.message.stringValue=error.localizedDescription}
+            }
         }catch{message.stringValue=error.localizedDescription}
     }
     func receiverDiagnosticData(_ inventory:ReceiverUSBInventory.Inventory)throws->Data{
