@@ -1,3 +1,4 @@
+import {officialPokemonDefaultFile} from './pokemon-default.js?v=0.6.0';
 import {installReceiverPage} from './product-receiver.js?v=0.6.0';
 import {receiverInventorySummary,reviewReceiverInventorySelection} from './receiver-inventory.js?v=0.6.0';
 import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
@@ -429,18 +430,21 @@ $('file').onchange=()=>operation(async()=>{
   const mixed=adoptImportedProfile(p,file.name);
   status(mixed?'配置已分流：键位和宏在编辑区，文本在文本页。文本键保留当前配置，需另行安装；尚未写入。':'配置已导入编辑区，尚未写入键盘。');
 });
-$('review-default').onclick=()=>$('default-review-file').click();
-$('default-review-file').onchange=()=>operation(async()=>{
-  const file=$('default-review-file').files[0];$('default-review-file').value='';if(!file)return;
+function exportOfficialDefaultReview(text){
   const before=baseline,mapping=baselineLightingMapping;
   requireThat(before&&mapping,'请先读取键盘，取得完整配置和固件默认键位表。');
-  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
-  const text=await file.text();
   requireThat(baseline===before&&baselineLightingMapping===mapping,'读取资料已改变，请重新核对。');
   const review=reviewDefaultConfiguration(text,before,mapping);
   $('default-review-summary').textContent=`按键差异 ${review.changedKeySlots.length} 个；灯效参数差异 ${review.changedParameterOffsets.length} 项。内部键差异 ${review.protectedChangedSlots.length} 个；涉及宏绑定 ${review.macroBindingSlots.length} 个；未支持的默认键记录 ${review.unsupportedFactorySlots.length} 个。设备设置的 ${review.pendingSystemFields.length} 个字段仍待确认，默认颜色差异 ${review.defaultColorPlan.changedColorSlots.length} 个，已纳入离线候选；颜色／键位候选事务已实现，普通版发送入口关闭。宏存储处理仍待核对。候选保留原始宏存储，完整恢复尚未开放。`;
   download(review,'CherryMac-default-review.json');
   status('已导出默认恢复核对计划，包含当前配置与宏；未修改编辑区或写入键盘。');
+}
+$('review-builtin-default').onclick=()=>operation(()=>exportOfficialDefaultReview(officialPokemonDefaultFile),{localOnly:true});
+$('review-default').onclick=()=>{if(!busy)$('default-review-file').click();};
+$('default-review-file').onchange=()=>operation(async()=>{
+  const file=$('default-review-file').files[0];$('default-review-file').value='';if(!file)return;
+  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
+  exportOfficialDefaultReview(await file.text());
 },{localOnly:true});
 $('inspect-default-record').onclick=()=>{if(!busy)$('default-record-file').click();};
 $('default-record-file').onchange=()=>operation(async()=>{
@@ -488,21 +492,23 @@ $('export-default-recorded-recovery').onclick=()=>operation(()=>{
   requireThat(new TextEncoder().encode(JSON.stringify(defaultInspection.recoveryPlan,null,2)).length<=16_000_000,'撤回计划超过 16 MB。');
   download(defaultInspection.recoveryPlan,'CherryMac-default-recovery-plan.json');status('按记录读回导出了撤回计划；执行前仍须重新读取键盘。');
 },{localOnly:true});
-$('import-default').onclick=()=>$('default-file').click();
-$('default-file').onchange=()=>operation(async()=>{
+function loadOfficialDefaultDraft(text){
   requireLightingResultReconciled();
-  const file=$('default-file').files[0];$('default-file').value='';if(!file)return;
   requireThat(baseline,'请先读取键盘，再载入官方默认草稿。');
-  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
-  const root=extractOfficialDefaultTemplate(await file.text());
+  const root=extractOfficialDefaultTemplate(text);
   const next=parseProfile(JSON.stringify(root),baseline,{deferHostText:textProduct,lightingMapping:baselineLightingMapping});
   if(!confirm('载入官方默认草稿会替换当前编辑区。请先导出需要保留的配置。默认键位、灯效与文件设置只载入草稿，原始宏存储保留；不会写入键盘，完整恢复默认尚未开放。')){status('已取消载入，编辑区保留。');return;}
   if(textProduct){textRoot=null;$('text-summary').textContent='默认草稿未包含文本定义；输入服务保持关闭。';$('text-bindings').replaceChildren();}
   profile=next;refreshMacros();loadMacro();loadPlayback();syncLights();
   status('官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。');
+}
+$('import-builtin-default').onclick=()=>operation(()=>loadOfficialDefaultDraft(officialPokemonDefaultFile));
+$('import-default').onclick=()=>{if(!busy)$('default-file').click();};
+$('default-file').onchange=()=>operation(async()=>{
+  const file=$('default-file').files[0];$('default-file').value='';if(!file)return;
+  requireThat(file.size<=16_000_000,'默认文件超过 16 MB。');
+  loadOfficialDefaultDraft(await file.text());
 });
-$('export').onclick=()=>act(()=>{const output=portableProfile(profile);if(textProduct){delete output.hostTextJSON;if(textRoot!==null)output.hostTextJSON=JSON.stringify(textRoot);}validateProfile(output);requireThat(new TextEncoder().encode(JSON.stringify(output,null,2)).length<=3_000_000,'配置文件超过 3 MB，请精简文本或分别导出。');download(output,'CherryMac-profile.json');status('配置已导出，包含选中的文本定义；文本恢复记录需在文本页另行导出。');});
-$('export-windows').onclick=()=>act(()=>{requireThat(typeof profile.windowsTemplateJSON==='string','请先导入本型号的 Windows 官方 JSON，作为导出模板。');const template=JSON.parse(profile.windowsTemplateJSON),mixed=textProduct&&textRoot!==null;const output=mixed?exportWindowsKeysMacrosAndText(profile,template,textRoot,baseline):exportWindowsKeysAndMacros(profile,template);download(exportProfileWindowsLightingDraft(profile,output),'CHERRY-configuration.json');const lightingNote=profile.snapshot.parameters[1]===8?'包含当前逐键草稿，完整配色编码已核对':'包含当前内置灯效；逐键配色沿用导入模板';status(`${mixed?'已合并导出 Windows 格式键位、宏与文本':'已导出 Windows 格式键位与宏'}；${lightingNote}；设备设置沿用导入模板。`);});
 $('show-backups').onclick=()=>act(async()=>{const records=await listBackups();$('backups').replaceChildren();if(!records.length)$('backups').textContent='暂无本地备份。';for(const record of records){const row=document.createElement('div');row.className='backup-row';const date=document.createElement('span');date.textContent=new Date(record.date).toLocaleString();const get=document.createElement('button');get.textContent='下载';get.onclick=()=>download(backupConfiguration(record),`CherryMac-before-write-${record.id}.json`);const restore=document.createElement('button');restore.textContent='导入编辑区';restore.onclick=()=>operation(()=>{const next=parseProfile(JSON.stringify(backupConfiguration(record)));adoptImportedProfile(next,'键盘备份');switchTab('keys');status('备份已导入编辑区，原文本草稿已清除，输入服务保持关闭。核对改动后点击“写入按键”恢复；灯效和宏不会写入。');});row.append(date,get,restore);$('backups').append(row);}});
 $('diagnostics').onclick=()=>operation(async()=>{
   await Promise.all([hid?.logTasks,pageLogTasks]);

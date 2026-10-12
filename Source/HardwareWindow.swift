@@ -393,7 +393,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         #endif
         place(label("官方默认配置",17,.semibold),8,354,850,28,in:files)
         place(button("载入官方默认草稿…",#selector(importDefaultTemplate)),8,401,260,32,in:files)
-        place(label("选择 Windows 安装目录 DefaultData 中的 DefaultData0～4.json，载入本型号默认键位、灯效与文件设置。会替换编辑区；原始宏存储保留。这里只准备草稿，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
+        place(label("使用内置的本型号官方默认配置，或选择 DefaultData0～4.json。载入会替换编辑区；原始宏存储保留。恢复计划只导出文件，完整恢复默认尚未开放。",12),290,392,570,78,in:files)
         place(button("核对并导出默认恢复计划…",#selector(exportDefaultReview)),8,451,260,32,in:files)
         place(button("核对并导出默认撤回计划…",#selector(exportDefaultRecovery)),290,451,280,32,in:files)
         place(button("检查默认配置操作记录…",#selector(inspectDefaultTransaction)),8,499,260,32,in:files)
@@ -1499,18 +1499,37 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
             do{try self.loadImport(Data(contentsOf:url))}catch{self.message.stringValue=error.localizedDescription}
         }
     }
+    func chooseDefaultFile(_ completion:@escaping(Result<Data,Error>)->Void){
+        guard !busy,window?.attachedSheet==nil,let parent=window else{return}
+        let choice=NSAlert();choice.messageText="选择官方默认配置来源"
+        choice.informativeText="内置模板取自官方软件的本型号默认配置，五份 DefaultData 文件中的本型号内容一致。这里只载入文件资料，不读取或写入键盘。"
+        choice.addButton(withTitle:"使用内置默认");choice.addButton(withTitle:"选择官方文件…");choice.addButton(withTitle:"取消")
+        choice.beginSheetModal(for:parent){[weak self] response in
+            guard let self,!self.busy else{return}
+            if response == .alertFirstButtonReturn{completion(.success(WindowsProfile.bundledDefaultFile()));return}
+            guard response == .alertSecondButtonReturn else{return}
+            let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
+            panel.beginSheetModal(for:parent){response in
+                guard response == .OK,let url=panel.url else{return}
+                completion(Result{
+                    let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
+                    guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
+                    return try Data(contentsOf:url)
+                })
+            }
+        }
+    }
     @objc func importDefaultTemplate(){
-        guard !busy,baseline != nil,let parent=window else{message.stringValue="请先读取键盘，再载入官方默认草稿。";return}
-        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
-        panel.beginSheetModal(for:parent){[weak self] response in
-            guard response == .OK,let url=panel.url,let self else{return}
+        guard !busy,let original=baseline,window != nil else{message.stringValue="请先读取键盘，再载入官方默认草稿。";return}
+        let previousDraft=profile
+        chooseDefaultFile{[weak self] result in
+            guard let self else{return}
             do{
-                guard !self.busy else{throw HardwareError(message:"请等待键盘操作完成。")}
-                let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
-                guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
-                let template=try WindowsProfile.extractDefaultTemplate(Data(contentsOf:url))
+                guard !self.busy,self.baseline==original,self.profile==previousDraft else{throw HardwareError(message:"读取资料或编辑区已改变，请重新载入。")}
+                let template=try WindowsProfile.extractDefaultTemplate(result.get())
                 let alert=NSAlert();alert.messageText="载入官方默认草稿？";alert.informativeText="这会替换当前编辑区，并关闭文本输入服务。请先导出需要保留的配置。默认键位、灯效与文件设置只载入草稿，原始宏存储保留；不会写入键盘，完整恢复默认尚未开放。";alert.addButton(withTitle:"取消，保留编辑区");alert.addButton(withTitle:"已保存，载入草稿")
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
+                guard !self.busy,self.baseline==original,self.profile==previousDraft else{throw HardwareError(message:"确认期间编辑区或读取资料改变，未载入默认草稿。")}
                 try self.loadImport(template)
                 self.message.stringValue="官方默认配置已载入编辑区，原始宏存储保留；尚未写入，完整恢复默认仍待补齐。"
             }catch{self.message.stringValue=error.localizedDescription}
@@ -1595,14 +1614,11 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     @objc func exportDefaultReview(){
         guard !busy,let original=baseline,let mapping=baselineLightingMapping,let parent=window else{message.stringValue="请先读取键盘，取得完整配置和固件默认键位表。";return}
-        let panel=NSOpenPanel();panel.canChooseDirectories=false;panel.allowsMultipleSelection=false
-        panel.beginSheetModal(for:parent){[weak self] response in
-            guard response == .OK,let url=panel.url,let self else{return}
+        chooseDefaultFile{[weak self] result in
+            guard let self else{return}
             do{
                 guard !self.busy,self.baseline==original,self.baselineLightingMapping==mapping else{throw HardwareError(message:"读取资料已改变，请重新核对。")}
-                let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize
-                guard let size,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
-                let review=try WindowsProfile.reviewDefaultConfiguration(Data(contentsOf:url),baseline:original,mapping:mapping)
+                let review=try WindowsProfile.reviewDefaultConfiguration(result.get(),baseline:original,mapping:mapping)
                 let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys];let data=try encoder.encode(review)
                 let alert=NSAlert();alert.messageText="默认恢复核对";alert.informativeText="按键差异：\(review.changedKeySlots.count) 个；灯效参数差异：\(review.changedParameterOffsets.count) 项。\n内部键差异：\(review.protectedChangedSlots.count) 个；涉及宏绑定：\(review.macroBindingSlots.count) 个；未支持的默认键记录：\(review.unsupportedFactorySlots.count) 个。\n设备设置的 \(review.pendingSystemFields.count) 个字段仍待确认，默认颜色差异：\(review.defaultColorPlan.changedColorSlots.count) 个，已纳入离线候选；颜色／键位候选事务已实现，普通版发送入口关闭。宏存储处理仍待核对。候选保留原始宏存储。计划包含当前配置与宏；这里只导出文件，不修改编辑区或写入键盘，完整恢复尚未开放。";alert.addButton(withTitle:"关闭");alert.addButton(withTitle:"导出核对计划")
                 guard alert.runModal()==NSApplication.ModalResponse.alertSecondButtonReturn else{return}
