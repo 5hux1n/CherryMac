@@ -2,6 +2,20 @@ import {SLOTS,WINDOWS_DEFAULTS,FIRMWARE_LOGICAL_DEFAULTS,MEDIA_CODES,MODE_CODES}
 import {keys,modes,editableSlots} from './layout.js?v=0.6.0';
 export const clone=x=>structuredClone(x);
 export const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+// JSON data equality for validated plans/mappings; object key order is not data.
+// Arrays, field presence and primitive values remain exact. No scope is granted.
+export function jsonDataEqual(first,second){
+  const pending=[[first,second]];
+  while(pending.length){
+    const [a,b]=pending.pop();if(a===b)continue;
+    if(a===null||b===null||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+    if(Array.isArray(a)&&a.length!==b.length)return false;
+    const keys=Object.keys(a);if(keys.length!==Object.keys(b).length)return false;
+    for(const key of keys){if(!Object.hasOwn(b,key))return false;pending.push([a[key],b[key]]);}
+  }
+  return true;
+}
+
 export function requireThat(ok,message){if(!ok)throw new Error(message);}
 export function bytes(a,n){return Array.isArray(a)&&a.length===n&&a.every(x=>Number.isInteger(x)&&x>=0&&x<=255);}
 // 01CE logical matching uses factory defaults and the separate 1B LED table.
@@ -887,7 +901,8 @@ export function officialLightingReports(plan){
   return expected.flatMap((s,index)=>[...(s.beginRequired?[{stage:index,kind:'begin',delayMilliseconds:0,request:encode(s.beginCommand)}]:[]),...s.writes.map(w=>({stage:index,kind:'data',delayMilliseconds:0,request:encode(w.command,[w.data.length,w.offset&255,w.offset>>8,w.flag,...w.data])})),{stage:index,kind:'finish',delayMilliseconds:10,request:encode(s.finishCommand)}]);
 }
 
-const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
+// Only actual configuration fields; read timestamps are retained in records.
+export const lightingConfigurationEqual=(a,b)=>['deviceInfo','keymap','parameters','colors','macroData'].every(field=>equal(a[field],b[field]));
 // Restore payloads are reconstructed solely from retained raw original data.
 export function lightingRestoreReports(recovery){
   requireThat(recovery?.format==='CherryMacLightingRestorePlan'&&recovery.version===1&&recovery.hardwareReady===false,'灯效恢复计划格式无效。');

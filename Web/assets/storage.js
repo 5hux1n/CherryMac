@@ -1,3 +1,4 @@
+import {jsonDataEqual,lightingConfigurationEqual} from './model.js?v=0.6.0';
 import {validatePollingEditorDraft,makeLightingEditorDraft,validateLightingEditorDraft,defaultLightingColorLibrary,validateLightingColorLibrary} from './model.js?v=0.6.0';
 import {DefaultCandidateAuthorization} from './safety.js?v=0.6.0';
 import {captureRawLightingMetadata,adoptRawLightingMetadata,validateRawLightingMetadata,executeDefaultTransaction,assessDefaultTransactionRecord,validateDefaultTransactionContinuation,clone,fromHardware,validateProfile,lightingMappingSlots,validateSnapshot,equal,requireThat,assessLightingRecoveryRecord,assessLightingRestoreAttempt,officialLightingReadbackTarget} from './model.js?v=0.6.0';
@@ -47,13 +48,13 @@ export function lightingResultChannelName(id){return handoffKey(id)+':result';}
 export function reviewLightingEditorResult(record,review){
   requireThat(new TextEncoder().encode(JSON.stringify(record)).length<=3_000_000,'灯效结果超过 3 MB。');
   requireThat(review?.format==='CherryMacLightingDraftReview'&&review.version===1&&review.hardwareReady===false,'原编辑计划无效。');
-  requireThat(equal(officialLightingReadbackTarget(review.plan,review.original),review.target),'原编辑目标不一致。');
+  requireThat(lightingConfigurationEqual(officialLightingReadbackTarget(review.plan,review.original),review.target),'原编辑目标不一致。');
   if(record?.format==='CherryMacLightingRecoveryRecord'){
     const assessment=assessLightingRecoveryRecord(record);
-    requireThat(assessment.status==='readbackMatched'&&equal(record.original,review.original)&&equal(record.plan,review.plan)&&equal(record.current,review.target),'写入结果与编辑计划不一致。');
+    requireThat(assessment.status==='readbackMatched'&&lightingConfigurationEqual(record.original,review.original)&&jsonDataEqual(record.plan,review.plan)&&lightingConfigurationEqual(record.current,review.target),'写入结果与编辑计划不一致。');
   }else if(record?.format==='CherryMacLightingRestoreAttempt'){
     const assessment=assessLightingRestoreAttempt(record),source=record.recovery.sourceRecord;
-    requireThat(['readbackMatched','alreadyMatched'].includes(assessment.status)&&equal(source.original,review.original)&&equal(source.plan,review.plan)&&equal(record.current,review.original),'恢复结果与原编辑基线不一致。');
+    requireThat(['readbackMatched','alreadyMatched'].includes(assessment.status)&&lightingConfigurationEqual(source.original,review.original)&&jsonDataEqual(source.plan,review.plan)&&lightingConfigurationEqual(record.current,review.original),'恢复结果与原编辑基线不一致。');
   }else throw new Error('灯效结果类型无效。');
   return clone(record.current);
 }
