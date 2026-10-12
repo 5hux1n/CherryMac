@@ -48,6 +48,7 @@ export function lightingResultChannelName(id){return handoffKey(id)+':result';}
 export function reviewLightingEditorResult(record,review){
   requireThat(new TextEncoder().encode(JSON.stringify(record)).length<=3_000_000,'灯效结果超过 3 MB。');
   requireThat(review?.format==='CherryMacLightingDraftReview'&&review.version===1&&review.hardwareReady===false,'原编辑计划无效。');
+  validateSnapshot(review.target,true);
   requireThat(lightingConfigurationEqual(officialLightingReadbackTarget(review.plan,review.original),review.target),'原编辑目标不一致。');
   if(record?.format==='CherryMacLightingRecoveryRecord'){
     const assessment=assessLightingRecoveryRecord(record);
