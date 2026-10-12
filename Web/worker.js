@@ -14,13 +14,15 @@ export default {
       url.pathname = '/index.html';
     } else if (['/index.php', '/app/', '/app/index.php'].includes(url.pathname)) {
       url.pathname = '/app/index.html';
+    } else if (url.pathname === '/app/lighting.php') {
+      url.pathname = '/app/lighting.html';
     } else if (url.pathname.startsWith('/assets/')) {
       // Compatibility with tabs opened before the /app/ deployment layout.
       url.pathname = '/app' + url.pathname;
     } else if (url.pathname === '/app/release.json') {
       url.pathname = '/release.json';
     }
-    if (!['/index.html', '/app/index.html', '/release.json',
+    if (!['/index.html', '/app/index.html', '/app/lighting.html', '/release.json',
            '/site-assets/style.css', '/site-assets/keyboard.png'].includes(url.pathname) &&
         !/^\/app\/assets\/[a-z0-9-]+\.(js|css)$/.test(url.pathname)) {
       return new Response('Not found', {status: 404});

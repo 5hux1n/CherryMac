@@ -102,7 +102,9 @@ function render(){
   $('save-lighting-draft').disabled=busy;$('load-lighting-draft').disabled=busy||lightingReconnectSnapshot!==null;
   const matchedPalette=matchingLightingMetadata();$('save-local-lighting').disabled=busy||matchedPalette===null;
   $('lighting-metadata-help').textContent=matchedPalette!==null?'逐键颜色资料已与最近实际读回及映射匹配，可保存后供重新读取核对使用。':'匹配资料仅接受已核对的逐键配色。尚未写入或内置灯效的编辑，请使用“本机灯效草稿”保存。';
-  if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
+  if($('open-lighting-workflow'))$('open-lighting-workflow').onclick=()=>handoffLightingAcceptance(()=>reviewLightingDraft(profile,baseline),{productWorkflow:true});
+if($('open-default-lighting-workflow'))$('open-default-lighting-workflow').onclick=()=>handoffLightingAcceptance(()=>reviewDefaultLighting(null,baseline,profile.lightingMapping),{defaultPlan:true,productWorkflow:true});
+if($('open-lighting-acceptance'))$('open-lighting-acceptance').disabled=busy||!baseline;
   $('connect').disabled=busy||!supported;$('read').disabled=busy||!hid||hid.dead;$('write').disabled=tab==='lights'?busy||!!recorder||!baseline:busy||!!recorder||!online||!(tab==='keys'||tab==='macros'&&macroProduct)||!keyPlan||sameSnapshot(keyPlan,baseline);$('write').textContent=tab==='lights'?($('open-lighting-acceptance')?'准备灯效写入…':'核对灯效计划…'):tab==='keys'?'写入按键':tab==='macros'&&macroProduct?'写入宏与绑定键':'此功能写入暂缓';$('confirm-write').disabled=busy; $('scope').disabled=true;$('scope').options[0].textContent=tab==='lights'?'仅灯效计划 · 按键和宏保留':tab==='macros'&&macroProduct?'宏库与绑定键 · 灯效保留':'仅按键 · 灯效和宏保留';$('macro-repeat').disabled=busy||$('macro-playback').value!=='count';
   document.querySelectorAll('[data-record],#stage-shortcut').forEach(b=>b.disabled=busy||!editableSlots.has(key.slot));
   for(const id of ['macro-list','macro-name','macro-playback','record-timing','record-delay','record-placement','record-mouse','macro-insert','clear-macro-steps'])$(id).disabled=busy||!!recorder;
@@ -310,7 +312,7 @@ function prepareLightingReturnChannel(id,review,{defaultPlan=false,draftSnapshot
   };
 }
 window.addEventListener('beforeunload',closeLightingReturnChannel);
-function handoffLightingAcceptance(makeReview,{defaultPlan=false}={}){
+function handoffLightingAcceptance(makeReview,{defaultPlan=false,productWorkflow=false}={}){
   if(busy||!baseline)return;
   if(lightingReconnectSnapshot){status('请先重新连接核对已返回的结果，再准备新的灯效计划。',true);return;}
   // Open during the click so popup blockers do not lose an async navigation.
@@ -321,8 +323,8 @@ function handoffLightingAcceptance(makeReview,{defaultPlan=false}={}){
       if(hid)await hid.close();hid=null;gate.invalidate();
       requireThat(!view.closed,'验收页面已关闭，请重新准备。');
       view.sessionStorage.clear();saveLightingHandoff(view.sessionStorage,id,review);prepareLightingReturnChannel(id,review,{defaultPlan,draftSnapshot});view.opener=null;
-      view.location.replace(`lighting-test.php?plan=${encodeURIComponent(id)}`);sent=true;
-      status(`${defaultPlan?'官方默认灯效':'编辑区'}计划已送到独立验收页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。`);
+      view.location.replace(`${productWorkflow?'lighting.php':'lighting-test.php'}?plan=${encodeURIComponent(id)}`);sent=true;
+      status(`${defaultPlan?'官方默认灯效':'编辑区'}计划已送到灯效操作页面，本页 USB 已关闭。没有写入键盘；编辑区仍保留。`);
     }catch(error){closeLightingReturnChannel();view.close();throw error;}
   }).finally(()=>{if(!sent)view.close();});
 }

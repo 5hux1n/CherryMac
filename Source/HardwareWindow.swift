@@ -215,7 +215,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     let lightRainbow = NSPopUpButton()
     var lightSelection:Set<String> = ["calculator"]
     var colorEditSource=0
-    #if CHERRY_LIGHTING_TEST
+    #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
     var lightingAcceptance:LightingAcceptanceWindow?
     #endif
     let modifiers = [NSButton(checkboxWithTitle:"⌘ Command",target:nil,action:nil),NSButton(checkboxWithTitle:"⌃ Control",target:nil,action:nil),NSButton(checkboxWithTitle:"⌥ Option",target:nil,action:nil),NSButton(checkboxWithTitle:"⇧ Shift",target:nil,action:nil)]
@@ -851,9 +851,9 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         macroCancellationButton?.isEnabled=busy && currentMacroOperation?.isCancelled==false
         writeButtons.forEach{$0.isEnabled=false}
         if let lightingButton=writeButtons.first(where:{$0.tag==1}){
-            #if CHERRY_LIGHTING_TEST
-            lightingButton.title="准备灯效写入…"
-            lightingButton.toolTip="进入独立流程，先重新读取并备份；不会直接发送。"
+            #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+            lightingButton.title="灯效操作与恢复…"
+            lightingButton.toolTip="进入共用灯效操作窗口；主产品的写入与恢复发送仍关闭。"
             #else
             lightingButton.title="核对灯效计划…"
             lightingButton.toolTip="仅核对并导出计划；普通版尚未开放灯效发送。"
@@ -1205,7 +1205,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard !busy,baselineWasRead,baseline != nil,profile != nil else{
             message.stringValue="请先读取键盘，再保存灯效到编辑区。";return
         }
-        #if CHERRY_LIGHTING_TEST
+        #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
         openLightingAcceptance()
         #else
         reviewLightingDraft()

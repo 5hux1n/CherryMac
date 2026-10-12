@@ -178,7 +178,7 @@ extension HardwareWindowController {
         do{let review=try WindowsProfile.reviewDefaultLighting(data,baseline:baseline,mapping:mapping)
             let alert=NSAlert();alert.messageText="核对默认灯效";alert.informativeText="先重置默认配色表，再恢复\(data == nil ? "内置官方默认" : "所选文件")的灯效参数。颜色将改变 \(review.changedColorSlots.count) 个位置；参数将改变 \(review.changedParameterOffsets.count) 项。按键、宏及文本保持当前配置。本次核对不改变编辑草稿或键盘。可导出计划；研究版另可准备此计划验收，准备也不会自动写入。"
             alert.addButton(withTitle:"导出计划…");alert.addButton(withTitle:"返回");alert.addButton(withTitle:"选择其他官方默认文件…")
-            #if CHERRY_LIGHTING_TEST
+            #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
             alert.addButton(withTitle:"准备此计划验收…")
             #endif
             let response=alert.runModal()
@@ -188,7 +188,7 @@ extension HardwareWindowController {
                 guard let size=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=16_000_000 else{throw HardwareError(message:"默认文件超过 16 MB。")}
                 exportDefaultLightingReview(try Data(contentsOf:url));return
             }
-            #if CHERRY_LIGHTING_TEST
+            #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
             if response.rawValue==1003{presentLightingAcceptance(review);return}
             #endif
             guard response == .alertFirstButtonReturn else{return}
@@ -203,8 +203,8 @@ extension HardwareWindowController {
         for (index,title) in ["内置灯效","逐键配色"].enumerated(){let b=HardwareNavigationButton(title:title,target:self,action:#selector(chooseLightTab(_:)));b.tag=index;b.isBordered=false;b.setButtonType(.toggle);place(b,8+CGFloat(index)*140,4,130,30,in:pane);lightTabButtons.append(b)}
         place(button("本机草稿…",#selector(lightingDraftOptions(_:))),300,4,145,30,in:pane)
         let review=button("核对灯效写入…",#selector(reviewLightingDraft));review.toolTip="读取后保存内置灯效即可核对，无需官方文件；逐键配色可使用读取底色与改动位置来源。仅导出计划。";place(review,690,4,210,30,in:pane)
-        #if CHERRY_LIGHTING_TEST
-        place(button("独立灯效验收…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
+        #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+        place(button("灯效操作与恢复…",#selector(openLightingAcceptance)),460,4,210,30,in:pane)
         #endif
         let builtins=tabs.tabViewItems[0].view!
         place(label("模式"),8,12,72,24,in:builtins)
@@ -472,7 +472,7 @@ extension HardwareWindowController {
     }
 }
 
-#if CHERRY_LIGHTING_TEST
+#if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
 import IOKit.hid
 
 extension HardwareWindowController {
@@ -494,13 +494,19 @@ extension HardwareWindowController {
             }else{prepared=nil}
         }catch{message.stringValue=error.localizedDescription;return}
         suspendHostTextForConfiguration();busy=true;controls.forEach{$0.isEnabled=false}
-        let editorBaseline=baseline,editorDraft=profile
+        let editorBaseline=baseline,editorDraft=profile,editorBaselineWasRead=baselineWasRead
         let preparedReview=prepared.flatMap{try? JSONDecoder().decode(WindowsProfile.LightingDraftReview.self,from:$0)}
         let acceptance=LightingAcceptanceWindow(queue:queue,prepared:prepared);lightingAcceptance=acceptance
         if let preparationFailure{acceptance.state.stringValue="编辑区计划不能生成：\(preparationFailure)。可载入已有恢复记录。"}
         owner.beginSheet(acceptance.window!){[weak self] _ in
             guard let self else{return};self.lightingAcceptance=nil;self.busy=false
-            self.controls.forEach{$0.isEnabled=true};self.baseline=nil;self.baselineWasRead=false
+            self.controls.forEach{$0.isEnabled=true}
+            if !acceptance.deviceAccessAttempted{
+                self.baseline=editorBaseline;self.baselineWasRead=editorBaselineWasRead
+                self.message.stringValue="灯效操作窗口已关闭，未访问键盘；草稿和读取基线保留。"
+                self.update();return
+            }
+            self.baseline=nil;self.baselineWasRead=false
             self.message.stringValue="灯效验收窗口已关闭；草稿保留，请重新读取键盘后继续编辑。"
             if let receipt=acceptance.editorResult,acceptance.readback==receipt.current,
                let original=editorBaseline,let draft=editorDraft{
@@ -536,9 +542,15 @@ extension HardwareWindowController {
     }
 }
 
-// Compiled only into explicit research builds. Opening the sheet performs no
+// Shared product/research workflow. Product writes are also denied by the USB layer.
+// Opening the sheet performs no
 // device or permission access; the user must click the read button first.
 final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
+    #if CHERRY_LIGHTING_TEST
+    let writesPermitted=true
+    #else
+    let writesPermitted=false
+    #endif
     let queue:DispatchQueue
     let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/LightingAcceptance/\(UUID().uuidString)")
     let state=NSTextField(wrappingLabelWithString:"尚未选择文件。不会自动连接或写入。")
@@ -551,6 +563,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         enum Kind{case write,restore}
         let kind:Kind;let current:HardwareSnapshot;let review:WindowsProfile.LightingDraftReview?
     }
+    var deviceAccessAttempted=false
     var editorResult:EditorResult?
     var readback:HardwareSnapshot?;var writtenTarget:HardwareSnapshot?;var attempted=false
     var manager:IOHIDManager?;var registryID:UInt64?;var cycle:CalculatorPowerCycleEvidence?
@@ -559,10 +572,10 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     init(queue:DispatchQueue,prepared:Data?=nil){
         self.queue=queue
         let panel=NSWindow(contentRect:NSRect(x:0,y:0,width:810,height:650),styleMask:[.titled,.closable],backing:.buffered,defer:false)
-        panel.title="CherryMac · 灯效独立验收";super.init(window:panel);panel.delegate=self
+        panel.title="CherryMac · 灯效操作与恢复";super.init(window:panel);panel.delegate=self
         let root=FlippedView(frame:NSRect(x:0,y:0,width:810,height:650));panel.contentView=root
         func text(_ value:String,_ y:CGFloat,_ h:CGFloat){let field=NSTextField(wrappingLabelWithString:value);field.frame=NSRect(x:22,y:y,width:766,height:h);root.addSubview(field)}
-        text("研究入口 · 尚未完成真机验收。普通预览版仍不开放灯效写入。",18,35)
+        text(writesPermitted ? "研究入口 · 尚未完成真机验收。":"主产品灯效操作：可载入计划、读取与查看恢复记录。写入和恢复发送尚未开放。",18,35)
         text("1. 载入核对计划或恢复记录",58,25)
         summary.frame=NSRect(x:22,y:92,width:766,height:48);root.addSubview(summary)
         text("2. USB 读取与写入：关闭其他配置程序，切换有线模式。松开全部按键，写入期间保持此窗口前台。",154,45)
@@ -598,8 +611,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
     func render(){
         recoveryState.stringValue=recoveryDetails+(recoveryData != nil && !running ? "\n操作中断后：重接 USB → 读取 USB 配置 → 恢复原始数据。原始记录在“打开本轮资料”中保留。":"")
         buttons.forEach{$0.isEnabled = !running};buttons[4].isEnabled=running
-        buttons[2].isEnabled = !running && review != nil && readback != nil && !attempted
-        buttons[3].isEnabled = !running && recoveryData != nil && registryID != nil && readback != nil
+        buttons[2].isEnabled = writesPermitted && !running && review != nil && readback != nil && !attempted
+        buttons[3].isEnabled = writesPermitted && !running && recoveryData != nil && registryID != nil && readback != nil
         buttons[5].isEnabled = !running && monitorFailure == nil && writtenTarget != nil && cycle?.disconnectedAt != nil && cycle?.reconnectedAt == nil
         buttons[6].isEnabled = !running && monitorFailure == nil && writtenTarget != nil && cycle?.hasConfirmedPowerCycle==true && registryID==cycle?.reconnectedRegistryID && readback != nil
     }
@@ -719,7 +732,8 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         }
     }
     @objc func read(){
-        guard !running else{return};readback=nil;registryID=nil;render()
+        guard !running else{return}
+        deviceAccessAttempted=true;readback=nil;registryID=nil;render()
         do{try startMonitor();let devices=IOHIDManagerCopyDevices(manager!) as? Set<IOHIDDevice> ?? [];guard devices.count==1,let device=devices.first,let found=id(device)else{throw HardwareError(message:"需连接且仅连接一把目标 USB 键盘。")};registryID=found}
         catch{
             do{let operation=try HardwareOperationLog(kind:"lighting-acceptance-read",directory:directory);operation.record("scope","read-only preparation");operation.record("error",error.localizedDescription);operation.record("endedAt",ISO8601DateFormatter().string(from:Date()));operation.record("phase","failed");try operation.requireStorageHealthy();fail(error)}
@@ -751,6 +765,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         try log.requireStorageHealthy();DispatchQueue.main.async{self.recoveryData=data}
     }
     @objc func write(){
+        guard writesPermitted else{state.stringValue="灯效写入尚未开放，计划与草稿保留。";return}
         guard !running,!attempted,let review,let selectedID=registryID,readback != nil,confirmation("写入所选灯效计划？") else{return}
         attempted=true;cycle=nil;writtenTarget=nil
         perform("lighting-acceptance-write",completed:{[weak self] current in
@@ -771,6 +786,7 @@ final class LightingAcceptanceWindow:NSWindowController,NSWindowDelegate {
         }
     }
     @objc func restore(){
+        guard writesPermitted else{state.stringValue="灯效恢复发送尚未开放，原始记录保留。";return}
         guard !running,let data=recoveryData,let selectedID=registryID,readback != nil,confirmation("重新核对并恢复原始灯效数据？")else{return}
         writtenTarget=nil;cycle=nil
         perform("lighting-acceptance-restore",completed:{[weak self] current in

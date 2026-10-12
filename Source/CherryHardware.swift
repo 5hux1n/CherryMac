@@ -336,7 +336,12 @@ final class CherryUSB: CherryHardwareAccess {
     }
     #endif
 
-    #if CHERRY_LIGHTING_TEST
+    #if CHERRY_LIGHTING_TEST || CHERRY_LIGHTING_PRODUCT
+    private func requireLightingWritePermission()throws{
+        #if !CHERRY_LIGHTING_TEST
+        throw HardwareError(message:"主产品灯效写入和恢复发送尚未开放；请等待统一实机验收。")
+        #endif
+    }
     func lightingRegistryID()throws->UInt64 {
         guard !transportDead,let device else{throw HardwareError(message:"灯效 USB 会话已失效。")}
         var id:UInt64=0
@@ -346,6 +351,7 @@ final class CherryUSB: CherryHardwareAccess {
     func restoreLightingCandidate(_ recovery:WindowsProfile.OfficialLightingPlan.RecoveryPlan,
                                   cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                   persist:(WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.RecoveryPlan.Attempt {
+        try requireLightingWritePermission()
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"恢复需要可用的新 USB 会话。")}
         let selectedRegistryID=try lightingRegistryID()
         let authorization=try WindowsProfile.OfficialLightingPlan.CandidateAuthorization(recovery:recovery)
@@ -362,6 +368,7 @@ final class CherryUSB: CherryHardwareAccess {
     func applyLightingCandidate(_ plan:WindowsProfile.OfficialLightingPlan,baseline:HardwareSnapshot,lightingMapping:LightingMappingContext? = nil,
                                 cancelled:()->Bool,backup:(HardwareSnapshot)throws->Void,
                                 persist:(WindowsProfile.OfficialLightingPlan.RecoveryRecord)throws->Void,log:HardwareOperationLog?=nil)throws->WindowsProfile.OfficialLightingPlan.ExecutionResult {
+        try requireLightingWritePermission()
         guard !transportDead,device != nil,keymapAuthorization==nil,macroAuthorization==nil,lightingAuthorization==nil,defaultRunToken==nil else{throw HardwareError(message:"USB 会话不可用或已有配置事务。")}
         let target=try plan.expectedReadback(from:baseline)
         guard (target.parameters[1] != 8 && plan.defaultColorData == nil) || lightingMapping != nil else{throw HardwareError(message:"逐键计划缺少 LED 映射，请重新准备。")}

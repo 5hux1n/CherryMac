@@ -34,7 +34,7 @@ architectures = subprocess.check_output(['lipo', '-archs', str(app / 'Contents/M
 files = {path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
          for path in sorted(app.rglob('*')) if path.is_file()}
 symbols = subprocess.check_output(['nm', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], text=True)
-if ('LightingAcceptanceWindow' in symbols) != lighting_acceptance:
+if 'LightingAcceptanceWindow' not in symbols:
     raise SystemExit('App lighting acceptance compilation differs from requested package type')
 if 'applyDefaultCandidate' in symbols:
     raise SystemExit('Default research USB entry must remain disabled in preview packages')
@@ -42,14 +42,14 @@ manifest = {'format': 'CherryMacNativeLightingAcceptance' if lighting_acceptance
             'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
             'sourceCommit': commit, 'hardwareAcceptance': 'pending', 'signing': 'ad-hoc', 'architectures': architectures,
             'minimumMacOS': info.get('LSMinimumSystemVersion', '13.0'),
-            'compileFlags': ['CHERRY_MACRO_PRODUCT'],
-            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultTransactionFileInspection': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingEditorReturn': lighting_acceptance, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingModeOptions': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
+            'compileFlags': ['CHERRY_MACRO_PRODUCT', 'CHERRY_LIGHTING_PRODUCT'],
+            'features': {'defaultTemplateImport': True, 'defaultRestoreOfflineReview': True, 'defaultRecoveryOfflineReview': True, 'defaultTransactionStorage': True, 'defaultTransactionFileInspection': True, 'defaultResetWrite': False, 'defaultResearchEntryEnabled': False, 'defaultMacroSemanticsComplete': False, 'macros': True, 'officialMacroStorage': True, 'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'hostText': True, 'webTextBridge': True, 'mixedOfficialImportExport': True, 'portableTextDraft': True, 'lightingDraftExport': True, 'lightingOnlyImport': True, 'lightingFlagDraftSync': True, 'mediaActionPicker': True, 'macApplicationShortcutPresets': True, 'macApplicationShortcutInstallation': True, 'macApplicationShortcutFailureRollback': True, 'lightingMainAction': True, 'lightingWorkflowIntegrated': True, 'lightingEditorReturn': True, 'lightingMappingRead': True, 'lightingWrite': False, 'lightingOfflineReview': True, 'lightingModeOptions': True, 'lightingRecoveryRecords': True, 'lightingRestorePreparation': True, 'deviceSettingsPage': True, 'readDraftReplacementConfirmation': True, 'officialPollingDraft': True}, 'files': files}
 if lighting_acceptance:
     manifest['features']['lightingResearchAcceptance'] = True
     manifest['features']['lightingResearchWrite'] = True
     manifest['features']['lightingEditorPlanHandoff'] = True
     manifest['features']['lightingOperationDiagnostics'] = True
-    manifest['compileFlags'] = ['CHERRY_MACRO_PRODUCT', 'CHERRY_LIGHTING_TEST']
+    manifest['compileFlags'] = ['CHERRY_MACRO_PRODUCT', 'CHERRY_LIGHTING_PRODUCT', 'CHERRY_LIGHTING_TEST']
 manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()
 readme = '''# CherryMac 宏与文本预览
 
@@ -91,7 +91,7 @@ Windows 配置草稿导出会合并当前支持的灯效模式、亮度、速度
 
 宏名称、录制偏好与官方模板保存在本机，读取时仅沿用与实际宏库相符的资料。建议导出 JSON 保存。灯效页的“核对灯效写入”仅生成本地计划，不写入键盘。自定义配色核对和 Windows 草稿导出需要明确的官方原始 RGB；直接读回或来源未知的颜色不能直接转为原始配色。内置灯效遇到读回颜色时保留官方模板里的逐键配色。
 
-灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
+灯效操作与恢复窗口已接入主 App，可直接载入当前编辑区计划或恢复记录，手动读取及查看记录。打开窗口不会访问键盘；未读取就关闭时保留基线。主产品写入与恢复发送在界面和 USB 执行层均关闭。灯效及设备参数写入尚未开放。本包不包含官方软件、用户配置或真机日志。
 '''.encode()
 readme += '\n读取实际 LED 映射后，在逐键配色页点击“新建逐键配色”，可从全熄灭开始编辑原始 RGB，无需先导入 Windows 文件。内置灯效读取后也可直接准备计划。草稿可导出 CherryMac JSON；导出 Windows 格式需要本型号的官方根模板。\n\n“保存本机配色”只保存与最近读回匹配的原始 RGB、灯效参数和实际映射。未写入的草稿请导出 JSON；此按钮不发送 USB 报告，不代表固件已保存。普通版灯效发送仍关闭。\n'.encode()
 readme += '\n在“配置与备份”点击“检查默认配置操作记录”，可离线检查 CherryMac 默认配置事务 JSON，并导出原始备份和分析资料；无需连接键盘。记录有完整、可识别的读回时才能另行导出撤回计划。备份包含原始宏区，不补造宏名称；导入只载入草稿。记录读回不是当前键盘状态，也不能证明实体输出或断电保留；实际恢复仍需重新读取和核对。完整恢复默认写入尚未开放。 内置了官方 DefaultData0～4 中一致的本型号默认模板，可直接载入默认键位、灯效与文件设置草稿，也可核对并导出默认恢复计划；无需 Windows 文件。载入替换编辑区，原始宏存储保留，不执行恢复写入。\n'.encode()

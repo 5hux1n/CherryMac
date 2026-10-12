@@ -65,6 +65,9 @@ page = page.replace('?v=' + source, '?v=' + version)
 page = page.replace('CherryMac Web ' + source, 'CherryMac Web ' + version + ' · 在线开发预览')
 page = page.replace('<p id="compatibility"', '<p class="notice">在线开发预览，尚待统一真机验收。备份保存在当前浏览器与当前网址；与本地网页分别保存。跨应用文本输入仍需 Mac 客户端联动。</p><p id="compatibility"', 1)
 (out / 'app' / 'index.html').write_text(page)
+lighting_page=subprocess.check_output(['php',str(root/'lighting.php')],env=environment,text=True)
+if '<?php' in lighting_page or '<?=' in lighting_page:raise SystemExit('Unrendered lighting PHP')
+(out/'app'/'lighting.html').write_text(lighting_page.replace('?v='+source,'?v='+version))
 for path in files:
     if path.parent.name != 'assets':
         continue
@@ -77,7 +80,7 @@ manifest = {'format': 'CherryMacOnlineRelease', 'version': version, 'sourceCommi
             'hardwareAcceptance': 'pending',
             'features': {'macroProduct': True, 'officialMacroStorage': True,
                          'macroDraftIdentityStorage': True, 'macroRecoveryMetadata': True, 'macroEventLimit': 762, 'macroAcceptance': 'pending', 'textProduct': True,
-                         'lightingModeOptions': True, 'lightingWrite': False, 'defaultResetWrite': False, 'defaultTransactionFileInspection': True},
+                         'lightingModeOptions': True, 'lightingWorkflowIntegrated': True, 'lightingWrite': False, 'defaultResetWrite': False, 'defaultTransactionFileInspection': True},
             'files': {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in sorted(out.rglob('*')) if p.is_file()}}
 (out / 'release.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
