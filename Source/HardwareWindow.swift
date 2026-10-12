@@ -174,6 +174,7 @@ final class HostTextEditor:NSWindowController,NSWindowDelegate {
 }
 
 final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
+    var receiverPairingSheet:ReceiverPairingWindow?
     var lastReceiverInventoryData:Data?
     let root = HardwareCanvas(frame:NSRect(x:0,y:0,width:1152,height:860))
     let board = FlippedView(frame:NSRect(x:87,y:120,width:866,height:260))
@@ -772,43 +773,10 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         }catch{message.stringValue=error.localizedDescription}
     }
     @objc func prepareReceiverPairing(){
-        guard !busy,macroRecordingSheet==nil,window?.attachedSheet==nil,let window else{return}
-        do{
-            let inventory=try ReceiverUSBInventory.read()
-            let eligible=inventory.entries.filter(\.configurationReportSupported)
-            let keyboards=eligible.filter{$0.role=="keyboard"},receivers=eligible.filter{$0.role=="receiver"}
-            guard !keyboards.isEmpty else{throw ReceiverPairingSelection.SelectionError.missingKeyboard}
-            guard !receivers.isEmpty else{throw ReceiverPairingSelection.SelectionError.missingReceiver}
-            let view=HardwareCanvas(frame:NSRect(x:0,y:0,width:540,height:146))
-            let keyboard=NSPopUpButton(),receiver=NSPopUpButton()
-            func title(_ entry:ReceiverUSBInventory.Entry)->String{
-                "\(String(format:"%04X:%04X",entry.vendorID,entry.productID)) · USB \(String(format:"%04X",entry.usbRevision)) · 接口 \(entry.sessionToken)"
-            }
-            for (name,picker,entries,y) in [("USB 有线键盘",keyboard,keyboards,CGFloat(8)),("2.4G 接收器",receiver,receivers,CGFloat(64))]{
-                place(label(name),0,y,140,24,in:view);place(picker,145,y,390,28,in:view)
-                picker.addItem(withTitle:"请选择设备");picker.addItems(withTitles:entries.map(title))
-                if entries.count==1{picker.selectItem(at:1)}
-                picker.setAccessibilityLabel(name)
-            }
-            place(label("选择仅用于准备；接口断开或变化后需要重新选择。",12),0,112,535,28,in:view)
-            let alert=NSAlert();alert.messageText="选择键盘与接收器"
-            alert.informativeText="分别选择要配对的两个设备。下一步会重新核对连接；目前尚未开放配对发送。"
-            alert.accessoryView=view;alert.addButton(withTitle:"核对所选连接");alert.addButton(withTitle:"取消")
-            alert.beginSheetModal(for:window){[weak self] response in
-                guard let self,response == .alertFirstButtonReturn,!self.busy else{return}
-                do{
-                    guard keyboards.indices.contains(keyboard.indexOfSelectedItem-1),receivers.indices.contains(receiver.indexOfSelectedItem-1) else{throw HardwareError(message:"请分别选择键盘和接收器。")}
-                    let current=try ReceiverUSBInventory.read()
-                    guard current==inventory else{throw ReceiverPairingSelection.SelectionError.staleSelection}
-                    func candidate(_ entry:ReceiverUSBInventory.Entry)->ReceiverPairingCandidate{
-                        .init(token:entry.sessionToken,vendorID:entry.vendorID,productID:entry.productID,usagePage:0xff1c,usage:0x92)
-                    }
-                    let selection=try ReceiverPairingSelection.resolve(eligible.map(candidate),keyboardToken:keyboards[keyboard.indexOfSelectedItem-1].sessionToken,receiverToken:receivers[receiver.indexOfSelectedItem-1].sessionToken)
-                    try selection.validate()
-                    self.message.stringValue="所选键盘与接收器连接已核对。尚未发送配对命令；实际配对功能仍待完成。"
-                }catch{self.message.stringValue=error.localizedDescription}
-            }
-        }catch{message.stringValue=error.localizedDescription}
+        guard !busy,macroRecordingSheet==nil,receiverPairingSheet==nil,window?.attachedSheet==nil,let window else{return}
+        let sheet=ReceiverPairingWindow{[weak self] in self?.receiverPairingSheet=nil}
+        receiverPairingSheet=sheet
+        if let child=sheet.window{window.beginSheet(child)}
     }
     func receiverDiagnosticData(_ inventory:ReceiverUSBInventory.Inventory)throws->Data{
         let report:[String:Any]=["format":"CherryMacUSBReceiverDiagnostic","version":1,
@@ -1667,6 +1635,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     func windowShouldClose(_ sender:NSWindow)->Bool{if busy{message.stringValue="键盘操作仍在进行，请等待完成或错误提示后关闭。";return false};return true}
     @objc func discardDraft(){do{try requireLightingResultReconciled()}catch{message.stringValue=error.localizedDescription;return};guard let baseline else{return};suspendHostTextForConfiguration();recordingPreference=nil;profile=recalledMacroProfile(baseline,mapping:baselineLightingMapping) ?? (try? HardwareProfile.fromHardware(baseline)) ?? HardwareProfile(snapshot:baseline);profile?.lightingMapping=baselineLightingMapping;if baselineLightingMapping != nil,profile?.macroStorageLayout==nil{profile?.macroStorageLayout = .officialBindings};if let current=profile,let saved=recalledRawLighting(current){profile=saved};message.stringValue="已恢复到最近读取的配置。";loadLighting();refreshMacroPicker();loadSelectedAssignment();update()}
     func windowWillClose(_ notification:Notification){
+        receiverPairingSheet?.finish();receiverPairingSheet=nil
         #if CHERRY_MACRO_PRODUCT
         stopHostTextBridge()
         #else

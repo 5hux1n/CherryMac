@@ -1,3 +1,4 @@
+import {installReceiverPage} from './product-receiver.js?v=0.6.0';
 import {receiverInventorySummary,reviewReceiverInventorySelection} from './receiver-inventory.js?v=0.6.0';
 import {saveExtendedCaptureEvent} from './extended-capture-journal.js?v=0.6.0';
 import {saveExtendedHardwareBackup,loadExtendedHardwareBackup} from './extended-hardware-backup-store.js?v=0.6.0';
@@ -28,9 +29,10 @@ const extendedBackupEditor=installExtendedBackupEditor(operation,{capture:async(
     persist:async event=>{await saveExtendedCaptureEvent(id,identity,event);if(event.phase==='readAccepted')progress(Math.ceil((event.sequence-1)/2),event.phase);else if(['saving','saved'].includes(event.phase))progress(160,event.phase);},
     save:saveExtendedHardwareBackup,load:loadExtendedHardwareBackup});
 }});
-const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。']};
+const pages={keys:['按键功能','点选一个按键，设置你习惯的功能。'],lights:['灯效','选择内置模式，或为每个按键配色。'],macros:['宏','把连续的按键操作保存为一个动作。'],profiles:['配置与备份','保存配置，管理备份，迁移你的设置。'],settings:['设备设置','管理官方配置文件中的设备设置。'],device:['设备与诊断','查看连接状态，导出问题排查资料。'],receiver:['接收器','选择有线键盘与 2.4G 接收器，核对连接。']};
 let lightingReturnChannel=null,lightingReturnTimer=null,lightingReconnectSnapshot=null;
 let defaultInspection=null,selectedDefaultLightingFile=null;
+let receiverPage=null;
 let lastReceiverInventory=null;
 function renderReceiverPairingChoices(){
   if(!textProduct)return;
@@ -85,7 +87,7 @@ function render(){
   $('inspect-default-transaction').disabled=busy;
   $('export-default-backup').disabled=busy||!defaultInspection;$('export-default-inspection').disabled=busy||!defaultInspection;
   $('export-default-recorded-recovery').disabled=busy||!defaultInspection?.recoveryPlan;
-  renderReceiverPairingChoices();
+  renderReceiverPairingChoices();receiverPage?.render();
   $('save-polling-draft').disabled=busy||!pollingWords;$('load-polling-draft').disabled=busy||!pollingWords;
   $('export-lighting-restore-plan').disabled=busy||!lightingRecordForPlan;
   $('discard-lighting-result').hidden=lightingReconnectSnapshot===null;
@@ -219,7 +221,7 @@ async function operation(fn,{localOnly=false}={}){
     status(entry.error,true);
   }finally{busy=false;render();}
 }
-function switchTab(next){if(!pages[next])return;tab=next;render();}
+function switchTab(next){if(!pages[next])return;if(tab==='receiver'&&next!=='receiver')receiverPage?.stop();tab=next;render();}
 // Build real buttons so the diagram supports mouse, keyboard and screen readers.
 for(const k of keys){const b=document.createElement('button');b.className='key';b.dataset.id=k.id;b.dataset.square=String(k.w===k.h);b.textContent=k.label;b.style.left=`${k.x/864*100}%`;b.style.top=`${k.y/264*100}%`;b.style.width=`${k.w/864*100}%`;b.style.height=`${k.h/264*100}%`;b.setAttribute('aria-label',`${k.label} 键`);b.setAttribute('aria-pressed','false');b.onclick=e=>{
   if(busy||recorder)return;selected=k.id;loadPlayback();if(tab==='lights'&&(e.metaKey||e.ctrlKey||$('multi').checked)){if(selection.has(k.id)&&selection.size>1){selection.delete(k.id);selected=[...selection][0];}else selection.add(k.id);}else selection=new Set([k.id]);if(tab==='lights')loadColor();render();
@@ -773,3 +775,5 @@ $('load-lighting-draft').onclick=()=>operation(async()=>{
   if(!confirm('载入本机灯效草稿会替换当前灯效，请先保存需要保留的配色。键位、宏、文本和设备设置保留；不写入键盘。'))return;
   profile=next;syncLights();loadColor();status('本机灯效草稿已载入，其他模块保留，尚未写入。');
 },{localOnly:true});
+
+receiverPage=installReceiverPage({operation,busy:()=>busy,status});

@@ -1,4 +1,4 @@
-import {ReceiverPairingDiscovery} from './receiver-pairing-discovery.js';
+import {ReceiverPairingDiscovery} from './receiver-pairing-discovery.js?v=0.6.0';
 
 // Explicit lifecycle for the future pairing page. No access occurs on import or
 // construction. This class only discovers/selects; it never opens or writes.

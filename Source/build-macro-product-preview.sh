@@ -17,8 +17,8 @@ TASK_PREVIEW_APP_NAME="CherryMacMacroPreview.app"
 TASK_PREVIEW_IDENTIFIER="local.cherrymac.macro-product-preview"
 TASK_PREVIEW_DISPLAY="CherryMac Macro & Text Preview"
 TASK_PREVIEW_BUNDLE_NAME="CherryMac Macro Preview"
-TASK_PREVIEW_VERSION="0.101.0"
-TASK_PREVIEW_BUILD="103"
+TASK_PREVIEW_VERSION="0.102.0"
+TASK_PREVIEW_BUILD="104"
 TASK_PREVIEW_FLAGS=(-D CHERRY_MACRO_PRODUCT)
 if [[ $# -eq 2 ]]; then
     TASK_PREVIEW_APP_NAME="CherryMacLightingAcceptance.app"
@@ -39,7 +39,7 @@ TASK_PREVIEW_STAGE="$(mktemp -d "$TASK_PREVIEW_DIR/.macro-preview.XXXXXX")"
 trap 'rm -rf "$TASK_PREVIEW_STAGE"' EXIT
 mkdir -p "$TASK_PREVIEW_STAGE/$TASK_PREVIEW_APP_NAME/Contents/MacOS"
 TASK_PREVIEW_SOURCES=()
-for TASK_PREVIEW_NAME in main InputRouter CherryHardware CalculatorKeyTest KeymapWrite CalculatorHardwareTestController CherryMacro HardwareProfile WindowsProfile LightingModel HardwareWindow HardwareLighting HardwareExtendedBackup ExtendedHardwareBackup ExtendedHardwareBackupStore ExtendedHardwareCapture ExtendedHardwareReadFrames ExtendedCaptureJournal ExtendedHardwareUSB ExtendedUSBRegistryIdentity ReceiverUSBInventory ReceiverPairingReports ReceiverPairingSelection CalculatorService HardwareTests MacroPhysicalStop; do
+for TASK_PREVIEW_NAME in main InputRouter CherryHardware CalculatorKeyTest KeymapWrite CalculatorHardwareTestController CherryMacro HardwareProfile WindowsProfile LightingModel HardwareWindow HardwareLighting HardwareExtendedBackup ExtendedHardwareBackup ExtendedHardwareBackupStore ExtendedHardwareCapture ExtendedHardwareReadFrames ExtendedCaptureJournal ExtendedHardwareUSB ExtendedUSBRegistryIdentity ReceiverUSBInventory ReceiverPairingReports ReceiverPairingSelection ReceiverPairingDiscovery ReceiverPairingDevices ReceiverPairingWindow CalculatorService HardwareTests MacroPhysicalStop; do
     TASK_PREVIEW_SOURCES+=("$TASK_SOURCE_DIR/$TASK_PREVIEW_NAME.swift")
 done
 xcrun swiftc "${TASK_PREVIEW_FLAGS[@]}" "${TASK_PREVIEW_SOURCES[@]}" \

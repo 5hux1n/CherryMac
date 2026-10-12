@@ -1,4 +1,4 @@
-import {receiverPairingRole,resolveReceiverPairingSelection} from './receiver-pairing-selection.js';
+import {receiverPairingRole,resolveReceiverPairingSelection} from './receiver-pairing-selection.js?v=0.6.0';
 
 // Snapshot adapter for devices supplied by an explicit WebHID picker/getDevices
 // caller. Construction/update never requests permission, opens a device or sends.
