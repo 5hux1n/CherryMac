@@ -1049,6 +1049,7 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
     }
     func performKeyWrite(draft:HardwareProfile,baseline:HardwareSnapshot){
         guard !busy else{return}
+        guard profile==draft,self.baseline==baseline else{message.stringValue="编辑区或读取基线已改变，请重新核对并确认键位写入。";return}
         suspendHostTextForConfiguration()
         busy=true;controls.forEach{$0.isEnabled=false}
         message.stringValue="正在备份并写入键位，请松开全部按键，完成前不要使用键盘…"
@@ -1637,14 +1638,24 @@ final class HardwareWindowController: NSWindowController, NSTextFieldDelegate, N
         guard let url=lastKeyBackup else{message.stringValue="还没有本客户端写入前的按键备份。其他备份可用“导入配置”载入。";return}
         let saved:HardwareSnapshot
         do{saved=try HardwareProfile.decode(Data(contentsOf:url)).snapshot}catch{message.stringValue="备份无法读取：\(error.localizedDescription)";return}
+        let previousDraft=profile
         readKeyboardThen{[weak self] current in
             guard let self else{return}
+            // Reading for recovery must not silently replace unrelated drafts.
+            if let previousDraft{self.profile=previousDraft}
             do{
                 guard saved.deviceInfo==current.deviceInfo else{throw HardwareError(message:"备份的设备／固件信息不符，未恢复。")}
                 _ = try KeymapWriteAuthorization(baseline:current,keymap:saved.keymap)
-                guard var draft=self.profile else{return};draft.snapshot.keymap=saved.keymap
-                self.profile=draft;self.loadSelectedAssignment();self.update();self.writeKeys()
-            }catch{self.message.stringValue=error.localizedDescription}
+                guard var draft=self.profile else{return}
+                guard draft.snapshot.deviceInfo==current.deviceInfo else{throw HardwareError(message:"当前草稿来自不同设备／固件；草稿保留，请先导出再重新读取。")}
+                for slot in (draft.macroBindings ?? [:]).keys{
+                    let range=slot*3..<slot*3+3
+                    guard draft.snapshot.keymap[range]==saved.keymap[range] else{throw HardwareError(message:"恢复键位与当前宏绑定草稿冲突；草稿保留，请先导出或处理该宏绑定后再恢复。")}
+                }
+                draft.snapshot.keymap=saved.keymap
+                try draft.validate()
+                self.profile=draft;self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.update();self.writeKeys()
+            }catch{self.loadLighting();self.refreshMacroPicker();self.loadSelectedAssignment();self.update();self.message.stringValue=error.localizedDescription}
         }
     }
     @objc func openLogs(){let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CherryMac/HardwareLogs");do{try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);NSWorkspace.shared.open(directory)}catch{message.stringValue=error.localizedDescription}}
